@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import BinaryIO
 
 from mura.asr import ASRClientError, RemoteASRClient
-from mura.domain.models import PipelineRequest, PipelineResult
+from mura.domain.models import (
+    AudioLanguage,
+    OutputLanguage,
+    PipelineRequest,
+    PipelineResult,
+)
 from mura.jobs import JobStatus
 from mura.observability import ProcessingTrace, TraceOutcome
 from mura.pipeline import MuraPipeline
@@ -251,6 +256,13 @@ class RecordingJobWorker:
                     speaker_id=recording.speaker_id,
                     speaker_name=recording.speaker_name,
                     known_people=[profile.person for profile in resolution_context.profiles],
+                    # Reconstructed from the durable row: the upload request is
+                    # long gone by the time the worker runs. NULL means a
+                    # pre-migration recording, which reads as the defaults.
+                    requested_audio_language=AudioLanguage(recording.audio_language or "auto"),
+                    requested_output_language=OutputLanguage(
+                        recording.output_language or "same_as_transcript"
+                    ),
                 ),
                 stage_callback=report_stage,
                 resolution_context=resolution_context,

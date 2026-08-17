@@ -656,11 +656,94 @@ class MentionResolution(StrictModel):
     reason: str
 
 
+class AudioLanguage(StrEnum):
+    """What the narrator asked Core to assume about the speech."""
+
+    AUTO = "auto"
+    RU = "ru"
+    KK = "kk"
+    MIXED = "mixed"
+
+
+class OutputLanguage(StrEnum):
+    """What the narrator asked Core to write results in."""
+
+    SAME_AS_TRANSCRIPT = "same_as_transcript"
+    RU = "ru"
+    KK = "kk"
+
+
+class DetectedLanguage(StrEnum):
+    """Only Core-authoritative detection may set anything but UNKNOWN."""
+
+    RU = "ru"
+    KK = "kk"
+    MIXED = "mixed"
+    UNKNOWN = "unknown"
+
+
+class LanguageContext(StrictModel):
+    """Requested language intent and the behaviour Core actually delivered.
+
+    The two are separated on purpose. GigaAM receives no language instruction
+    today and the DeepSeek prompts have no output-language hook, so a request is
+    durably recorded but does not change provider behaviour. The ``*_applied``
+    flags say so rather than implying an effect that does not exist.
+    """
+
+    schema_version: str = "language-context-v1"
+
+    requested_audio_language: AudioLanguage = AudioLanguage.AUTO
+    #: ASR runs unconstrained, so the effective mode is always AUTO today.
+    effective_audio_language: AudioLanguage = AudioLanguage.AUTO
+    #: True only when an explicit request actually constrained the provider.
+    audio_language_applied: bool = False
+
+    #: UNKNOWN until Core owns an authoritative detector. A frontend heuristic
+    #: must never be promoted into this field.
+    detected_audio_language: DetectedLanguage = DetectedLanguage.UNKNOWN
+    transcript_language: DetectedLanguage = DetectedLanguage.UNKNOWN
+
+    requested_output_language: OutputLanguage = OutputLanguage.SAME_AS_TRANSCRIPT
+    #: None while Core cannot guarantee any particular output language.
+    effective_output_language: OutputLanguage | None = None
+    output_language_applied: bool = False
+
+
+def build_language_context(
+    *,
+    requested_audio_language: AudioLanguage,
+    requested_output_language: OutputLanguage,
+) -> LanguageContext:
+    """Truthful context for the current providers.
+
+    ``audio_language_applied`` is False for every request including AUTO: the
+    flag reports whether the *request* changed provider behaviour, and nothing
+    is ever sent to the recogniser. AUTO happens to match the effective mode,
+    but it was not honoured — it was simply never contradicted.
+    """
+
+    return LanguageContext(
+        requested_audio_language=requested_audio_language,
+        effective_audio_language=AudioLanguage.AUTO,
+        audio_language_applied=False,
+        detected_audio_language=DetectedLanguage.UNKNOWN,
+        transcript_language=DetectedLanguage.UNKNOWN,
+        requested_output_language=requested_output_language,
+        effective_output_language=None,
+        output_language_applied=False,
+    )
+
+
 class PipelineRequest(StrictModel):
     transcript: TranscriptEnvelope
     speaker_id: str
     speaker_name: str
     known_people: list[KnownPerson] = Field(default_factory=list)
+    #: Durable language intent. Carried through async reconstruction even though
+    #: no current provider consumes it.
+    requested_audio_language: AudioLanguage = AudioLanguage.AUTO
+    requested_output_language: OutputLanguage = OutputLanguage.SAME_AS_TRANSCRIPT
 
 
 class PipelineResult(StrictModel):

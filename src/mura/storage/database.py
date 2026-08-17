@@ -43,6 +43,11 @@ class RecordingRow(Base):
     original_filename: Mapped[str] = mapped_column(String(512))
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     audio_path: Mapped[str] = mapped_column(Text)
+    #: Nullable only so historical rows migrate cleanly. Recordings created
+    #: through the canonical API always persist explicit values; NULL is read as
+    #: AudioLanguage.AUTO / OutputLanguage.SAME_AS_TRANSCRIPT.
+    audio_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    output_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -177,6 +182,8 @@ class RecordingRepository:
         original_filename: str,
         content_type: str | None,
         audio_path: Path,
+        audio_language: str | None = None,
+        output_language: str | None = None,
     ) -> None:
         with self.database.session_factory.begin() as session:
             session.add(
@@ -188,6 +195,8 @@ class RecordingRepository:
                     original_filename=original_filename,
                     content_type=content_type,
                     audio_path=str(audio_path),
+                    audio_language=audio_language,
+                    output_language=output_language,
                 )
             )
             session.flush()
@@ -203,6 +212,86 @@ class RecordingRepository:
     def get_recording(self, recording_id: str) -> RecordingRow | None:
         with self.database.session_factory() as session:
             return session.get(RecordingRow, recording_id)
+
+    # ---------------------------------------------------------------- family scope
+    #
+    # Every canonical application lookup goes through one of these. The family
+    # predicate is part of the query, so a foreign resource is never loaded and
+    # then rejected -- it simply does not exist for that family. Routes turn the
+    # None into a 404, which is indistinguishable from "no such id" and so
+    # cannot confirm another family's object.
+
+    def get_family_recording(
+        self,
+        *,
+        family_id: str,
+        recording_id: str,
+    ) -> RecordingRow | None:
+        with self.database.session_factory() as session:
+            statement = select(RecordingRow).where(
+                RecordingRow.recording_id == recording_id,
+                RecordingRow.family_id == family_id,
+            )
+            return session.scalar(statement)
+
+    def get_family_job(self, *, family_id: str, job_id: str) -> ProcessingJobRow | None:
+        with self.database.session_factory() as session:
+            statement = (
+                select(ProcessingJobRow)
+                .join(RecordingRow, RecordingRow.recording_id == ProcessingJobRow.recording_id)
+                .where(
+                    ProcessingJobRow.job_id == job_id,
+                    RecordingRow.family_id == family_id,
+                )
+            )
+            return session.scalar(statement)
+
+    def get_family_job_for_recording(
+        self,
+        *,
+        family_id: str,
+        recording_id: str,
+    ) -> ProcessingJobRow | None:
+        with self.database.session_factory() as session:
+            statement = (
+                select(ProcessingJobRow)
+                .join(RecordingRow, RecordingRow.recording_id == ProcessingJobRow.recording_id)
+                .where(
+                    ProcessingJobRow.recording_id == recording_id,
+                    RecordingRow.family_id == family_id,
+                )
+            )
+            return session.scalar(statement)
+
+    def get_family_pipeline_result(
+        self,
+        *,
+        family_id: str,
+        recording_id: str,
+    ) -> PipelineResult | None:
+        with self.database.session_factory() as session:
+            statement = (
+                select(PipelineResultRow)
+                .join(RecordingRow, RecordingRow.recording_id == PipelineResultRow.recording_id)
+                .where(
+                    PipelineResultRow.recording_id == recording_id,
+                    RecordingRow.family_id == family_id,
+                )
+            )
+            row = session.scalar(statement)
+            return None if row is None else PipelineResult.model_validate(row.payload)
+
+    def family_person_exists(self, *, family_id: str, person_id: str) -> bool:
+        """Canonical identity check: existence *and* family ownership together."""
+
+        from mura.storage.archive import ArchivePersonRow
+
+        with self.database.session_factory() as session:
+            statement = select(ArchivePersonRow.person_id).where(
+                ArchivePersonRow.person_id == person_id,
+                ArchivePersonRow.family_id == family_id,
+            )
+            return session.scalar(statement) is not None
 
     def get_job(self, job_id: str) -> ProcessingJobRow | None:
         with self.database.session_factory() as session:
