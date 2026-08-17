@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -14,6 +15,7 @@ from mura.domain.models import (
     PipelineResult,
 )
 from mura.jobs import JobStatus
+from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
 from mura.observability import ProcessingTrace, TraceOutcome
 from mura.pipeline import MuraPipeline
 from mura.storage.archive import ArchiveRepository
@@ -25,6 +27,8 @@ from mura.storage.completion import (
 from mura.storage.conflict_resolution import ConflictResolutionService
 from mura.storage.database import ProcessingJobRow, RecordingRepository
 from mura.storage.generic_claims import persist_generic_claims
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_AUDIO_EXTENSIONS = {
     ".wav",
@@ -90,6 +94,9 @@ class RecordingJobWorker:
         asr_client: RemoteASRClient,
         poll_interval_seconds: float = 1.0,
         asr_retry_seconds: float = 15.0,
+        lease_seconds: float = 300.0,
+        heartbeat_seconds: float = 60.0,
+        worker_id: str | None = None,
     ) -> None:
         self.repository = repository
         self.archive_repository = ArchiveRepository(repository.database)
@@ -98,6 +105,10 @@ class RecordingJobWorker:
         self.asr_client = asr_client
         self.poll_interval_seconds = poll_interval_seconds
         self.asr_retry_seconds = asr_retry_seconds
+        self.lease_seconds = lease_seconds
+        self.heartbeat_seconds = heartbeat_seconds
+        #: Operational identity only. Never a user, never exposed publicly.
+        self.worker_id = worker_id or new_worker_id()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -117,10 +128,30 @@ class RecordingJobWorker:
             self._thread.join(timeout_seconds)
 
     def process_once(self) -> bool:
-        job = self.repository.claim_next_job()
+        job = self.repository.claim_next_job(
+            lease_owner=self.worker_id,
+            lease_seconds=self.lease_seconds,
+        )
         if job is None:
             return False
-        self._process_job(job)
+        # The heartbeat must tick while ASR/DeepSeek block the main flow, so it
+        # runs on its own thread with its own short-lived sessions.
+        heartbeat = LeaseHeartbeat(
+            job_id=job.job_id,
+            renew=lambda: self.repository.renew_lease(
+                job.job_id,
+                lease_owner=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            ),
+            interval_seconds=self.heartbeat_seconds,
+        )
+        try:
+            with heartbeat:
+                self._process_job(job)
+        except LeaseOwnershipLost:
+            # Another worker legitimately reclaimed this job while we stalled.
+            # Abandon the attempt rather than overwrite its work.
+            logger.warning("lease ownership lost; abandoning attempt")
         return True
 
     def _run(self) -> None:
@@ -166,6 +197,7 @@ class RecordingJobWorker:
                 error_detail="no ready ASR worker is registered",
                 retry_after_seconds=self.asr_retry_seconds,
                 trace_events=trace.events,
+                lease_owner=self.worker_id,
             )
             return
 
@@ -197,6 +229,7 @@ class RecordingJobWorker:
                     ),
                     retry_after_seconds=self.asr_retry_seconds,
                     trace_events=trace.events,
+                    lease_owner=self.worker_id,
                 )
             else:
                 fail_recording_job(
@@ -205,6 +238,7 @@ class RecordingJobWorker:
                     error_code="asr_failed",
                     error_detail="ASR transcription failed; inspect privacy-safe trace codes",
                     trace_events=trace.events,
+                    lease_owner=self.worker_id,
                 )
             return
 
@@ -238,7 +272,9 @@ class RecordingJobWorker:
             if status is None and stage.startswith("window_"):
                 status = JobStatus.CLEANING if stage.endswith("_cleaning") else JobStatus.EXTRACTING
             if status is not None:
-                self.repository.update_job_stage(job.job_id, status, stage)
+                self.repository.update_job_stage(
+                    job.job_id, status, stage, lease_owner=self.worker_id
+                )
 
         try:
             resolution_context = self.archive_repository.build_resolution_context(
@@ -307,6 +343,7 @@ class RecordingJobWorker:
                     job_id=job.job_id,
                     result=result,
                     trace_events=trace.events,
+                    lease_owner=self.worker_id,
                 )
         except Exception:
             trace.fail_active_stages(error_code="pipeline_failed")
@@ -322,6 +359,7 @@ class RecordingJobWorker:
                 error_code="pipeline_failed",
                 error_detail="pipeline processing failed; inspect privacy-safe trace codes",
                 trace_events=trace.events,
+                lease_owner=self.worker_id,
             )
 
     def wait_until_idle(self, timeout_seconds: float = 30.0) -> bool:

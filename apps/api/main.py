@@ -191,6 +191,8 @@ def get_runtime(
                     ),
                     poll_interval_seconds=settings.job_poll_interval_seconds,
                     asr_retry_seconds=settings.asr_retry_seconds,
+                    lease_seconds=settings.job_lease_seconds,
+                    heartbeat_seconds=settings.job_heartbeat_seconds,
                 )
                 runtime = CoreRuntime(
                     settings=settings,
