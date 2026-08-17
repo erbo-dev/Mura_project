@@ -23,6 +23,8 @@ def core_settings() -> CoreSettings:
             "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
             "KAGGLE_ASR_API_KEY": ASR_TOKEN,
             "DATABASE_URL": "sqlite+pysqlite:///:memory:",
+            # Auto-create is opt-in since PR-02A; local/test workflows request it explicitly.
+            "DATABASE_AUTO_CREATE": True,
         }
     )
 
@@ -49,6 +51,29 @@ def test_bearer_token_rejects_missing_or_invalid_value(
 def test_bearer_token_fails_closed_without_server_secret() -> None:
     with pytest.raises(RuntimeError, match="not configured"):
         verify_bearer_token(f"Bearer {ASR_TOKEN}", expected_token="")
+
+
+def test_configuration_failure_never_echoes_the_supplied_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leaked_secret = "too-short-but-secret-value"
+    for name, value in {
+        "MURA_ENVIRONMENT": "local",
+        "DEEPSEEK_API_KEY": DEEPSEEK_KEY,
+        "CORE_API_KEY": leaked_secret,
+        "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
+        "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+        "DATABASE_URL": "postgresql+psycopg://mura:hunter2@db.internal:5432/mura",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert leaked_secret not in response.text
+    assert "hunter2" not in response.text
+    assert response.json()["detail"] == "Core service is not configured"
 
 
 def test_core_settings_require_strong_registration_token() -> None:

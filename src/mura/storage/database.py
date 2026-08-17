@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -105,26 +106,52 @@ class WorkerRegistrationRow(Base):
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+@dataclass(frozen=True)
+class DatabaseRuntimeSettings:
+    """Conservative connection-pool defaults for a single managed PostgreSQL deployment.
+
+    Defaults assume several small API/worker processes sharing one managed instance:
+    5 pooled connections plus 5 overflow per process, recycled every 30 minutes so
+    proxy-side idle timeouts never hand back a dead socket. Timeouts are applied
+    per-connection for PostgreSQL only and are ignored by the SQLite test path.
+    """
+
+    pool_size: int = 5
+    max_overflow: int = 5
+    pool_recycle_seconds: int = 1800
+    connect_timeout_seconds: int = 10
+    statement_timeout_seconds: int = 30
+
+
+def postgres_connect_args(runtime: DatabaseRuntimeSettings) -> dict[str, Any]:
+    return {
+        "connect_timeout": runtime.connect_timeout_seconds,
+        "options": f"-c statement_timeout={runtime.statement_timeout_seconds * 1000}",
+    }
+
+
 class Database:
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        runtime: DatabaseRuntimeSettings | None = None,
+    ) -> None:
+        resolved = runtime or DatabaseRuntimeSettings()
         connect_args: dict[str, Any] = {}
+        engine_options: dict[str, Any] = {"pool_pre_ping": True, "future": True}
+
         if database_url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
-        if database_url.startswith("sqlite") and ":memory:" in database_url:
-            self.engine = create_engine(
-                database_url,
-                pool_pre_ping=True,
-                future=True,
-                connect_args=connect_args,
-                poolclass=StaticPool,
-            )
+            if ":memory:" in database_url:
+                engine_options["poolclass"] = StaticPool
         else:
-            self.engine = create_engine(
-                database_url,
-                pool_pre_ping=True,
-                future=True,
-                connect_args=connect_args,
-            )
+            engine_options["pool_size"] = resolved.pool_size
+            engine_options["max_overflow"] = resolved.max_overflow
+            engine_options["pool_recycle"] = resolved.pool_recycle_seconds
+            if database_url.startswith(("postgresql", "postgres")):
+                connect_args.update(postgres_connect_args(resolved))
+
+        self.engine = create_engine(database_url, connect_args=connect_args, **engine_options)
         self.session_factory = sessionmaker(
             bind=self.engine,
             class_=Session,

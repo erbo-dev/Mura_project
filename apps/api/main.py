@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import atexit
+import re
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +11,7 @@ from threading import Lock
 from typing import Annotated
 
 from fastapi import (
+    APIRouter,
     Depends,
     FastAPI,
     File,
@@ -16,12 +19,16 @@ from fastapi import (
     Header,
     HTTPException,
     Request,
+    Response,
     UploadFile,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
+from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.pool import NullPool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from apps.api.conflicts import register_conflict_routes
 from mura.asr import RemoteASRClient
@@ -38,26 +45,73 @@ from mura.jobs import (
 from mura.orchestration import AudioStorageError, LocalAudioStorage, RecordingJobWorker
 from mura.pipeline import MuraPipeline
 from mura.security import verify_bearer_token
-from mura.storage.database import Database, ProcessingJobRow, RecordingRepository
+from mura.storage.database import (
+    Database,
+    DatabaseRuntimeSettings,
+    ProcessingJobRow,
+    RecordingRepository,
+    postgres_connect_args,
+)
 from mura.validation import ContractValidationError
 
-app = FastAPI(
-    title="Mura Core API",
-    version="0.2.0",
-    description=(
-        "Audio ingestion, asynchronous ASR orchestration, source-linked family-memory "
-        "extraction, review items, and entity resolution."
-    ),
+API_TITLE = "Mura Core API"
+API_VERSION = "0.2.0"
+API_DESCRIPTION = (
+    "Audio ingestion, asynchronous ASR orchestration, source-linked family-memory "
+    "extraction, review items, and entity resolution."
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_PATTERN = re.compile(r"\A[A-Za-z0-9_-]{8,64}\Z")
+
+router = APIRouter()
 
 _runtime_lock = Lock()
 _runtime: CoreRuntime | None = None
+_readiness_lock = Lock()
+_readiness_engines: dict[str, Engine] = {}
+
+
+def resolve_request_id(supplied: str | None) -> str:
+    """Reuse a caller-supplied correlation id only when it is short and opaque."""
+
+    if supplied is not None and _REQUEST_ID_PATTERN.fullmatch(supplied):
+        return supplied
+    return f"req_{uuid.uuid4().hex}"
+
+
+def _readiness_engine(settings: CoreSettings) -> Engine:
+    """Pool-free probe engine so readiness checks never consume application pool slots."""
+
+    database_url = settings.database_url
+    with _readiness_lock:
+        engine = _readiness_engines.get(database_url)
+        if engine is None:
+            connect_args: dict[str, object] = {}
+            if database_url.startswith(("postgresql", "postgres")):
+                connect_args = dict(
+                    postgres_connect_args(_database_runtime_settings(settings)),
+                )
+            elif database_url.startswith("sqlite"):
+                connect_args = {"check_same_thread": False}
+            engine = create_engine(
+                database_url,
+                poolclass=NullPool,
+                future=True,
+                connect_args=connect_args,
+            )
+            _readiness_engines[database_url] = engine
+        return engine
+
+
+def _database_runtime_settings(settings: CoreSettings) -> DatabaseRuntimeSettings:
+    return DatabaseRuntimeSettings(
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_recycle_seconds=settings.db_pool_recycle_seconds,
+        connect_timeout_seconds=settings.db_connect_timeout_seconds,
+        statement_timeout_seconds=settings.db_statement_timeout_seconds,
+    )
 
 
 class WorkerRegistration(BaseModel):
@@ -91,9 +145,10 @@ def get_settings() -> CoreSettings:
     try:
         return CoreSettings()  # type: ignore[call-arg]
     except Exception as exc:
+        # Validation messages can echo supplied secrets, so only a stable code escapes.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Core service is not configured: {exc}",
+            detail="Core service is not configured",
         ) from exc
 
 
@@ -114,7 +169,10 @@ def get_runtime(
     if _runtime is None:
         with _runtime_lock:
             if _runtime is None:
-                database = Database(settings.database_url)
+                database = Database(
+                    settings.database_url,
+                    runtime=_database_runtime_settings(settings),
+                )
                 if settings.database_auto_create:
                     database.create_schema()
                 repository = RecordingRepository(database)
@@ -165,8 +223,7 @@ def require_worker_token(
     )
 
 
-@app.exception_handler(DeepSeekError)
-async def handle_deepseek_error(_request: Request, _exc: DeepSeekError) -> JSONResponse:
+async def handle_deepseek_error(_request: Request, _exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
         content={
@@ -176,10 +233,9 @@ async def handle_deepseek_error(_request: Request, _exc: DeepSeekError) -> JSONR
     )
 
 
-@app.exception_handler(ContractValidationError)
 async def handle_contract_validation_error(
     _request: Request,
-    _exc: ContractValidationError,
+    _exc: Exception,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -190,12 +246,32 @@ async def handle_contract_validation_error(
     )
 
 
-@app.get("/health")
+@router.get("/health")
 def health() -> dict[str, str]:
+    """Liveness only: never touches the database, runtime, or any external provider."""
+
     return {"status": "ok", "service": "mura-core"}
 
 
-@app.post(
+@router.get("/ready")
+def ready(settings: Annotated[CoreSettings, Depends(get_settings)]) -> JSONResponse:
+    """Readiness: bounded PostgreSQL check, no provider calls and no worker start."""
+
+    try:
+        with _readiness_engine(settings).connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unavailable", "service": "mura-core", "database": "unavailable"},
+        )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"status": "ready", "service": "mura-core", "database": "ready"},
+    )
+
+
+@router.post(
     "/v1/recordings",
     response_model=RecordingAccepted,
     status_code=status.HTTP_202_ACCEPTED,
@@ -246,7 +322,7 @@ def create_recording(
     return RecordingAccepted(recording_id=recording_id, job_id=job_id)
 
 
-@app.get(
+@router.get(
     "/v1/jobs/{job_id}",
     response_model=JobView,
     dependencies=[Depends(require_core_token)],
@@ -261,7 +337,7 @@ def get_job(
     return _job_view(row)
 
 
-@app.get(
+@router.get(
     "/v1/recordings/{recording_id}",
     response_model=RecordingResultView,
     dependencies=[Depends(require_core_token)],
@@ -296,7 +372,7 @@ def get_recording_result(
     )
 
 
-@app.get(
+@router.get(
     "/v1/recordings/{recording_id}/review-items",
     response_model=ReviewItemsView,
     dependencies=[Depends(require_core_token)],
@@ -333,7 +409,7 @@ def get_review_items(
     )
 
 
-@app.post(
+@router.post(
     "/v1/process-transcript",
     response_model=PipelineResult,
     dependencies=[Depends(require_core_token)],
@@ -345,7 +421,7 @@ def process_transcript(
     return runtime.pipeline.process(request)
 
 
-@app.post(
+@router.post(
     "/v1/workers/register",
     dependencies=[Depends(require_worker_token)],
 )
@@ -365,7 +441,7 @@ def register_worker(
     }
 
 
-@app.get(
+@router.get(
     "/v1/workers/current",
     dependencies=[Depends(require_worker_token)],
 )
@@ -410,8 +486,63 @@ def _aware_optional(value: datetime | None) -> datetime | None:
     return _aware_required(value)
 
 
-register_conflict_routes(
-    app,
-    get_runtime_dependency=get_runtime,
-    core_token_dependency=require_core_token,
-)
+def _bootstrap_settings() -> CoreSettings | None:
+    """Settings for wiring the app itself. Absent config fails closed, never open."""
+
+    try:
+        return CoreSettings()  # type: ignore[call-arg]
+    except Exception:
+        return None
+
+
+def create_app(settings: CoreSettings | None = None) -> FastAPI:
+    resolved = settings if settings is not None else _bootstrap_settings()
+    docs_enabled = resolved.api_docs_enabled if resolved is not None else False
+    allowed_origins = list(resolved.cors_allowed_origins) if resolved is not None else []
+    allowed_hosts = list(resolved.allowed_hosts) if resolved is not None else []
+
+    application = FastAPI(
+        title=API_TITLE,
+        version=API_VERSION,
+        description=API_DESCRIPTION,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
+
+    @application.middleware("http")
+    async def assign_request_id(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers[REQUEST_ID_HEADER] = request_id
+        return response
+
+    if allowed_hosts:
+        application.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+
+    if allowed_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type", REQUEST_ID_HEADER],
+            allow_credentials=False,
+            expose_headers=[REQUEST_ID_HEADER],
+        )
+
+    application.add_exception_handler(DeepSeekError, handle_deepseek_error)
+    application.add_exception_handler(ContractValidationError, handle_contract_validation_error)
+    application.include_router(router)
+    register_conflict_routes(
+        application,
+        get_runtime_dependency=get_runtime,
+        core_token_dependency=require_core_token,
+    )
+    return application
+
+
+app = create_app()
