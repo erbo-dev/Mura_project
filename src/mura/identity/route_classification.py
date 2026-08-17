@@ -63,11 +63,24 @@ ROUTE_AUTH_CLASSES: dict[str, AuthClass] = {
 }
 
 
-#: USER_APP routes still guarded by CORE_API_KEY. This is the exact checklist
-#: PR-03B-SWITCH must empty; the accompanying test asserts it still matches
-#: reality, so the list cannot drift out of date.
-PENDING_SWITCH_TO_PRINCIPAL: frozenset[str] = frozenset(
+#: USER_APP routes still guarded by CORE_API_KEY.
+#:
+#: PR-03B-SWITCH emptied this set: every family application route now resolves a
+#: verified Principal and a family membership. It stays here, empty, because the
+#: accompanying test asserts emptiness -- reintroducing a service-token route on
+#: the user surface has to be a deliberate, visible act rather than an omission.
+PENDING_SWITCH_TO_PRINCIPAL: frozenset[str] = frozenset()
+
+
+#: USER_APP routes on the Principal chain. After the switch this is all of them.
+PRINCIPAL_NATIVE: frozenset[str] = frozenset(
     {
+        "/v1/capabilities",
+        "/v1/me",
+        "/v1/families",
+        "/v1/families/{family_id}",
+        "/v1/families/{family_id}/members",
+        "/v1/families/{family_id}/members/{user_id}",
         "/v1/families/{family_id}/recordings",
         "/v1/families/{family_id}/recordings/{recording_id}",
         "/v1/families/{family_id}/recordings/{recording_id}/review-items",
@@ -79,21 +92,28 @@ PENDING_SWITCH_TO_PRINCIPAL: frozenset[str] = frozenset(
         "/v1/families/{family_id}/conflicts/{conflict_id}/resolve",
         "/v1/families/{family_id}/conflicts/{conflict_id}/dismiss",
         "/v1/families/{family_id}/conflicts/{conflict_id}/reopen",
-        "/v1/capabilities",
     }
 )
 
 
-#: USER_APP routes already on the PR-03 Principal chain.
-PRINCIPAL_NATIVE: frozenset[str] = frozenset(
-    {
-        "/v1/me",
-        "/v1/families",
-        "/v1/families/{family_id}",
-        "/v1/families/{family_id}/members",
-        "/v1/families/{family_id}/members/{user_id}",
-    }
-)
+#: The capability each family-scoped USER_APP route requires. Routes that need
+#: only a verified user (no family scope) are absent on purpose.
+CAPABILITY_BY_ROUTE: dict[str, str] = {
+    "/v1/families/{family_id}": "read_family",
+    "/v1/families/{family_id}/members": "read_members",
+    "/v1/families/{family_id}/members/{user_id}": "manage_members",
+    "/v1/families/{family_id}/recordings": "create_recording",
+    "/v1/families/{family_id}/recordings/{recording_id}": "read_recordings",
+    "/v1/families/{family_id}/recordings/{recording_id}/review-items": "read_review",
+    "/v1/families/{family_id}/jobs/{job_id}": "read_jobs",
+    "/v1/families/{family_id}/profiles": "read_profiles",
+    "/v1/families/{family_id}/profiles/{person_id}": "read_profiles",
+    "/v1/families/{family_id}/conflicts": "read_conflicts",
+    "/v1/families/{family_id}/conflicts/{conflict_id}": "read_conflicts",
+    "/v1/families/{family_id}/conflicts/{conflict_id}/resolve": "resolve_conflicts",
+    "/v1/families/{family_id}/conflicts/{conflict_id}/dismiss": "resolve_conflicts",
+    "/v1/families/{family_id}/conflicts/{conflict_id}/reopen": "resolve_conflicts",
+}
 
 
 def classify(path: str) -> AuthClass | None:

@@ -23,9 +23,16 @@ def register_profile_routes(
     app: FastAPI,
     *,
     get_runtime_dependency: Callable[..., object],
-    core_token_dependency: Callable[..., None],
+    read_profiles_dependency: Callable[..., object],
 ) -> None:
-    dependencies = [Depends(core_token_dependency)]
+    """Reading the archive is a viewer capability.
+
+    There is no profile mutation route to guard: profiles are derived from
+    evidence by entity resolution, not edited over HTTP, so inventing a
+    narrower-than-viewer restriction here would protect nothing.
+    """
+
+    dependencies = [Depends(read_profiles_dependency)]
 
     @app.get(
         "/v1/families/{family_id}/profiles",

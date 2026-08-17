@@ -57,12 +57,20 @@ def register_operations_routes(
     *,
     get_runtime_dependency: Callable[..., object],
     core_token_dependency: Callable[..., None],
-    operations_token_dependency: Callable[..., None] | None = None,
+    operations_token_dependency: Callable[..., None],
 ) -> None:
-    # Read-only job trace stays on the application token; every operator route
-    # below requires the separate operations credential.
+    """Service-internal and operator surfaces. No user principal reaches these.
+
+    Job traces and deterministic family replay are engineering tooling on the
+    application token: they expose stage timings, attempt history and evaluation
+    output that no family role should read, so membership never grants them.
+    Destructive operator routes require the separate operations credential --
+    that dependency is mandatory, because defaulting it to the application token
+    would silently re-merge the credential split PR-02C established.
+    """
+
     dependencies = [Depends(core_token_dependency)]
-    operations = [Depends(operations_token_dependency or core_token_dependency)]
+    operations = [Depends(operations_token_dependency)]
 
     @app.get(
         "/v1/jobs/{job_id}/trace",

@@ -1,3 +1,11 @@
+"""Conflict review routes.
+
+Reading a conflict needs ``read_conflicts``; resolving, dismissing and reopening
+one is an archive mutation and needs ``resolve_conflicts``, which viewers do not
+carry. The service layer is family-scoped underneath, so a conflict id belonging
+to another family is not found rather than forbidden.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -6,8 +14,6 @@ from typing import Literal, Protocol, cast
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.api.operations import register_operations_routes
-from apps.api.profiles import register_profile_routes
 from mura.storage.conflict_resolution import (
     ConflictMutationResult,
     ConflictNotFoundError,
@@ -50,15 +56,16 @@ def register_conflict_routes(
     app: FastAPI,
     *,
     get_runtime_dependency: Callable[..., object],
-    core_token_dependency: Callable[..., None],
-    operations_token_dependency: Callable[..., None] | None = None,
+    read_conflicts_dependency: Callable[..., object],
+    resolve_conflicts_dependency: Callable[..., object],
 ) -> None:
-    dependencies = [Depends(core_token_dependency)]
+    read = [Depends(read_conflicts_dependency)]
+    mutate = [Depends(resolve_conflicts_dependency)]
 
     @app.get(
         "/v1/families/{family_id}/conflicts",
         response_model=list[ConflictReviewView],
-        dependencies=dependencies,
+        dependencies=read,
     )
     def list_family_conflicts(
         family_id: str,
@@ -76,7 +83,7 @@ def register_conflict_routes(
     @app.get(
         "/v1/families/{family_id}/conflicts/{conflict_id}",
         response_model=ConflictReviewView,
-        dependencies=dependencies,
+        dependencies=read,
     )
     def get_family_conflict(
         family_id: str,
@@ -94,7 +101,7 @@ def register_conflict_routes(
     @app.post(
         "/v1/families/{family_id}/conflicts/{conflict_id}/resolve",
         response_model=ConflictMutationResult,
-        dependencies=dependencies,
+        dependencies=mutate,
     )
     def resolve_family_conflict(
         family_id: str,
@@ -118,7 +125,7 @@ def register_conflict_routes(
     @app.post(
         "/v1/families/{family_id}/conflicts/{conflict_id}/dismiss",
         response_model=ConflictMutationResult,
-        dependencies=dependencies,
+        dependencies=mutate,
     )
     def dismiss_family_conflict(
         family_id: str,
@@ -141,7 +148,7 @@ def register_conflict_routes(
     @app.post(
         "/v1/families/{family_id}/conflicts/{conflict_id}/reopen",
         response_model=ConflictMutationResult,
-        dependencies=dependencies,
+        dependencies=mutate,
     )
     def reopen_family_conflict(
         family_id: str,
@@ -160,15 +167,3 @@ def register_conflict_routes(
             raise _not_found(exc) from exc
         except ConflictResolutionError as exc:
             raise _invalid_transition(exc) from exc
-
-    register_profile_routes(
-        app,
-        get_runtime_dependency=get_runtime_dependency,
-        core_token_dependency=core_token_dependency,
-    )
-    register_operations_routes(
-        app,
-        get_runtime_dependency=get_runtime_dependency,
-        core_token_dependency=core_token_dependency,
-        operations_token_dependency=operations_token_dependency or core_token_dependency,
-    )

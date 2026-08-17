@@ -1,9 +1,13 @@
 """Canonical family-scoped recording API.
 
 ``family_id`` is the resource scope and lives in the path, never in the body.
-Every lookup here is family-scoped in the repository query itself, so a
-recording, job or review set belonging to another family is simply not found.
-PR-03 will add principal-to-family membership on top of this integrity.
+
+Authorization is two independent layers, and both must hold. The capability
+dependency proves the caller is a member of the family in the path with a role
+that carries the required capability. Every lookup below is then family-scoped in
+the repository query itself, so a recording, job or review set belonging to
+another family is simply not found -- membership in one family never reaches a
+resource id that belongs to a different one.
 """
 
 from __future__ import annotations
@@ -121,16 +125,19 @@ def register_recording_routes(
     app: FastAPI,
     *,
     get_runtime_dependency: Callable[..., object],
-    core_token_dependency: Callable[..., None],
+    create_recording_dependency: Callable[..., object],
+    read_recordings_dependency: Callable[..., object],
+    read_review_dependency: Callable[..., object],
+    read_jobs_dependency: Callable[..., object],
     job_view_builder: Callable[[ProcessingJobRow], JobView],
 ) -> None:
-    dependencies = [Depends(core_token_dependency)]
+    """Each route names the capability it needs; none accepts a service token."""
 
     @app.post(
         "/v1/families/{family_id}/recordings",
         response_model=RecordingAccepted,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=dependencies,
+        dependencies=[Depends(create_recording_dependency)],
     )
     def create_family_recording(
         family_id: str,
@@ -195,7 +202,7 @@ def register_recording_routes(
     @app.get(
         "/v1/families/{family_id}/recordings/{recording_id}",
         response_model=RecordingResultView,
-        dependencies=dependencies,
+        dependencies=[Depends(read_recordings_dependency)],
     )
     def get_family_recording_result(
         family_id: str,
@@ -241,7 +248,7 @@ def register_recording_routes(
     @app.get(
         "/v1/families/{family_id}/recordings/{recording_id}/review-items",
         response_model=ReviewItemsView,
-        dependencies=dependencies,
+        dependencies=[Depends(read_review_dependency)],
     )
     def get_family_review_items(
         family_id: str,
@@ -289,7 +296,7 @@ def register_recording_routes(
     @app.get(
         "/v1/families/{family_id}/jobs/{job_id}",
         response_model=JobView,
-        dependencies=dependencies,
+        dependencies=[Depends(read_jobs_dependency)],
     )
     def get_family_job(
         family_id: str,

@@ -18,6 +18,12 @@ from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, status
 
+from apps.api.errors import (
+    AUTHENTICATION_REQUIRED,
+    FAMILY_NOT_FOUND,
+    INSUFFICIENT_FAMILY_ROLE,
+    INVALID_TOKEN,
+)
 from mura.identity.context import (
     AuthorizedFamilyContext,
     FamilyAccessDenied,
@@ -25,13 +31,17 @@ from mura.identity.context import (
 )
 from mura.identity.policy import Capability
 
-AUTHENTICATION_REQUIRED = "authentication_required"
-FAMILY_NOT_FOUND = "family_not_found"
-INSUFFICIENT_FAMILY_ROLE = "insufficient_family_role"
-
 
 def authentication_required() -> HTTPException:
+    """No usable credential was presented at all."""
+
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=AUTHENTICATION_REQUIRED)
+
+
+def invalid_token() -> HTTPException:
+    """A bearer token was presented and did not verify. Never says why."""
+
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
 
 
 def family_not_found() -> HTTPException:
@@ -91,9 +101,11 @@ __all__ = [
     "AUTHENTICATION_REQUIRED",
     "FAMILY_NOT_FOUND",
     "INSUFFICIENT_FAMILY_ROLE",
+    "INVALID_TOKEN",
     "authentication_required",
     "build_capability_dependency",
     "build_family_context_dependency",
     "family_not_found",
     "insufficient_family_role",
+    "invalid_token",
 ]

@@ -1,9 +1,10 @@
 """Identity and family foundation API.
 
-These are the first routes to use the new Principal dependency. The existing
-recording, job, profile and conflict routes deliberately keep their current
-authentication until PR-03B flips them all at once: partial enforcement would be
-worse than none, because it would look protected.
+Signing in and listing your own families need only a verified Principal, since
+there is no family scope yet to authorize against. Everything addressed by
+``family_id`` goes through the shared capability chain instead, so these routes
+resolve membership exactly the same way the recording, profile and conflict
+routes do -- one implementation, one place to get it wrong.
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ from typing import cast
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import Field
 
+from apps.api.errors import SOLE_OWNER_REQUIRED
 from mura.domain.models import StrictModel
 from mura.identity.auth import Principal
-from mura.identity.policy import Capability, FamilyRole, capabilities_for, role_allows
+from mura.identity.context import AuthorizedFamilyContext
+from mura.identity.policy import Capability, FamilyRole, capabilities_for
 from mura.storage.identity import (
     IdentityRepository,
     MembershipNotFoundError,
@@ -57,14 +60,12 @@ def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
 
 
-def _forbidden() -> HTTPException:
-    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role")
-
-
 def register_identity_routes(
     app: FastAPI,
     *,
     principal_dependency: Callable[..., Principal],
+    family_read_dependency: Callable[..., object],
+    read_members_dependency: Callable[..., object],
     identity_repository_dependency: Callable[..., object],
 ) -> None:
     def _repository(runtime: object) -> IdentityRepository:
@@ -116,35 +117,26 @@ def register_identity_routes(
     @app.get("/v1/families/{family_id}", response_model=FamilyView)
     def get_family(
         family_id: str,
-        principal: Principal = Depends(principal_dependency),
-        repository: object = Depends(identity_repository_dependency),
+        context: object = Depends(family_read_dependency),
     ) -> FamilyView:
-        identity = _repository(repository)
-        family = identity.get_family_for_member(family_id=family_id, user_id=principal.user_id)
-        if family is None:
-            raise _not_found()
-        membership = identity.get_membership(family_id=family_id, user_id=principal.user_id)
-        role = FamilyRole(membership.role) if membership else FamilyRole.VIEWER
+        # The shared context already resolved family and role in one query, so
+        # the route reads them rather than looking membership up a second time.
+        authorized = cast(AuthorizedFamilyContext, context)
         return FamilyView(
-            family_id=family.family_id,
-            name=family.name,
-            role=role,
-            capabilities=sorted(capabilities_for(role)),
+            family_id=authorized.family.family_id,
+            name=authorized.family.name,
+            role=authorized.role,
+            capabilities=sorted(authorized.capabilities),
         )
 
     @app.get("/v1/families/{family_id}/members", response_model=list[MemberView])
     def list_members(
         family_id: str,
-        principal: Principal = Depends(principal_dependency),
+        context: object = Depends(read_members_dependency),
         repository: object = Depends(identity_repository_dependency),
     ) -> list[MemberView]:
+        del context  # Membership and capability already proven.
         identity = _repository(repository)
-        membership = identity.get_membership(family_id=family_id, user_id=principal.user_id)
-        if membership is None:
-            # Non-member: do not confirm the family exists.
-            raise _not_found()
-        if not role_allows(FamilyRole(membership.role), Capability.READ_MEMBERS):
-            raise _forbidden()
         return [
             MemberView(
                 user_id=user.user_id,
@@ -218,7 +210,14 @@ def register_membership_admin_routes(
 
 
 def sole_owner_error() -> HTTPException:
-    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail="sole owner required")
+    """A distinguishable code: the client must explain *why* the change failed.
+
+    "A family must always keep an owner" is actionable guidance, unlike a
+    generic conflict, and it reveals nothing the caller -- already an owner of
+    this family -- does not know.
+    """
+
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SOLE_OWNER_REQUIRED)
 
 
 __all__ = [

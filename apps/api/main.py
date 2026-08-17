@@ -26,10 +26,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from apps.api.authz import build_capability_dependency, build_family_context_dependency
+from apps.api.authz import (
+    authentication_required,
+    build_capability_dependency,
+    build_family_context_dependency,
+    invalid_token,
+)
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
 from apps.api.identity import register_identity_routes, register_membership_admin_routes
+from apps.api.operations import register_operations_routes
+from apps.api.profiles import register_profile_routes
 from apps.api.recordings import register_recording_routes
 from mura.capabilities import (
     AsrRegistration,
@@ -45,6 +52,7 @@ from mura.identity.auth import (
     AuthMode,
     OidcAuthVerifier,
     Principal,
+    bearer_credentials,
 )
 from mura.identity.context import FamilyAuthorizationService
 from mura.identity.policy import Capability
@@ -224,10 +232,15 @@ def get_identity_repository(
 def get_auth_verifier(
     settings: Annotated[CoreSettings, Depends(get_settings)],
 ) -> ApplicationAuthVerifier:
-    """Built from configuration only; tests override this dependency."""
+    """Built from configuration only; tests override this dependency.
+
+    An unconfigured provider fails closed. There is deliberately no fallback to
+    CORE_API_KEY here: an operational gap must never become an authentication
+    bypass for family data.
+    """
 
     if settings.auth_mode is not AuthMode.OIDC:
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise authentication_required()
     assert settings.auth_issuer and settings.auth_audience and settings.auth_jwks_url
     return OidcAuthVerifier(
         issuer=settings.auth_issuer,
@@ -244,12 +257,25 @@ def get_principal(
     identity: Annotated[IdentityRepository, Depends(get_identity_repository)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
-    """Verify the bearer token, then resolve it to an internal MURA user."""
+    """Verify the bearer token, then resolve it to an internal MURA user.
+
+    Two 401 codes, distinguished only by whether a bearer token was presented at
+    all: a client that sent none should log in, and a client whose token failed
+    should refresh. Why a presented token failed stays uniform -- expiry, bad
+    signature and unknown key are one answer, because separating them helps only
+    an attacker.
+    """
+
+    presented = True
+    try:
+        bearer_credentials(authorization)
+    except AuthenticationError:
+        presented = False
 
     try:
         verified = verifier.verify(authorization)
     except AuthenticationError as exc:
-        raise HTTPException(status_code=401, detail="authentication required") from exc
+        raise (invalid_token() if presented else authentication_required()) from exc
     return identity.resolve_principal(verified)
 
 
@@ -259,7 +285,11 @@ def get_family_authorization_service(
     return FamilyAuthorizationService(runtime.database)
 
 
-#: The reusable chain PR-03B-SWITCH will apply to the remaining family routes.
+#: The single authorization chain behind every family-scoped route.
+#:
+#: All capability guards below are built from this one context dependency, which
+#: is what lets FastAPI's per-request dependency cache serve them from a single
+#: membership query no matter how many guards a route carries.
 resolve_family_context = build_family_context_dependency(
     principal_dependency=get_principal,
     authorization_service_dependency=get_family_authorization_service,
@@ -281,6 +311,9 @@ require_read_profiles = build_capability_dependency(
 )
 require_read_conflicts = build_capability_dependency(
     Capability.READ_CONFLICTS, family_context_dependency=resolve_family_context
+)
+require_read_members = build_capability_dependency(
+    Capability.READ_MEMBERS, family_context_dependency=resolve_family_context
 )
 require_create_recording = build_capability_dependency(
     Capability.CREATE_RECORDING, family_context_dependency=resolve_family_context
@@ -340,12 +373,17 @@ def ready(settings: Annotated[CoreSettings, Depends(get_settings)]) -> JSONRespo
 @router.get(
     "/v1/capabilities",
     response_model=CapabilitiesView,
-    dependencies=[Depends(require_core_token)],
+    dependencies=[Depends(get_principal)],
 )
 def capabilities(
     settings: Annotated[CoreSettings, Depends(get_settings)],
 ) -> CapabilitiesView:
-    """Locally-known product capabilities. Never calls GigaAM or DeepSeek."""
+    """Locally-known product capabilities. Never calls GigaAM or DeepSeek.
+
+    User-facing -- it gates the record button -- so it needs a verified user, but
+    it describes the deployment rather than any family, so there is no family
+    scope and no capability to check beyond being signed in.
+    """
 
     registration = AsrRegistration.UNKNOWN
     registered_at: datetime | None = None
@@ -505,13 +543,16 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
     register_error_handlers(application)
     application.include_router(router)
+    # Every family application route below is Principal-native: a verified user
+    # token, a membership row, then a capability. CORE_API_KEY reaches none of
+    # them -- it is passed only to the service-internal registration.
     register_identity_routes(
         application,
         principal_dependency=get_principal,
+        family_read_dependency=require_family_read,
+        read_members_dependency=require_read_members,
         identity_repository_dependency=get_identity_repository,
     )
-    # New in PR-03, so Principal-native from the start. Existing family routes
-    # deliberately keep CORE_API_KEY until the atomic switch in PR-03B-SWITCH.
     register_membership_admin_routes(
         application,
         manage_members_dependency=require_manage_members,
@@ -520,10 +561,27 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     register_recording_routes(
         application,
         get_runtime_dependency=get_runtime,
-        core_token_dependency=require_core_token,
+        create_recording_dependency=require_create_recording,
+        read_recordings_dependency=require_read_recordings,
+        read_review_dependency=require_read_review,
+        read_jobs_dependency=require_read_jobs,
         job_view_builder=_job_view,
     )
     register_conflict_routes(
+        application,
+        get_runtime_dependency=get_runtime,
+        read_conflicts_dependency=require_read_conflicts,
+        resolve_conflicts_dependency=require_resolve_conflicts,
+    )
+    register_profile_routes(
+        application,
+        get_runtime_dependency=get_runtime,
+        read_profiles_dependency=require_read_profiles,
+    )
+    # Service-internal and operator surfaces, registered here rather than behind
+    # the conflict module so the credential each one requires is visible in one
+    # place instead of inherited through an unrelated import.
+    register_operations_routes(
         application,
         get_runtime_dependency=get_runtime,
         core_token_dependency=require_core_token,
