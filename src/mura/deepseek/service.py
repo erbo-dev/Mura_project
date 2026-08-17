@@ -213,7 +213,14 @@ class DeepSeekPipelineService:
         speaker_id: str,
         speaker_name: str,
         known_people: list[KnownPerson] | None = None,
+        maximum_repairs: int = 1,
     ) -> tuple[ExtractionResult, dict[str, Any]]:
+        """Run one primary extraction call plus at most ``maximum_repairs`` logical repairs.
+
+        ``maximum_repairs`` is a ceiling on logical repair operations, not on the
+        transport attempts ``request_json`` performs internally.
+        """
+
         resolved_known_people = known_people or []
         anchors = build_extraction_anchor_bundle(
             transcript=transcript,
@@ -248,6 +255,8 @@ class DeepSeekPipelineService:
                 speaker_name=speaker_name,
             )
         except (ValidationError, ContractValidationError):
+            if maximum_repairs < 1:
+                raise
             failures = [{"code": "final_contract_invalid", "stage": "provenance"}]
             outcome, usage = self._repair_extraction(
                 transcript=transcript,
@@ -263,7 +272,7 @@ class DeepSeekPipelineService:
             repair_succeeded = True
         else:
             initial_outcome = outcome
-            if self._requires_extraction_repair(
+            if maximum_repairs >= 1 and self._requires_extraction_repair(
                 raw=outcome.recovered_raw,
                 result=outcome.result,
                 extraction_issues=outcome.issues,
@@ -316,6 +325,7 @@ class DeepSeekPipelineService:
         speaker_id: str,
         speaker_name: str,
         known_people: list[KnownPerson] | None = None,
+        maximum_repairs: int = 1,
     ) -> tuple[ExtractionResult, dict[str, Any]]:
         """Run the bounded single-pass policy regardless of the short-path focused setting."""
 
@@ -325,6 +335,7 @@ class DeepSeekPipelineService:
             speaker_id=speaker_id,
             speaker_name=speaker_name,
             known_people=known_people,
+            maximum_repairs=maximum_repairs,
         )
         telemetry["extraction_mode"] = "long_form_window_single_pass"
         telemetry["model_calls"] = 1 + int(bool(telemetry.get("repair_attempted")))

@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from pydantic import ValidationError
+
 from mura.domain.models import (
     CleanerResult,
     ExtractionResult,
@@ -39,6 +42,7 @@ class FakeDeepSeek:
     def __init__(self, *, fail_call: int | None = None) -> None:
         self.calls = 0
         self.fail_call = fail_call
+        self.observed_maximum_repairs: list[int] = []
 
     def clean_raw_preserving(
         self, *, transcript: TranscriptEnvelope
@@ -59,8 +63,10 @@ class FakeDeepSeek:
         speaker_id: str,
         speaker_name: str,
         known_people: list[object],
+        maximum_repairs: int = 1,
     ) -> tuple[ExtractionResult, dict[str, Any]]:
         del cleaned, known_people
+        self.observed_maximum_repairs.append(maximum_repairs)
         self.calls += 1
         if self.calls == self.fail_call:
             raise TimeoutError("provider timeout")
@@ -149,3 +155,43 @@ def test_budget_exhaustion_skips_remaining_windows_without_losing_first_result()
     assert metadata["completed_windows"] == 1
     assert metadata["skipped_windows"] == metadata["total_windows"] - 1
     assert "long_form_window_budget_exhausted" in metadata["issue_codes"]
+
+
+def test_budget_rejects_a_configuration_without_a_primary_logical_call() -> None:
+    with pytest.raises(ValidationError):
+        LongFormCallBudget(maximum_primary_calls_per_window=0)
+
+
+def test_default_budget_offers_each_window_one_logical_repair() -> None:
+    deepseek = FakeDeepSeek()
+    pipeline = MuraPipeline(deepseek)  # type: ignore[arg-type]
+
+    pipeline.process(
+        PipelineRequest(
+            transcript=_transcript(),
+            speaker_id="speaker",
+            speaker_name="Narrator",
+        )
+    )
+
+    assert deepseek.observed_maximum_repairs
+    assert set(deepseek.observed_maximum_repairs) == {1}
+
+
+def test_zero_repair_budget_is_propagated_to_every_window() -> None:
+    deepseek = FakeDeepSeek()
+    pipeline = MuraPipeline(
+        deepseek,  # type: ignore[arg-type]
+        long_form_budget=LongFormCallBudget(maximum_repairs_per_window=0),
+    )
+
+    pipeline.process(
+        PipelineRequest(
+            transcript=_transcript(),
+            speaker_id="speaker",
+            speaker_name="Narrator",
+        )
+    )
+
+    assert deepseek.observed_maximum_repairs
+    assert set(deepseek.observed_maximum_repairs) == {0}

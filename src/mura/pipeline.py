@@ -163,6 +163,7 @@ class MuraPipeline:
                     speaker_id=request.speaker_id,
                     speaker_name=request.speaker_name,
                     known_people=request.known_people,
+                    maximum_repairs=self.long_form_budget.maximum_repairs_per_window,
                 )
                 self._report(stage_callback, f"window_{window.ordinal}_validating")
             except Exception as exc:
