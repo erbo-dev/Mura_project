@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
-from pathlib import Path
-from typing import BinaryIO
 
 from mura.asr import ASRClientError, RemoteASRClient
 from mura.domain.models import (
@@ -19,6 +16,7 @@ from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
 from mura.observability import ProcessingTrace, TraceOutcome
 from mura.pipeline import MuraPipeline
 from mura.storage.archive import ArchiveRepository
+from mura.storage.audio import AudioStorage
 from mura.storage.completion import (
     defer_recording_job,
     fail_recording_job,
@@ -27,62 +25,9 @@ from mura.storage.completion import (
 from mura.storage.conflict_resolution import ConflictResolutionService
 from mura.storage.database import ProcessingJobRow, RecordingRepository
 from mura.storage.generic_claims import persist_generic_claims
+from mura.storage.recording_audio import materialize_recording_audio
 
 logger = logging.getLogger(__name__)
-
-ALLOWED_AUDIO_EXTENSIONS = {
-    ".wav",
-    ".mp3",
-    ".m4a",
-    ".mp4",
-    ".aac",
-    ".ogg",
-    ".opus",
-    ".webm",
-    ".flac",
-}
-
-
-class AudioStorageError(ValueError):
-    pass
-
-
-class LocalAudioStorage:
-    def __init__(self, root: Path, *, max_upload_bytes: int) -> None:
-        self.root = root.resolve()
-        self.max_upload_bytes = max_upload_bytes
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def save(
-        self,
-        *,
-        recording_id: str,
-        original_filename: str,
-        source: BinaryIO,
-    ) -> Path:
-        safe_name = Path(original_filename or "audio.bin").name
-        suffix = Path(safe_name).suffix.lower()
-        if suffix not in ALLOWED_AUDIO_EXTENSIONS:
-            raise AudioStorageError(f"unsupported audio extension: {suffix or '<none>'}")
-
-        destination = self.root / f"{recording_id}{suffix}"
-        temporary = self.root / f".{recording_id}{suffix}.uploading"
-        total = 0
-        try:
-            with temporary.open("wb") as output:
-                while chunk := source.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > self.max_upload_bytes:
-                        raise AudioStorageError(
-                            f"audio exceeds maximum upload size of "
-                            f"{self.max_upload_bytes // (1024 * 1024)} MB"
-                        )
-                    output.write(chunk)
-            os.replace(temporary, destination)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
-        return destination
 
 
 class RecordingJobWorker:
@@ -92,6 +37,7 @@ class RecordingJobWorker:
         repository: RecordingRepository,
         pipeline: MuraPipeline,
         asr_client: RemoteASRClient,
+        storage: AudioStorage | None = None,
         poll_interval_seconds: float = 1.0,
         asr_retry_seconds: float = 15.0,
         lease_seconds: float = 300.0,
@@ -103,6 +49,8 @@ class RecordingJobWorker:
         self.conflict_resolution = ConflictResolutionService(repository.database)
         self.pipeline = pipeline
         self.asr_client = asr_client
+        #: Optional so legacy recordings with only audio_path still process.
+        self.storage = storage
         self.poll_interval_seconds = poll_interval_seconds
         self.asr_retry_seconds = asr_retry_seconds
         self.lease_seconds = lease_seconds
@@ -218,12 +166,13 @@ class RecordingJobWorker:
 
         trace.start("asr_transcription")
         try:
-            transcript = self.asr_client.transcribe(
-                worker_url=worker.url,
-                audio_path=Path(recording.audio_path),
-                recording_id=recording.recording_id,
-                content_type=recording.content_type,
-            )
+            with materialize_recording_audio(recording, self.storage) as audio_file:
+                transcript = self.asr_client.transcribe(
+                    worker_url=worker.url,
+                    audio_path=audio_file,
+                    recording_id=recording.recording_id,
+                    content_type=recording.content_type,
+                )
         except ASRClientError as exc:
             outcome = TraceOutcome.DEFERRED if exc.retryable else TraceOutcome.ERROR
             trace.finish(

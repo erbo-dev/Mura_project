@@ -278,7 +278,8 @@ class FamilyReplayService:
                     speaker_name=recording.speaker_name,
                     original_filename=recording.original_filename,
                     content_type=recording.content_type,
-                    audio_path=recording.audio_path,
+                    # Storage key when present, legacy locator otherwise.
+                    audio_path=recording.storage_key or recording.audio_path,
                     created_at=recording.created_at,
                 )
                 shadow_session.add(shadow_recording)

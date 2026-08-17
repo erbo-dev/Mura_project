@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from pathlib import Path as PathLike
 from pathlib import PurePath
-from typing import Annotated, Any, BinaryIO, Protocol, cast
+from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 
@@ -31,13 +30,13 @@ from mura.jobs import (
     SpeakerResolution,
     SpeakerView,
 )
-from mura.orchestration import AudioStorageError
 from mura.speaker import (
     SpeakerSyntaxError,
     internal_narrator_reference,
     public_person_id,
     validate_speaker_person_id,
 )
+from mura.storage.audio import AudioStorage, AudioStorageError, AudioTooLargeError
 from mura.storage.database import ProcessingJobRow, RecordingRow
 
 
@@ -61,15 +60,11 @@ class RecordingRepositoryProtocol(Protocol):
     def create_recording_and_job(self, **kwargs: Any) -> None: ...
 
 
-class AudioStorageProtocol(Protocol):
-    def save(self, *, recording_id: str, original_filename: str, source: BinaryIO) -> PathLike: ...
-
-
 class RecordingRuntime(Protocol):
     """Structural view of the pieces of CoreRuntime these routes need."""
 
     repository: RecordingRepositoryProtocol
-    storage: AudioStorageProtocol
+    storage: AudioStorage
 
 
 def _repository(runtime: object) -> RecordingRepositoryProtocol:
@@ -157,22 +152,20 @@ def register_recording_routes(
         )
         original_filename = PurePath(file.filename or "audio.bin").name
 
-        storage: AudioStorageProtocol = cast(RecordingRuntime, runtime).storage
+        storage: AudioStorage = cast(RecordingRuntime, runtime).storage
         try:
             file.file.seek(0)
-            audio_path = storage.save(
+            stored = storage.save(
+                family_id=family_id,
                 recording_id=recording_id,
                 original_filename=original_filename,
+                content_type=file.content_type,
                 source=file.file,
             )
+        except AudioTooLargeError as exc:
+            raise HTTPException(status_code=413, detail="upload rejected") from exc
         except AudioStorageError as exc:
-            message = str(exc)
-            code = (
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-                if "maximum upload size" in message
-                else status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
-            )
-            raise HTTPException(status_code=code, detail="upload rejected") from exc
+            raise HTTPException(status_code=415, detail="upload rejected") from exc
 
         try:
             repository.create_recording_and_job(
@@ -182,13 +175,19 @@ def register_recording_routes(
                 speaker_id=speaker_reference,
                 speaker_name=speaker_name,
                 original_filename=original_filename,
-                content_type=file.content_type,
-                audio_path=audio_path,
+                content_type=stored.content_type,
+                audio_path=stored.storage_key,
+                storage_key=stored.storage_key,
+                storage_backend=stored.backend.value,
+                audio_sha256=stored.sha256,
+                audio_size_bytes=stored.size_bytes,
+                audio_mime_type=stored.content_type,
                 audio_language=audio_language.value,
                 output_language=output_language.value,
             )
         except Exception:
-            audio_path.unlink(missing_ok=True)
+            # The object is durable but the recording is not; drop the orphan.
+            storage.delete(stored.storage_key)
             raise
 
         return RecordingAccepted(recording_id=recording_id, job_id=job_id)

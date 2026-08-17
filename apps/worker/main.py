@@ -22,7 +22,7 @@ from types import FrameType
 from mura.asr import RemoteASRClient
 from mura.config import CoreSettings
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
-from mura.orchestration import RecordingJobWorker
+from mura.orchestration import LocalAudioStorage, RecordingJobWorker
 from mura.pipeline import MuraPipeline
 from mura.storage.database import Database, DatabaseRuntimeSettings, RecordingRepository
 
@@ -57,6 +57,10 @@ def build_worker(settings: CoreSettings) -> RecordingJobWorker:
     return RecordingJobWorker(
         repository=RecordingRepository(database),
         pipeline=pipeline,
+        storage=LocalAudioStorage(
+            settings.audio_storage_dir,
+            max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
+        ),
         asr_client=RemoteASRClient(
             api_key=settings.kaggle_asr_api_key,
             timeout_seconds=settings.asr_request_timeout_seconds,
