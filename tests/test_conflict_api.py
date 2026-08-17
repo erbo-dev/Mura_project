@@ -4,10 +4,18 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from apps.api.main import app, get_runtime, get_settings
+from apps.api.main import create_app, get_auth_verifier, get_runtime, get_settings
 from mura.config import CoreSettings
+from mura.identity.policy import FamilyRole
 from mura.storage.archive import ArchiveClaimRow, ArchiveConflictRow
 from mura.storage.database import Database, RecordingRow
+from mura.storage.identity import IdentityRepository
+from tests.authz_factories import (
+    FakePrincipalVerifier,
+    create_family_with_id,
+    create_membership,
+    create_test_user,
+)
 
 DEEPSEEK_KEY = "sk-" + "d" * 40
 REGISTRATION_TOKEN = "r" * 40
@@ -114,52 +122,69 @@ def _seed_database() -> Database:
     return database
 
 
-def test_conflict_routes_require_auth_and_preserve_family_scope() -> None:
+def test_conflict_routes_require_a_member_and_preserve_family_scope() -> None:
+    """Conflict review is family data: an editor of family 1 reaches it, a
+    service token does not, and family 2 membership does not reach family 1's
+    conflict even though the id is known."""
+
     database = _seed_database()
-    app.dependency_overrides[get_settings] = _settings
-    app.dependency_overrides[get_runtime] = lambda: SimpleNamespace(database=database)
-    client = TestClient(app)
-    headers = {"Authorization": f"Bearer {CORE_TOKEN}"}
-    try:
-        unauthorized = client.get("/v1/families/family_1/conflicts")
-        assert unauthorized.status_code == 401
+    settings = _settings()
+    identity = IdentityRepository(database)
+    verifier = FakePrincipalVerifier()
+    editor = create_test_user(identity, subject="conflict-editor", verifier=verifier)
+    create_family_with_id(database, family_id="family_1", name="Family 1")
+    create_membership(database, family_id="family_1", user=editor, role=FamilyRole.EDITOR)
+    create_family_with_id(database, family_id="family_2", name="Family 2")
+    create_membership(database, family_id="family_2", user=editor, role=FamilyRole.EDITOR)
 
-        listed = client.get("/v1/families/family_1/conflicts", headers=headers)
-        assert listed.status_code == 200
-        assert listed.json()[0]["conflict_id"] == "conflict_api"
-        assert listed.json()[0]["status"] == "open"
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[get_runtime] = lambda: SimpleNamespace(database=database)
+    application.dependency_overrides[get_auth_verifier] = lambda: verifier
+    client = TestClient(application, raise_server_exceptions=False)
+    headers = editor.headers
 
-        hidden = client.get(
-            "/v1/families/family_2/conflicts/conflict_api",
-            headers=headers,
-        )
-        assert hidden.status_code == 404
+    unauthorized = client.get("/v1/families/family_1/conflicts")
+    assert unauthorized.status_code == 401
 
-        resolved = client.post(
-            "/v1/families/family_1/conflicts/conflict_api/resolve",
-            headers=headers,
-            json={
-                "preferred_claim_id": "claim_parent",
-                "reviewer_reference": "reviewer:api-test",
-                "note": "Family reviewer confirmed the parent relationship.",
-            },
-        )
-        assert resolved.status_code == 200
-        assert resolved.json()["conflict"]["status"] == "resolved"
-        assert resolved.json()["conflict"]["preferred_claim_id"] == "claim_parent"
-        assert resolved.json()["graph_edges"] == 1
-        assert resolved.json()["conflict"]["decisions"][0]["action"] == "resolve"
+    service_token = client.get(
+        "/v1/families/family_1/conflicts",
+        headers={"Authorization": f"Bearer {CORE_TOKEN}"},
+    )
+    assert service_token.status_code == 401
 
-        reopened = client.post(
-            "/v1/families/family_1/conflicts/conflict_api/reopen",
-            headers=headers,
-            json={
-                "reviewer_reference": "reviewer:api-test",
-                "note": "Reopen after receiving new testimony.",
-            },
-        )
-        assert reopened.status_code == 200
-        assert reopened.json()["conflict"]["status"] == "open"
-        assert reopened.json()["graph_edges"] == 0
-    finally:
-        app.dependency_overrides.clear()
+    listed = client.get("/v1/families/family_1/conflicts", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()[0]["conflict_id"] == "conflict_api"
+    assert listed.json()[0]["status"] == "open"
+
+    hidden = client.get("/v1/families/family_2/conflicts/conflict_api", headers=headers)
+    assert hidden.status_code == 404
+    assert "conflict_api" not in hidden.text
+
+    resolved = client.post(
+        "/v1/families/family_1/conflicts/conflict_api/resolve",
+        headers=headers,
+        json={
+            "preferred_claim_id": "claim_parent",
+            "reviewer_reference": "reviewer:api-test",
+            "note": "Family reviewer confirmed the parent relationship.",
+        },
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["conflict"]["status"] == "resolved"
+    assert resolved.json()["conflict"]["preferred_claim_id"] == "claim_parent"
+    assert resolved.json()["graph_edges"] == 1
+    assert resolved.json()["conflict"]["decisions"][0]["action"] == "resolve"
+
+    reopened = client.post(
+        "/v1/families/family_1/conflicts/conflict_api/reopen",
+        headers=headers,
+        json={
+            "reviewer_reference": "reviewer:api-test",
+            "note": "Reopen after receiving new testimony.",
+        },
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["conflict"]["status"] == "open"
+    assert reopened.json()["graph_edges"] == 0

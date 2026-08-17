@@ -1,11 +1,13 @@
-"""Every route must declare which credential guards it.
+"""Every route must declare which credential guards it, and actually use it.
 
 Two jobs. First, prove the classification registry matches the live API surface,
-so a new endpoint cannot ship without an auth class. Second, pin the current
-CORE_API_KEY wiring: PR-03B-PREP must leave existing USER_APP routes exactly as
-they were, and PR-03B-SWITCH must move all of them at once. Both directions are
-asserted here, so neither a silent partial migration nor a forgotten route can
-pass unnoticed.
+so a new endpoint cannot ship without an auth class. Second, prove the wiring
+matches the declaration: the assertions below read guards off the real dependency
+graph, so an alias, a factory-built closure or a guard nested two levels down is
+still seen, and a route that merely *looks* protected cannot pass.
+
+PR-03B-SWITCH moved every family application route onto the Principal chain, so
+the pending-switch checklist is now asserted empty rather than asserted intact.
 """
 
 from __future__ import annotations
@@ -13,17 +15,28 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 
-from apps.api.main import create_app, get_settings
+from apps.api.main import create_app
 from mura.config import CoreSettings
 from mura.identity.route_classification import (
+    CAPABILITY_BY_ROUTE,
     PENDING_SWITCH_TO_PRINCIPAL,
     PRINCIPAL_NATIVE,
     ROUTE_AUTH_CLASSES,
     AuthClass,
     classify,
     routes_in,
+)
+from tests.route_introspection import (
+    CAPABILITY_GUARD,
+    CORE_TOKEN_GUARD,
+    OPERATIONS_TOKEN_GUARD,
+    PRINCIPAL_GUARD,
+    SERVICE_GUARDS,
+    WORKER_TOKEN_GUARD,
+    guards_by_path,
+    live_paths,
+    paths_requiring,
 )
 
 
@@ -40,54 +53,41 @@ def _settings(**overrides: Any) -> CoreSettings:
     return CoreSettings.model_validate(payload)
 
 
-#: Registered on the module-level APIRouter; pinned by behaviour, not wiring.
-_BEHAVIOURALLY_PINNED = frozenset({"/v1/capabilities"})
+@pytest.fixture(scope="module")
+def application() -> Any:
+    return create_app(_settings())
 
 
-def _live_paths() -> set[str]:
-    return set(create_app(_settings()).openapi()["paths"])
+# ------------------------------------------------------------- the registry
 
 
-def _dependency_names(dependant: Any) -> set[str]:
-    """Walk the whole dependency tree.
-
-    Router-level dependencies nest differently from decorator-level ones, so a
-    shallow scan silently misses routes and would let a migrated route look
-    unmigrated. Recursing is what makes this assertion trustworthy.
-    """
-
-    names: set[str] = set()
-    for sub in getattr(dependant, "dependencies", []):
-        call = getattr(sub, "call", None)
-        if call is not None:
-            names.add(getattr(call, "__name__", ""))
-        names |= _dependency_names(sub)
-    return names
-
-
-def _paths_requiring(dependency_name: str) -> set[str]:
-    application = create_app(_settings())
-    found: set[str] = set()
-    for route in application.routes:
-        path = getattr(route, "path", None)
-        dependant = getattr(route, "dependant", None)
-        if path is None or dependant is None:
-            continue
-        if dependency_name in _dependency_names(dependant):
-            found.add(path)
-    return found
-
-
-def test_every_live_route_has_exactly_one_auth_class() -> None:
-    unclassified = sorted(path for path in _live_paths() if classify(path) is None)
+def test_every_live_route_has_exactly_one_auth_class(application: Any) -> None:
+    unclassified = sorted(path for path in live_paths(application) if classify(path) is None)
 
     assert unclassified == [], "every route must declare an auth class in route_classification.py"
 
 
-def test_the_registry_does_not_describe_routes_that_no_longer_exist() -> None:
-    stale = sorted(set(ROUTE_AUTH_CLASSES) - _live_paths())
+def test_the_registry_does_not_describe_routes_that_no_longer_exist(application: Any) -> None:
+    stale = sorted(set(ROUTE_AUTH_CLASSES) - live_paths(application))
 
     assert stale == []
+
+
+def test_route_introspection_sees_the_whole_surface(application: Any) -> None:
+    """Guard against a silently shallow walk.
+
+    Routes mounted through include_router are nested rather than flattened. If
+    this traversal regressed, every assertion below would pass vacuously for
+    them, so the infrastructure itself is pinned first.
+    """
+
+    paths = live_paths(application)
+
+    assert "/health" in paths
+    assert "/v1/capabilities" in paths
+    assert "/v1/process-transcript" in paths
+    assert "/v1/workers/register" in paths
+    assert len(paths) == len(ROUTE_AUTH_CLASSES)
 
 
 def test_expected_routes_land_in_expected_classes() -> None:
@@ -113,60 +113,125 @@ def test_replay_is_service_internal_not_family_data() -> None:
     assert classify("/v1/families/{family_id}/replays") is AuthClass.SERVICE_INTERNAL
 
 
-def test_user_app_routes_are_either_principal_native_or_pending_switch() -> None:
-    user_app = routes_in(AuthClass.USER_APP)
-
-    assert PRINCIPAL_NATIVE | PENDING_SWITCH_TO_PRINCIPAL == user_app
-    # No route may be in both states.
-    assert not (PRINCIPAL_NATIVE & PENDING_SWITCH_TO_PRINCIPAL)
+# ------------------------------------------------ the switch actually happened
 
 
-# ------------------------------------------------- PREP must not switch anything
+def test_no_user_app_route_is_still_pending() -> None:
+    """The atomic-switch guarantee, after the switch."""
+
+    assert PENDING_SWITCH_TO_PRINCIPAL == frozenset()
 
 
-def test_prep_left_existing_user_app_routes_on_core_api_key() -> None:
-    """The atomic-switch guarantee, asserted mechanically.
+def test_every_user_app_route_is_principal_native() -> None:
+    assert PRINCIPAL_NATIVE == routes_in(AuthClass.USER_APP)
 
-    PR-03B-PREP adds machinery but must not migrate a single existing route. If
-    one of these ever stops requiring CORE_API_KEY without the whole set moving,
-    the repository has a partially enforced authorization layer.
+
+@pytest.mark.parametrize("path", sorted(routes_in(AuthClass.USER_APP)))
+def test_user_app_routes_authenticate_a_user(application: Any, path: str) -> None:
+    assert PRINCIPAL_GUARD in guards_by_path(application)[path]
+
+
+@pytest.mark.parametrize("path", sorted(CAPABILITY_BY_ROUTE))
+def test_family_scoped_routes_enforce_a_capability(application: Any, path: str) -> None:
+    """A family-scoped route must check membership, not merely authentication."""
+
+    assert "{family_id}" in path
+    assert CAPABILITY_GUARD in guards_by_path(application)[path]
+
+
+def test_only_family_scoped_user_routes_declare_a_capability(application: Any) -> None:
+    capability_paths = paths_requiring(application, CAPABILITY_GUARD)
+
+    assert capability_paths == set(CAPABILITY_BY_ROUTE)
+
+
+# ----------------------------------------------------- static credential walls
+
+
+def test_no_user_app_route_accepts_any_service_credential(application: Any) -> None:
+    """The core assertion of PR-03B-SWITCH.
+
+    Not just CORE_API_KEY: no user-facing route may be reachable with any of the
+    three machine credentials, and none may offer one as a fallback.
     """
 
-    core_dependency_paths = _paths_requiring("require_core_token")
-    # Routes registered on the module-level APIRouter are not introspectable the
-    # same way, so they are pinned behaviourally below instead.
-    introspectable = PENDING_SWITCH_TO_PRINCIPAL - _BEHAVIOURALLY_PINNED
+    guards = guards_by_path(application)
+    leaked = {
+        path: sorted(guards[path] & SERVICE_GUARDS)
+        for path in routes_in(AuthClass.USER_APP)
+        if guards[path] & SERVICE_GUARDS
+    }
 
-    still_on_core = introspectable & core_dependency_paths
-    assert still_on_core == introspectable, (
-        "PR-03B-PREP must not migrate existing USER_APP routes; "
-        f"already migrated: {sorted(introspectable - core_dependency_paths)}"
-    )
+    assert leaked == {}, f"user routes must not accept a service credential: {leaked}"
 
 
-def test_capabilities_still_requires_the_service_token() -> None:
-    """Behavioural pin for the router-registered pending route."""
+def test_no_service_internal_route_accepts_a_user_principal(application: Any) -> None:
+    guards = guards_by_path(application)
+    leaked = {
+        path
+        for path in routes_in(AuthClass.SERVICE_INTERNAL)
+        if PRINCIPAL_GUARD in guards[path] or CAPABILITY_GUARD in guards[path]
+    }
 
-    settings = _settings(DATABASE_AUTO_CREATE=True)
-    application = create_app(settings)
-    application.dependency_overrides[get_settings] = lambda: settings
-    client = TestClient(application, raise_server_exceptions=False)
-
-    assert client.get("/v1/capabilities").status_code == 401
-    assert (
-        client.get("/v1/capabilities", headers={"Authorization": f"Bearer {'c' * 40}"}).status_code
-        == 200
-    )
+    assert leaked == set(), f"engineering tooling must not be reachable by a family role: {leaked}"
 
 
-def test_principal_native_routes_never_accept_the_service_token() -> None:
-    leaked = PRINCIPAL_NATIVE & _paths_requiring("require_core_token")
+@pytest.mark.parametrize("path", sorted(routes_in(AuthClass.SERVICE_INTERNAL)))
+def test_service_internal_routes_require_the_application_token(application: Any, path: str) -> None:
+    guards = guards_by_path(application)[path]
 
-    assert leaked == set(), (
-        f"Principal-native routes must not accept CORE_API_KEY: {sorted(leaked)}"
-    )
+    assert CORE_TOKEN_GUARD in guards
+    assert not guards & {OPERATIONS_TOKEN_GUARD, WORKER_TOKEN_GUARD}
 
 
-@pytest.mark.parametrize("path", sorted(PENDING_SWITCH_TO_PRINCIPAL))
-def test_switch_checklist_entries_are_real_user_app_routes(path: str) -> None:
-    assert classify(path) is AuthClass.USER_APP
+@pytest.mark.parametrize("path", sorted(routes_in(AuthClass.OPERATIONS)))
+def test_operations_routes_require_only_the_operations_token(application: Any, path: str) -> None:
+    guards = guards_by_path(application)[path]
+
+    assert OPERATIONS_TOKEN_GUARD in guards
+    assert not guards & {CORE_TOKEN_GUARD, WORKER_TOKEN_GUARD, PRINCIPAL_GUARD, CAPABILITY_GUARD}
+
+
+@pytest.mark.parametrize("path", sorted(routes_in(AuthClass.WORKER)))
+def test_worker_routes_require_only_the_worker_token(application: Any, path: str) -> None:
+    guards = guards_by_path(application)[path]
+
+    assert WORKER_TOKEN_GUARD in guards
+    assert not guards & {
+        CORE_TOKEN_GUARD,
+        OPERATIONS_TOKEN_GUARD,
+        PRINCIPAL_GUARD,
+        CAPABILITY_GUARD,
+    }
+
+
+@pytest.mark.parametrize("path", sorted(routes_in(AuthClass.PUBLIC_INFRA)))
+def test_probes_carry_no_credential_guard(application: Any, path: str) -> None:
+    guards = guards_by_path(application)[path]
+
+    assert not guards & (SERVICE_GUARDS | {PRINCIPAL_GUARD, CAPABILITY_GUARD})
+
+
+def test_the_application_token_reaches_nothing_but_service_internal(application: Any) -> None:
+    assert paths_requiring(application, CORE_TOKEN_GUARD) == routes_in(AuthClass.SERVICE_INTERNAL)
+
+
+def test_route_source_contains_no_credential_fallback() -> None:
+    """A sanity check in source text, since introspection cannot see intent.
+
+    Dependency graphs show what a route requires, not what a handler might do
+    with a second credential inside its body. `or`-ing two guards together is the
+    shape that would produce exactly that, so it is spelled out as forbidden.
+    """
+
+    from pathlib import Path
+
+    forbidden = ("core_token_dependency or", "or core_token_dependency", "or require_core_token")
+    offenders = [
+        f"{path.name}: {needle}"
+        for path in sorted(Path("apps/api").glob("*.py"))
+        for needle in forbidden
+        if needle in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []

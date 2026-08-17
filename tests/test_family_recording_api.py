@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api.main import _job_view, create_app, get_runtime, get_settings
+from apps.api.main import _job_view, create_app, get_auth_verifier, get_runtime, get_settings
 from apps.api.recordings import RecordingRuntime
 from mura.config import CoreSettings
 from mura.domain.models import (
@@ -28,6 +28,13 @@ from mura.speaker import (
 )
 from mura.storage.archive import ArchivePersonRow
 from mura.storage.database import Database, PipelineResultRow, RecordingRepository, RecordingRow
+from mura.storage.identity import IdentityRepository
+from tests.authz_factories import (
+    FakePrincipalVerifier,
+    TestIdentity,
+    create_family_with_id,
+    create_test_user,
+)
 
 # A real RIFF/WAVE header: uploads are content-validated since PR-02C.
 WAV_BYTES = b"RIFF$\x00\x00\x00WAVEfmt " + b"\x00" * 32
@@ -177,8 +184,15 @@ class _Runtime(RecordingRuntime):
         self.storage = LocalAudioStorage(tmp_path / "audio", max_upload_bytes=1024 * 1024)
 
 
+#: The signed-in user these tests act as: an owner of family A and a stranger to
+#: family B. Since PR-03B-SWITCH the service token reaches none of these routes,
+#: so every request below carries a verified user token instead.
+_MEMBER: TestIdentity | None = None
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
+    global _MEMBER
     settings = _settings()
     database = Database(settings.database_url)
     database.create_schema()
@@ -186,15 +200,29 @@ def client(tmp_path: Path) -> TestClient:
     _seed_recording(database, family_id=FAMILY_A, recording_id="rec_a", job_id="job_a")
     _seed_recording(database, family_id=FAMILY_B, recording_id="rec_b", job_id="job_b")
 
+    identity = IdentityRepository(database)
+    verifier = FakePrincipalVerifier()
+    _MEMBER = create_test_user(identity, subject="family-a-owner", verifier=verifier)
+    create_family_with_id(database, family_id=FAMILY_A, name="Family A", owner=_MEMBER)
+    # Family B exists and has its own owner. The caller is simply not in it.
+    create_family_with_id(
+        database,
+        family_id=FAMILY_B,
+        name="Family B",
+        owner=create_test_user(identity, subject="family-b-owner", verifier=verifier),
+    )
+
     application = create_app(settings)
     runtime = _Runtime(database, tmp_path)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_runtime] = lambda: runtime
+    application.dependency_overrides[get_auth_verifier] = lambda: verifier
     return TestClient(application, raise_server_exceptions=False)
 
 
 def _auth() -> dict[str, str]:
-    return {"Authorization": f"Bearer {CORE_TOKEN}"}
+    assert _MEMBER is not None, "the client fixture establishes the signed-in user"
+    return _MEMBER.headers
 
 
 def _upload(client: TestClient, family_id: str, **form: str) -> Any:

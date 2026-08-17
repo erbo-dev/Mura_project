@@ -14,6 +14,7 @@ Genuine signature behaviour is covered end to end in test_auth_verifier.py.
 from __future__ import annotations
 
 import io
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +31,8 @@ from mura.storage.database import (
     ProcessingJobRow,
     RecordingRepository,
 )
-from mura.storage.identity import FamilyMembershipRow, IdentityRepository
+from mura.storage.identity import FamilyMembershipRow, FamilyRow, IdentityRepository
+from mura.storage.profile_models import MaterializedPersonProfileRow
 
 ISSUER = "https://issuer.test/"
 
@@ -41,6 +43,9 @@ WAV_BYTES = b"RIFF$\x00\x00\x00WAVEfmt " + b"\x00" * 32
 @dataclass(frozen=True)
 class TestIdentity:
     """A verified identity plus the internal user it resolves to."""
+
+    #: Not a test class despite the name; keeps pytest from trying to collect it.
+    __test__ = False
 
     identity: VerifiedIdentity
     principal: Principal
@@ -97,13 +102,36 @@ def create_test_family(repository: IdentityRepository, *, name: str, owner: Test
     return repository.create_family(name=name, owner_user_id=owner.user_id).family_id
 
 
+def create_family_with_id(
+    database: Database, *, family_id: str, name: str = "Отбасы", owner: TestIdentity | None = None
+) -> str:
+    """Create a family under a caller-chosen id.
+
+    Historical suites seed archive rows against fixed family ids like
+    ``family_a``. Those ids are the point of their cross-family assertions, so
+    the identity rows are created to match rather than the other way round.
+    """
+
+    with database.session_factory.begin() as session:
+        session.add(
+            FamilyRow(
+                family_id=family_id,
+                name=name,
+                created_by_user_id=owner.user_id if owner is not None else None,
+            )
+        )
+    if owner is not None:
+        create_membership(database, family_id=family_id, user=owner, role=FamilyRole.OWNER)
+    return family_id
+
+
 def create_membership(
     database: Database, *, family_id: str, user: TestIdentity, role: FamilyRole
 ) -> None:
     with database.session_factory.begin() as session:
         session.add(
             FamilyMembershipRow(
-                membership_id=f"membership_{family_id[-8:]}_{user.identity.subject}",
+                membership_id=f"membership_{uuid.uuid4().hex}",
                 family_id=family_id,
                 user_id=user.user_id,
                 role=role.value,
@@ -159,13 +187,50 @@ def seed_profile_for_family(
         )
 
 
-def seed_conflict_for_family(database: Database, *, family_id: str, conflict_id: str) -> None:
+def seed_materialized_profile_for_family(
+    database: Database, *, family_id: str, person_id: str, name: str = "Сапар"
+) -> None:
+    """What the profile routes actually read: the materialized projection."""
+
+    with database.session_factory.begin() as session:
+        session.add(
+            MaterializedPersonProfileRow(
+                person_id=person_id,
+                family_id=family_id,
+                canonical_name=name,
+                profile_payload={
+                    "person_id": person_id,
+                    "family_id": family_id,
+                    "canonical_name": name,
+                    "category": "family_member",
+                    "birth_date": None,
+                    "death_date": None,
+                    "aliases": [],
+                    "professions": [],
+                    "locations": [],
+                    "education": [],
+                    "descriptions": [],
+                    "events": [],
+                    "source_claim_ids": [],
+                },
+                source_claim_ids=[],
+            )
+        )
+
+
+def seed_conflict_for_family(
+    database: Database,
+    *,
+    family_id: str,
+    conflict_id: str,
+    conflict_type: str = "attribute_disagreement",
+) -> None:
     with database.session_factory.begin() as session:
         session.add(
             ArchiveConflictRow(
                 conflict_id=conflict_id,
                 family_id=family_id,
-                conflict_type="relationship_disagreement",
+                conflict_type=conflict_type,
                 status="open",
                 detected_by="deterministic",
                 claim_ids=[],

@@ -83,12 +83,16 @@ def test_error_never_reveals_which_credential_was_expected() -> None:
     assert "operations_api_key" not in body.lower()
 
 
-def test_application_routes_still_use_the_core_token() -> None:
-    client = _client()
+@pytest.mark.parametrize("token", [CORE_TOKEN, OPERATIONS_TOKEN, WORKER_TOKEN])
+def test_no_machine_credential_reaches_the_user_application(token: str) -> None:
+    """Since PR-03B-SWITCH the application surface is users only.
 
-    assert client.get("/v1/capabilities", headers=_auth(CORE_TOKEN)).status_code == 200
-    # And the operations credential is not a master key for the application API.
-    assert client.get("/v1/capabilities", headers=_auth(OPERATIONS_TOKEN)).status_code == 401
+    /v1/capabilities is the unscoped user route, so it is the cheapest place to
+    prove that none of the three machine credentials is a master key for product
+    data -- family-scoped proof lives in the credential matrix suite.
+    """
+
+    assert _client().get("/v1/capabilities", headers=_auth(token)).status_code == 401
 
 
 def test_job_trace_remains_on_the_application_token() -> None:

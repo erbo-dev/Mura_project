@@ -4,10 +4,18 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from apps.api.main import app, get_runtime, get_settings
+from apps.api.main import create_app, get_auth_verifier, get_runtime, get_settings
 from mura.config import CoreSettings
+from mura.identity.policy import FamilyRole
 from mura.storage.database import Database
+from mura.storage.identity import IdentityRepository
 from mura.storage.profile_models import MaterializedPersonProfileRow
+from tests.authz_factories import (
+    FakePrincipalVerifier,
+    create_family_with_id,
+    create_membership,
+    create_test_user,
+)
 
 DEEPSEEK_KEY = "sk-" + "d" * 40
 REGISTRATION_TOKEN = "r" * 40
@@ -64,32 +72,50 @@ def _seed_database() -> Database:
     return database
 
 
-def test_profile_routes_require_auth_and_preserve_family_scope() -> None:
+def test_profile_routes_require_a_member_and_preserve_family_scope() -> None:
+    """Reading the archive needs a family member, not a service token.
+
+    The caller is a viewer of family 1 and a member of family 2, so the final
+    assertion isolates resource integrity: membership in the family named in the
+    path still does not reach a person belonging to a different family.
+    """
+
     database = _seed_database()
-    app.dependency_overrides[get_settings] = _settings
-    app.dependency_overrides[get_runtime] = lambda: SimpleNamespace(database=database)
-    client = TestClient(app)
-    headers = {"Authorization": f"Bearer {CORE_TOKEN}"}
-    try:
-        unauthorized = client.get("/v1/families/family_1/profiles")
-        assert unauthorized.status_code == 401
+    settings = _settings()
+    identity = IdentityRepository(database)
+    verifier = FakePrincipalVerifier()
+    viewer = create_test_user(identity, subject="profile-viewer", verifier=verifier)
+    create_family_with_id(database, family_id="family_1", name="Family 1")
+    create_membership(database, family_id="family_1", user=viewer, role=FamilyRole.VIEWER)
+    create_family_with_id(database, family_id="family_2", name="Family 2")
+    create_membership(database, family_id="family_2", user=viewer, role=FamilyRole.VIEWER)
 
-        listed = client.get("/v1/families/family_1/profiles", headers=headers)
-        assert listed.status_code == 200
-        assert listed.json()[0]["person_id"] == "person_erlan"
-        assert listed.json()[0]["birth_date"]["value"] == "1978"
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[get_runtime] = lambda: SimpleNamespace(database=database)
+    application.dependency_overrides[get_auth_verifier] = lambda: verifier
+    client = TestClient(application, raise_server_exceptions=False)
+    headers = viewer.headers
 
-        fetched = client.get(
-            "/v1/families/family_1/profiles/person_erlan",
-            headers=headers,
-        )
-        assert fetched.status_code == 200
-        assert fetched.json()["canonical_name"] == "Ерлан"
+    unauthorized = client.get("/v1/families/family_1/profiles")
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["error"]["code"] == "authentication_required"
 
-        hidden = client.get(
-            "/v1/families/family_2/profiles/person_erlan",
-            headers=headers,
-        )
-        assert hidden.status_code == 404
-    finally:
-        app.dependency_overrides.clear()
+    service_token = client.get(
+        "/v1/families/family_1/profiles",
+        headers={"Authorization": f"Bearer {CORE_TOKEN}"},
+    )
+    assert service_token.status_code == 401
+
+    listed = client.get("/v1/families/family_1/profiles", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()[0]["person_id"] == "person_erlan"
+    assert listed.json()[0]["birth_date"]["value"] == "1978"
+
+    fetched = client.get("/v1/families/family_1/profiles/person_erlan", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["canonical_name"] == "Ерлан"
+
+    hidden = client.get("/v1/families/family_2/profiles/person_erlan", headers=headers)
+    assert hidden.status_code == 404
+    assert "person_erlan" not in hidden.text

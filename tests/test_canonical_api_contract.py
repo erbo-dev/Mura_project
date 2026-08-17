@@ -7,7 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.errors import REQUEST_ID_HEADER
-from apps.api.main import create_app, get_settings
+from apps.api.main import (
+    create_app,
+    get_auth_verifier,
+    get_identity_repository,
+    get_settings,
+)
 from mura.capabilities import (
     AsrRegistration,
     CapabilityStatus,
@@ -17,6 +22,9 @@ from mura.capabilities import (
 )
 from mura.config import CoreSettings
 from mura.jobs import WAITING_FOR_ASR_STAGE, JobStatus, resolve_retry_state
+from mura.storage.database import Database
+from mura.storage.identity import IdentityRepository
+from tests.authz_factories import FakePrincipalVerifier, create_test_user
 
 DEEPSEEK_KEY = "sk-" + "d" * 40
 REGISTRATION_TOKEN = "r" * 40
@@ -50,6 +58,26 @@ def _client() -> TestClient:
 
 def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {CORE_TOKEN}"}
+
+
+def _signed_in_client() -> tuple[TestClient, dict[str, str]]:
+    """A client carrying a verified user token.
+
+    /v1/capabilities gates the record button, so since PR-03B-SWITCH it is
+    user-facing: the service token no longer opens it.
+    """
+
+    settings = _settings()
+    database = Database(settings.database_url)
+    database.create_schema()
+    verifier = FakePrincipalVerifier()
+    user = create_test_user(IdentityRepository(database), subject="reader", verifier=verifier)
+
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[get_identity_repository] = lambda: IdentityRepository(database)
+    application.dependency_overrides[get_auth_verifier] = lambda: verifier
+    return TestClient(application, raise_server_exceptions=False), user.headers
 
 
 # ------------------------------------------------------------------ job status
@@ -213,7 +241,8 @@ def test_capabilities_are_unavailable_without_analysis_configuration() -> None:
 
 
 def test_capabilities_response_is_served_and_typed() -> None:
-    response = _client().get("/v1/capabilities", headers=_auth())
+    client, headers = _signed_in_client()
+    response = client.get("/v1/capabilities", headers=headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -234,7 +263,17 @@ def test_capabilities_response_is_served_and_typed() -> None:
 
 
 def test_capabilities_never_expose_demo_mode() -> None:
-    assert "demo_mode" not in _client().get("/v1/capabilities", headers=_auth()).text
+    client, headers = _signed_in_client()
+
+    assert "demo_mode" not in client.get("/v1/capabilities", headers=headers).text
+
+
+def test_capabilities_reject_the_service_token() -> None:
+    """It is user-facing product data, so a machine credential is not enough."""
+
+    client, _ = _signed_in_client()
+
+    assert client.get("/v1/capabilities", headers=_auth()).status_code == 401
 
 
 # --------------------------------------------------------------- error envelope
@@ -254,7 +293,18 @@ def test_unauthorized_uses_the_canonical_envelope() -> None:
     response = _client().get("/v1/capabilities")
 
     assert response.status_code == 401
-    _assert_envelope(response.json(), code="unauthorized", retryable=False)
+    # A caller who sent nothing should sign in; a caller whose token failed
+    # should refresh. The two are distinguishable, why a token failed is not.
+    _assert_envelope(response.json(), code="authentication_required", retryable=False)
+
+
+def test_a_rejected_token_is_reported_as_invalid_rather_than_missing() -> None:
+    client, _ = _signed_in_client()
+
+    response = client.get("/v1/capabilities", headers={"Authorization": "Bearer not-a-token"})
+
+    assert response.status_code == 401
+    _assert_envelope(response.json(), code="invalid_token", retryable=False)
 
 
 def test_unknown_route_uses_the_canonical_envelope() -> None:
