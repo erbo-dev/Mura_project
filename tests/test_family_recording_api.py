@@ -29,6 +29,9 @@ from mura.speaker import (
 from mura.storage.archive import ArchivePersonRow
 from mura.storage.database import Database, PipelineResultRow, RecordingRepository, RecordingRow
 
+# A real RIFF/WAVE header: uploads are content-validated since PR-02C.
+WAV_BYTES = b"RIFF$\x00\x00\x00WAVEfmt " + b"\x00" * 32
+
 CORE_TOKEN = "c" * 40
 FAMILY_A = "family_a"
 FAMILY_B = "family_b"
@@ -43,6 +46,7 @@ def _settings() -> CoreSettings:
             "CORE_API_KEY": CORE_TOKEN,
             "WORKER_REGISTRATION_TOKEN": "r" * 40,
             "KAGGLE_ASR_API_KEY": "a" * 40,
+            "OPERATIONS_API_KEY": "o" * 40,
             "DATABASE_URL": "sqlite+pysqlite:///:memory:",
             "DATABASE_AUTO_CREATE": True,
         }
@@ -198,7 +202,7 @@ def _upload(client: TestClient, family_id: str, **form: str) -> Any:
     return client.post(
         f"/v1/families/{family_id}/recordings",
         headers=_auth(),
-        files={"file": ("memory.wav", io.BytesIO(b"audio-bytes"), "audio/wav")},
+        files={"file": ("memory.wav", io.BytesIO(WAV_BYTES), "audio/wav")},
         data=data,
     )
 

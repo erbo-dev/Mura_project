@@ -33,6 +33,7 @@ def _settings(**overrides: Any) -> CoreSettings:
         "CORE_API_KEY": CORE_TOKEN,
         "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
         "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+        "OPERATIONS_API_KEY": "o" * 40,
         "DATABASE_URL": "sqlite+pysqlite:///:memory:",
         "DATABASE_AUTO_CREATE": True,
     }
@@ -305,6 +306,7 @@ def test_configuration_errors_never_echo_the_supplied_secret(
         "CORE_API_KEY": LEAKED_SECRET,
         "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
         "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+        "OPERATIONS_API_KEY": "o" * 40,
         "DATABASE_URL": "postgresql+psycopg://mura:hunter2@db.internal:5432/mura",
     }.items():
         monkeypatch.setenv(name, value)

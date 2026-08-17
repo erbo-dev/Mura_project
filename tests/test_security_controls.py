@@ -22,6 +22,7 @@ def core_settings() -> CoreSettings:
             "CORE_API_KEY": CORE_TOKEN,
             "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
             "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+            "OPERATIONS_API_KEY": "o" * 40,
             "DATABASE_URL": "sqlite+pysqlite:///:memory:",
             # Auto-create is opt-in since PR-02A; local/test workflows request it explicitly.
             "DATABASE_AUTO_CREATE": True,
@@ -63,6 +64,7 @@ def test_configuration_failure_never_echoes_the_supplied_secret(
         "CORE_API_KEY": leaked_secret,
         "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
         "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+        "OPERATIONS_API_KEY": "o" * 40,
         "DATABASE_URL": "postgresql+psycopg://mura:hunter2@db.internal:5432/mura",
     }.items():
         monkeypatch.setenv(name, value)
@@ -85,6 +87,7 @@ def test_core_settings_require_strong_registration_token() -> None:
                 "CORE_API_KEY": CORE_TOKEN,
                 "WORKER_REGISTRATION_TOKEN": "short",
                 "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+                "OPERATIONS_API_KEY": "o" * 40,
                 "DATABASE_URL": "sqlite+pysqlite:///:memory:",
             }
         )
@@ -95,6 +98,7 @@ def test_worker_callback_requires_registration_token() -> None:
         WorkerSettings.model_validate(
             {
                 "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+                "OPERATIONS_API_KEY": "o" * 40,
                 "CORE_BACKEND_URL": "https://mura.example.com",
                 # Keep this test independent from a developer's local .env.
                 "WORKER_REGISTRATION_TOKEN": None,

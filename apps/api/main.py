@@ -203,6 +203,15 @@ def require_core_token(
     verify_bearer_token(authorization, expected_token=settings.core_api_key)
 
 
+def require_operations_token(
+    settings: Annotated[CoreSettings, Depends(get_settings)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    """Destructive operator routes only. Never satisfied by CORE_API_KEY."""
+
+    verify_bearer_token(authorization, expected_token=settings.operations_api_key)
+
+
 def require_worker_token(
     settings: Annotated[CoreSettings, Depends(get_settings)],
     authorization: Annotated[str | None, Header()] = None,
@@ -416,6 +425,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         application,
         get_runtime_dependency=get_runtime,
         core_token_dependency=require_core_token,
+        operations_token_dependency=require_operations_token,
     )
     return application
 

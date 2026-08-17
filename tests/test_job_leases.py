@@ -416,6 +416,7 @@ def _settings(**overrides: object) -> CoreSettings:
         "CORE_API_KEY": "c" * 40,
         "WORKER_REGISTRATION_TOKEN": "r" * 40,
         "KAGGLE_ASR_API_KEY": "a" * 40,
+        "OPERATIONS_API_KEY": "o" * 40,
         "DATABASE_URL": "sqlite+pysqlite:///:memory:",
     }
     payload.update(overrides)

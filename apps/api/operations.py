@@ -57,8 +57,12 @@ def register_operations_routes(
     *,
     get_runtime_dependency: Callable[..., object],
     core_token_dependency: Callable[..., None],
+    operations_token_dependency: Callable[..., None] | None = None,
 ) -> None:
+    # Read-only job trace stays on the application token; every operator route
+    # below requires the separate operations credential.
     dependencies = [Depends(core_token_dependency)]
+    operations = [Depends(operations_token_dependency or core_token_dependency)]
 
     @app.get(
         "/v1/jobs/{job_id}/trace",
@@ -86,7 +90,7 @@ def register_operations_routes(
     @app.get(
         "/v1/operations/release",
         response_model=ReleaseStateView,
-        dependencies=dependencies,
+        dependencies=operations,
     )
     def get_release_state(
         runtime: object = Depends(get_runtime_dependency),
@@ -96,7 +100,7 @@ def register_operations_routes(
     @app.post(
         "/v1/operations/release/activate",
         response_model=ReleaseMutationResult,
-        dependencies=dependencies,
+        dependencies=operations,
     )
     def activate_release(
         request: ReleaseActivateRequest,
@@ -117,7 +121,7 @@ def register_operations_routes(
     @app.post(
         "/v1/operations/release/rollback",
         response_model=ReleaseMutationResult,
-        dependencies=dependencies,
+        dependencies=operations,
     )
     def rollback_release(
         request: ReleaseRollbackRequest,
@@ -169,7 +173,7 @@ def register_operations_routes(
     @app.get(
         "/v1/operations/retention",
         response_model=RetentionReport,
-        dependencies=dependencies,
+        dependencies=operations,
     )
     def preview_retention(
         runtime: object = Depends(get_runtime_dependency),
@@ -179,7 +183,7 @@ def register_operations_routes(
     @app.post(
         "/v1/operations/retention/apply",
         response_model=RetentionReport,
-        dependencies=dependencies,
+        dependencies=operations,
     )
     def apply_retention(
         request: RetentionApplyRequest,

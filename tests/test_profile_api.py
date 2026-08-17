@@ -22,6 +22,7 @@ def _settings() -> CoreSettings:
             "CORE_API_KEY": CORE_TOKEN,
             "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
             "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+            "OPERATIONS_API_KEY": "o" * 40,
             "DATABASE_URL": "sqlite+pysqlite:///:memory:",
         }
     )

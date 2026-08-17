@@ -22,6 +22,7 @@ def _settings(**overrides: Any) -> CoreSettings:
         "CORE_API_KEY": CORE_TOKEN,
         "WORKER_REGISTRATION_TOKEN": "r" * 40,
         "KAGGLE_ASR_API_KEY": "a" * 40,
+        "OPERATIONS_API_KEY": "o" * 40,
         "DATABASE_URL": "sqlite+pysqlite:///:memory:",
         "DATABASE_AUTO_CREATE": True,
     }

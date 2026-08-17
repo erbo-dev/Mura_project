@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from mura.storage.audio import AudioStorageBackend
+
 _POSTGRES_SCHEME_PREFIXES = ("postgresql", "postgres")
 _SQLITE_SCHEME_PREFIX = "sqlite"
 _ALLOWED_ORIGIN_SCHEMES = frozenset({"http", "https"})
@@ -42,6 +44,18 @@ def _split_delimited(value: object) -> object:
     return value
 
 
+def _is_rooted_path(path: Path) -> bool:
+    """Absolute on the deployment platform, not merely on this one.
+
+    Path('/srv/mura/audio').is_absolute() is False on Windows because it has no
+    drive letter, yet it is exactly the path a Linux deployment uses. Accept a
+    leading separator as rooted so development on Windows can still validate a
+    production configuration.
+    """
+
+    return path.is_absolute() or str(path).startswith(("/", "\\"))
+
+
 def _validate_origin(origin: str) -> None:
     parsed = urlparse(origin)
     if parsed.scheme not in _ALLOWED_ORIGIN_SCHEMES or not parsed.netloc:
@@ -67,9 +81,16 @@ class CoreSettings(BaseSettings):
         alias="WORKER_REGISTRATION_TOKEN",
         min_length=32,
     )
+    #: Destructive operator routes use their own credential: a leaked frontend
+    #: token must not be able to activate a release or apply retention.
+    operations_api_key: str = Field(alias="OPERATIONS_API_KEY", min_length=32)
     kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
     database_url: str = Field(alias="DATABASE_URL", min_length=1)
     database_auto_create: bool = Field(default=False, alias="DATABASE_AUTO_CREATE")
+    audio_storage_backend: AudioStorageBackend = Field(
+        default=AudioStorageBackend.LOCAL,
+        alias="AUDIO_STORAGE_BACKEND",
+    )
     audio_storage_dir: Path = Field(default=Path(".mura/audio"), alias="AUDIO_STORAGE_DIR")
     core_max_upload_mb: int = Field(default=25, alias="CORE_MAX_UPLOAD_MB", ge=1, le=200)
     job_poll_interval_seconds: float = Field(
@@ -175,6 +196,16 @@ class CoreSettings(BaseSettings):
             raise ValueError("DATABASE_URL must target PostgreSQL in staging and production")
         if production_like and _is_sqlite_url(self.database_url):
             raise ValueError("SQLite is not a supported database in staging and production")
+        if production_like and self.operations_api_key == self.core_api_key:
+            raise ValueError(
+                "OPERATIONS_API_KEY must differ from CORE_API_KEY so a leaked "
+                "application token cannot reach destructive operator routes"
+            )
+        if production_like and not _is_rooted_path(self.audio_storage_dir):
+            raise ValueError(
+                "AUDIO_STORAGE_DIR must be an absolute path outside staging and "
+                "production working directories"
+            )
         if production_like and not self.cors_allowed_origins:
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must list at least one origin in staging and production"
@@ -195,6 +226,9 @@ class CoreSettings(BaseSettings):
 class WorkerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    #: Destructive operator routes use their own credential: a leaked frontend
+    #: token must not be able to activate a release or apply retention.
+    operations_api_key: str = Field(alias="OPERATIONS_API_KEY", min_length=32)
     kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
     asr_device: str = Field(default="cuda:0", alias="ASR_DEVICE")

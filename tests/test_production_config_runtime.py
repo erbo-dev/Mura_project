@@ -31,6 +31,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         "CORE_API_KEY": CORE_TOKEN,
         "WORKER_REGISTRATION_TOKEN": REGISTRATION_TOKEN,
         "KAGGLE_ASR_API_KEY": ASR_TOKEN,
+        "OPERATIONS_API_KEY": "o" * 40,
         "DATABASE_URL": SQLITE_MEMORY_URL,
     }
     payload.update(overrides)
@@ -42,6 +43,8 @@ def _production_payload(**overrides: Any) -> dict[str, Any]:
         MURA_ENVIRONMENT="production",
         DATABASE_URL=POSTGRES_URL,
         CORS_ALLOWED_ORIGINS="https://app.example.com",
+        # Production must not depend on a CWD-relative storage directory.
+        AUDIO_STORAGE_DIR="/srv/mura/audio",
     )
     payload.update(overrides)
     return payload

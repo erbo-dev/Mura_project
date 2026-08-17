@@ -51,6 +51,7 @@ def register_conflict_routes(
     *,
     get_runtime_dependency: Callable[..., object],
     core_token_dependency: Callable[..., None],
+    operations_token_dependency: Callable[..., None] | None = None,
 ) -> None:
     dependencies = [Depends(core_token_dependency)]
 
@@ -169,4 +170,5 @@ def register_conflict_routes(
         app,
         get_runtime_dependency=get_runtime_dependency,
         core_token_dependency=core_token_dependency,
+        operations_token_dependency=operations_token_dependency or core_token_dependency,
     )
