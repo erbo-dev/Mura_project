@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import (
     DateTime,
@@ -11,22 +11,40 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    and_,
     create_engine,
+    or_,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.types import JSON
 
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult
+
 from mura.domain.models import PipelineResult
-from mura.jobs import JobStatus
+from mura.jobs import WAITING_FOR_ASR_STAGE, JobStatus
+from mura.leases import LeaseOwnershipLost
 
 JSON_VALUE = JSON().with_variant(JSONB, "postgresql")
+
+#: A terminal job is never reclaimed and never renewable.
+TERMINAL_JOB_STATUSES = (JobStatus.COMPLETED.value, JobStatus.FAILED.value)
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _release_lease(job: ProcessingJobRow) -> None:
+    """Drop ownership so the row is either terminal or cleanly reclaimable."""
+
+    job.lease_owner = None
+    job.claimed_at = None
+    job.lease_expires_at = None
 
 
 class Base(DeclarativeBase):
@@ -75,6 +93,19 @@ class ProcessingJobRow(Base):
     )
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Operational lease. NULL means no worker currently owns the job, which is
+    #: also how every historical row reads after the migration.
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -311,15 +342,45 @@ class RecordingRepository:
                 return None
             return PipelineResult.model_validate(row.payload)
 
-    def claim_next_job(self) -> ProcessingJobRow | None:
-        now = utcnow()
+    def claim_next_job(
+        self,
+        *,
+        lease_owner: str,
+        lease_seconds: float,
+        now: datetime | None = None,
+    ) -> ProcessingJobRow | None:
+        """Atomically take ownership of one eligible job.
+
+        Two categories are eligible, and both are resolved inside the same
+        `FOR UPDATE SKIP LOCKED` transaction as the ownership write, so the row
+        is never selected, released and only later stamped:
+
+        1. a queued job whose ``next_attempt_at`` is due;
+        2. a non-terminal job whose lease has expired -- the crash-recovery
+           case, where the previous worker died mid-processing.
+
+        Terminal jobs are excluded outright, and an unexpired lease is never
+        stolen. Each successful claim is one processing attempt.
+        """
+
+        moment = now or utcnow()
         with self.database.session_factory.begin() as session:
+            due_queued = and_(
+                ProcessingJobRow.status == JobStatus.QUEUED.value,
+                ProcessingJobRow.next_attempt_at <= moment,
+                or_(
+                    ProcessingJobRow.lease_expires_at.is_(None),
+                    ProcessingJobRow.lease_expires_at <= moment,
+                ),
+            )
+            expired_lease = and_(
+                ProcessingJobRow.status.notin_(TERMINAL_JOB_STATUSES),
+                ProcessingJobRow.lease_expires_at.is_not(None),
+                ProcessingJobRow.lease_expires_at <= moment,
+            )
             statement = (
                 select(ProcessingJobRow)
-                .where(
-                    ProcessingJobRow.status == JobStatus.QUEUED.value,
-                    ProcessingJobRow.next_attempt_at <= now,
-                )
+                .where(or_(due_queued, expired_lease))
                 .order_by(ProcessingJobRow.created_at)
                 .with_for_update(skip_locked=True)
                 .limit(1)
@@ -327,21 +388,79 @@ class RecordingRepository:
             job = session.scalar(statement)
             if job is None:
                 return None
+            job.lease_owner = lease_owner
+            job.claimed_at = moment
+            job.lease_expires_at = moment + timedelta(seconds=lease_seconds)
+            job.last_heartbeat_at = moment
+            job.attempts += 1
             job.status = JobStatus.TRANSCRIBING.value
             job.stage = "asr_transcription"
-            job.started_at = job.started_at or now
-            job.updated_at = now
+            job.started_at = job.started_at or moment
+            job.updated_at = moment
             job.error_code = None
             job.error_detail = None
             session.flush()
             session.expunge(job)
             return job
 
-    def update_job_stage(self, job_id: str, status: JobStatus, stage: str) -> None:
+    def renew_lease(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        lease_seconds: float,
+        now: datetime | None = None,
+    ) -> bool:
+        """Extend the lease, but only for the current owner of a live job.
+
+        Returns False rather than raising so the heartbeat thread can treat an
+        explicit rejection as authoritative ownership loss. A terminal job is
+        never renewable, which is what stops a heartbeat outliving a deferred or
+        failed attempt.
+        """
+
+        moment = now or utcnow()
         with self.database.session_factory.begin() as session:
-            job = session.get(ProcessingJobRow, job_id)
-            if job is None:
-                raise LookupError(f"unknown job: {job_id}")
+            result = session.execute(
+                update(ProcessingJobRow)
+                .where(
+                    ProcessingJobRow.job_id == job_id,
+                    ProcessingJobRow.lease_owner == lease_owner,
+                    ProcessingJobRow.status.notin_(TERMINAL_JOB_STATUSES),
+                )
+                .values(
+                    lease_expires_at=moment + timedelta(seconds=lease_seconds),
+                    last_heartbeat_at=moment,
+                )
+            )
+            # CursorResult exposes rowcount; the base Result protocol does not.
+            return bool(cast("CursorResult[Any]", result).rowcount)
+
+    def _owned_job(
+        self,
+        session: Session,
+        job_id: str,
+        lease_owner: str | None,
+    ) -> ProcessingJobRow:
+        job = session.get(ProcessingJobRow, job_id)
+        if job is None:
+            raise LookupError(f"unknown job: {job_id}")
+        # None means an unowned administrative write; a worker always passes its
+        # id and must still hold the lease.
+        if lease_owner is not None and job.lease_owner != lease_owner:
+            raise LeaseOwnershipLost(job_id)
+        return job
+
+    def update_job_stage(
+        self,
+        job_id: str,
+        status: JobStatus,
+        stage: str,
+        *,
+        lease_owner: str | None = None,
+    ) -> None:
+        with self.database.session_factory.begin() as session:
+            job = self._owned_job(session, job_id, lease_owner)
             job.status = status.value
             job.stage = stage
             job.updated_at = utcnow()
@@ -353,32 +472,44 @@ class RecordingRepository:
         error_code: str,
         error_detail: str,
         retry_after_seconds: float,
+        lease_owner: str | None = None,
     ) -> None:
+        """Return the job to the queue for Core's own later retry.
+
+        Ownership is released so the job becomes reclaimable once due, and
+        `attempts` is deliberately not touched: the count means claims, and the
+        next claim will increment it.
+        """
+
         now = utcnow()
         with self.database.session_factory.begin() as session:
-            job = session.get(ProcessingJobRow, job_id)
-            if job is None:
-                raise LookupError(f"unknown job: {job_id}")
+            job = self._owned_job(session, job_id, lease_owner)
             job.status = JobStatus.QUEUED.value
-            job.stage = "waiting_for_asr"
-            job.attempts += 1
+            job.stage = WAITING_FOR_ASR_STAGE
             job.next_attempt_at = now + timedelta(seconds=retry_after_seconds)
             job.error_code = error_code
             job.error_detail = error_detail
             job.updated_at = now
+            _release_lease(job)
 
-    def fail_job(self, job_id: str, *, error_code: str, error_detail: str) -> None:
+    def fail_job(
+        self,
+        job_id: str,
+        *,
+        error_code: str,
+        error_detail: str,
+        lease_owner: str | None = None,
+    ) -> None:
         now = utcnow()
         with self.database.session_factory.begin() as session:
-            job = session.get(ProcessingJobRow, job_id)
-            if job is None:
-                raise LookupError(f"unknown job: {job_id}")
+            job = self._owned_job(session, job_id, lease_owner)
             job.status = JobStatus.FAILED.value
             job.stage = "failed"
             job.error_code = error_code
             job.error_detail = error_detail
             job.completed_at = now
             job.updated_at = now
+            _release_lease(job)
 
     def complete_job(self, job_id: str, result: PipelineResult) -> None:
         now = utcnow()

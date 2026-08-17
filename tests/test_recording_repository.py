@@ -68,7 +68,7 @@ def test_repository_persists_job_result_and_worker(tmp_path: Path) -> None:
     assert queued is not None
     assert queued.status == JobStatus.QUEUED.value
 
-    claimed = repository.claim_next_job()
+    claimed = repository.claim_next_job(lease_owner="worker_test", lease_seconds=300)
     assert claimed is not None
     assert claimed.job_id == "job_1"
     assert claimed.status == JobStatus.TRANSCRIBING.value
@@ -107,7 +107,7 @@ def test_repository_defers_unavailable_asr_job(tmp_path: Path) -> None:
         content_type="audio/wav",
         audio_path=audio_path,
     )
-    assert repository.claim_next_job() is not None
+    assert repository.claim_next_job(lease_owner="worker_test", lease_seconds=300) is not None
 
     repository.defer_job(
         "job_2",
@@ -121,4 +121,4 @@ def test_repository_defers_unavailable_asr_job(tmp_path: Path) -> None:
     assert job.status == JobStatus.QUEUED.value
     assert job.stage == "waiting_for_asr"
     assert job.attempts == 1
-    assert repository.claim_next_job() is None
+    assert repository.claim_next_job(lease_owner="worker_test", lease_seconds=300) is None

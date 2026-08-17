@@ -74,7 +74,7 @@ def _repository(tmp_path: Path) -> tuple[Database, RecordingRepository]:
         content_type="audio/wav",
         audio_path=audio_path,
     )
-    assert repository.claim_next_job() is not None
+    assert repository.claim_next_job(lease_owner="worker_test", lease_seconds=300) is not None
     return database, repository
 
 

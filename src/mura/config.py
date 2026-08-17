@@ -79,6 +79,25 @@ class CoreSettings(BaseSettings):
         le=60,
     )
     asr_retry_seconds: float = Field(default=15.0, alias="ASR_RETRY_SECONDS", ge=1, le=600)
+    # Lease duration is sized against real provider bounds, not a round number.
+    # A single job may spend up to ASR_REQUEST_TIMEOUT_SECONDS (900s default) in
+    # one transcription call, and long-form extraction adds up to 6 windows of
+    # DeepSeek work, so processing legitimately outlives any short lease. The
+    # heartbeat is what keeps ownership alive; the lease only has to survive
+    # several missed heartbeats, so 300s with 60s ticks tolerates four
+    # consecutive failures before another worker may recover the job.
+    job_lease_seconds: float = Field(
+        default=300.0,
+        alias="JOB_LEASE_SECONDS",
+        ge=10,
+        le=3600,
+    )
+    job_heartbeat_seconds: float = Field(
+        default=60.0,
+        alias="JOB_HEARTBEAT_SECONDS",
+        ge=1,
+        le=600,
+    )
     asr_request_timeout_seconds: float = Field(
         default=900.0,
         alias="ASR_REQUEST_TIMEOUT_SECONDS",
@@ -129,6 +148,19 @@ class CoreSettings(BaseSettings):
         if self.expose_api_docs is not None:
             return self.expose_api_docs
         return self.environment in {Environment.LOCAL, Environment.TEST}
+
+    @model_validator(mode="after")
+    def validate_lease_invariants(self) -> CoreSettings:
+        # A heartbeat at or beyond the lease could never renew in time, so the
+        # job would be recovered from under a perfectly healthy worker.
+        if self.job_heartbeat_seconds >= self.job_lease_seconds:
+            raise ValueError("JOB_HEARTBEAT_SECONDS must be shorter than JOB_LEASE_SECONDS")
+        if self.job_lease_seconds < 3 * self.job_heartbeat_seconds:
+            raise ValueError(
+                "JOB_LEASE_SECONDS must allow at least three heartbeats "
+                "so a transient database blip does not lose the lease"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_environment_invariants(self) -> CoreSettings:

@@ -16,6 +16,7 @@ from mura.domain.models import (
     TranscriptEnvelope,
 )
 from mura.extraction_sanitizer import sanitize_extraction_output
+from mura.leases import new_worker_id
 from mura.observability import (
     ProcessingTrace,
     ProcessingTraceEventRow,
@@ -110,7 +111,7 @@ def run_smoke(database_path: Path) -> dict[str, object]:
         content_type="audio/wav",
         audio_path=audio_path,
     )
-    claimed = repository.claim_next_job()
+    claimed = repository.claim_next_job(lease_owner=new_worker_id(), lease_seconds=300)
     if claimed is None:
         raise RuntimeError("smoke job was not claimable")
 
