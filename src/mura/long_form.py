@@ -374,5 +374,6 @@ def _bounded_clause_slices(text: str, slice_count: int) -> list[tuple[int, int]]
         )
         boundaries.append(boundary)
         cursor = boundary + target
-    boundaries.append(len(text))
+    if boundaries[-1] < len(text):
+        boundaries.append(len(text))
     return list(itertools.pairwise(boundaries))

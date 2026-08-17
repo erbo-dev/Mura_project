@@ -1,5 +1,10 @@
 from mura.domain.models import RawSegment, TranscriptEnvelope
-from mura.long_form import LongFormExtractionPlanner, LongFormMode, LongFormPolicy
+from mura.long_form import (
+    LongFormExtractionPlanner,
+    LongFormMode,
+    LongFormPolicy,
+    _bounded_clause_slices,
+)
 
 
 def _transcript(segment_count: int, *, words_per_segment: int = 12) -> TranscriptEnvelope:
@@ -84,3 +89,78 @@ def test_oversized_single_segment_is_split_without_changing_source_identity() ->
         planner.materialize_window(transcript, window).segments[0].segment_id == "seg_00"
         for window in plan.windows
     )
+
+
+def _sparsely_punctuated_oversized_transcript() -> TranscriptEnvelope:
+    """One oversized segment whose only punctuation is an internal and a final period.
+
+    Before the empty-slice fix this shape pulled the last clause boundary onto the
+    final character, so the planner emitted a zero-length trailing slice and the
+    whole recording failed RawSegment validation.
+    """
+
+    words = [f"сөз{index}" for index in range(320)]
+    words[64] += "."
+    text = " ".join(words) + "."
+    segment = RawSegment(segment_id="seg_00", start=0.0, end=120.0, text=text)
+    return TranscriptEnvelope(
+        recording_id="rec_sparse_punctuation",
+        duration_seconds=120.0,
+        language_hints=["kk", "ru"],
+        full_text=text,
+        segments=[segment],
+        asr_model="fixture",
+        asr_revision="fixture-v1",
+        chunker_version="fixture-v1",
+    )
+
+
+def test_sparsely_punctuated_oversized_segment_never_produces_empty_slices() -> None:
+    policy = LongFormPolicy(
+        segment_count_threshold=30,
+        normalized_token_threshold=10_000,
+        estimated_input_token_threshold=10_000,
+        maximum_segment_tokens=64,
+        target_window_tokens=128,
+        maximum_window_tokens=256,
+    )
+    transcript = _sparsely_punctuated_oversized_transcript()
+    text = transcript.segments[0].text
+    planner = LongFormExtractionPlanner(policy)
+
+    plan = planner.plan(transcript)
+
+    assert plan.mode is LongFormMode.WINDOWED
+    assert plan == planner.plan(transcript)
+
+    slices = sorted(
+        {
+            (item.start_char, item.end_char)
+            for window in plan.windows
+            for item in window.segment_slices
+        }
+    )
+    assert slices
+    assert all(start < end for start, end in slices)
+    assert all(text[start:end] for start, end in slices)
+    assert slices[0][0] == 0
+    assert slices[-1][1] == len(text)
+    # Slices stay ordered and non-overlapping; only boundary whitespace is dropped.
+    assert all(slices[index][1] <= slices[index + 1][0] for index in range(len(slices) - 1))
+    covered = {position for start, end in slices for position in range(start, end)}
+    assert all(index in covered for index, char in enumerate(text) if not char.isspace())
+
+    for window in plan.windows:
+        materialized = planner.materialize_window(transcript, window)
+        assert all(item.text for item in materialized.segments)
+        assert all(item.segment_id == "seg_00" for item in materialized.segments)
+        assert all(item.end > item.start for item in materialized.segments)
+
+
+def test_clause_slices_never_end_with_a_zero_length_span() -> None:
+    # Minimal shape from the audit: a single trailing period pulled the final
+    # boundary onto len(text), which previously produced a (100, 100) slice.
+    text = "a" * 99 + "."
+
+    assert _bounded_clause_slices(text, 2) == [(0, 100)]
+    assert all(start < end for start, end in _bounded_clause_slices(text, 4))
