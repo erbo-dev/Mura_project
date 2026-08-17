@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
+from apps.api.identity import register_identity_routes
 from apps.api.recordings import register_recording_routes
 from mura.capabilities import (
     AsrRegistration,
@@ -37,6 +38,13 @@ from mura.capabilities import (
 from mura.config import CoreSettings
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.domain.models import PipelineRequest, PipelineResult
+from mura.identity.auth import (
+    ApplicationAuthVerifier,
+    AuthenticationError,
+    AuthMode,
+    OidcAuthVerifier,
+    Principal,
+)
 from mura.jobs import (
     JobStatus,
     JobView,
@@ -53,6 +61,7 @@ from mura.storage.database import (
     WorkerRegistrationRow,
     postgres_connect_args,
 )
+from mura.storage.identity import IdentityRepository
 
 API_TITLE = "Mura Core API"
 API_VERSION = "0.2.0"
@@ -201,6 +210,44 @@ def require_core_token(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
     verify_bearer_token(authorization, expected_token=settings.core_api_key)
+
+
+def get_identity_repository(
+    runtime: Annotated[CoreRuntime, Depends(get_runtime)],
+) -> IdentityRepository:
+    return IdentityRepository(runtime.database)
+
+
+def get_auth_verifier(
+    settings: Annotated[CoreSettings, Depends(get_settings)],
+) -> ApplicationAuthVerifier:
+    """Built from configuration only; tests override this dependency."""
+
+    if settings.auth_mode is not AuthMode.OIDC:
+        raise HTTPException(status_code=401, detail="authentication required")
+    assert settings.auth_issuer and settings.auth_audience and settings.auth_jwks_url
+    return OidcAuthVerifier(
+        issuer=settings.auth_issuer,
+        audience=settings.auth_audience,
+        jwks_url=settings.auth_jwks_url,
+        allowed_algorithms=tuple(settings.auth_allowed_algorithms),
+        clock_skew_seconds=settings.auth_clock_skew_seconds,
+        jwks_cache_seconds=settings.auth_jwks_cache_seconds,
+    )
+
+
+def get_principal(
+    verifier: Annotated[ApplicationAuthVerifier, Depends(get_auth_verifier)],
+    identity: Annotated[IdentityRepository, Depends(get_identity_repository)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> Principal:
+    """Verify the bearer token, then resolve it to an internal MURA user."""
+
+    try:
+        verified = verifier.verify(authorization)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=401, detail="authentication required") from exc
+    return identity.resolve_principal(verified)
 
 
 def require_operations_token(
@@ -415,6 +462,11 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
     register_error_handlers(application)
     application.include_router(router)
+    register_identity_routes(
+        application,
+        principal_dependency=get_principal,
+        identity_repository_dependency=get_identity_repository,
+    )
     register_recording_routes(
         application,
         get_runtime_dependency=get_runtime,
