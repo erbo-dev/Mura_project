@@ -73,7 +73,8 @@ def test_configuration_failure_never_echoes_the_supplied_secret(
     assert response.status_code == 503
     assert leaked_secret not in response.text
     assert "hunter2" not in response.text
-    assert response.json()["detail"] == "Core service is not configured"
+    # Canonical error envelope since API-CONTRACT-01A-i.
+    assert response.json()["error"]["code"] == "service_unavailable"
 
 
 def test_core_settings_require_strong_registration_token() -> None:

@@ -27,13 +27,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from apps.api.conflicts import register_conflict_routes
+from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
 from mura.asr import RemoteASRClient
+from mura.capabilities import (
+    AsrRegistration,
+    CapabilitiesView,
+    derive_capabilities,
+)
 from mura.config import CoreSettings
-from mura.deepseek import DeepSeekClient, DeepSeekError, DeepSeekPipelineService
+from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.domain.models import PipelineRequest, PipelineResult, ResolutionStatus
 from mura.jobs import (
     JobStatus,
@@ -41,6 +48,7 @@ from mura.jobs import (
     RecordingAccepted,
     RecordingResultView,
     ReviewItemsView,
+    resolve_retry_state,
 )
 from mura.orchestration import AudioStorageError, LocalAudioStorage, RecordingJobWorker
 from mura.pipeline import MuraPipeline
@@ -50,9 +58,9 @@ from mura.storage.database import (
     DatabaseRuntimeSettings,
     ProcessingJobRow,
     RecordingRepository,
+    WorkerRegistrationRow,
     postgres_connect_args,
 )
-from mura.validation import ContractValidationError
 
 API_TITLE = "Mura Core API"
 API_VERSION = "0.2.0"
@@ -61,7 +69,6 @@ API_DESCRIPTION = (
     "extraction, review items, and entity resolution."
 )
 
-REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_PATTERN = re.compile(r"\A[A-Za-z0-9_-]{8,64}\Z")
 
 router = APIRouter()
@@ -223,29 +230,6 @@ def require_worker_token(
     )
 
 
-async def handle_deepseek_error(_request: Request, _exc: Exception) -> JSONResponse:
-    return JSONResponse(
-        status_code=status.HTTP_502_BAD_GATEWAY,
-        content={
-            "error": "deepseek_pipeline_failed",
-            "detail": "The model provider returned an unusable response.",
-        },
-    )
-
-
-async def handle_contract_validation_error(
-    _request: Request,
-    _exc: Exception,
-) -> JSONResponse:
-    return JSONResponse(
-        status_code=status.HTTP_502_BAD_GATEWAY,
-        content={
-            "error": "pipeline_output_invalid",
-            "detail": "The extraction output failed contract validation.",
-        },
-    )
-
-
 @router.get("/health")
 def health() -> dict[str, str]:
     """Liveness only: never touches the database, runtime, or any external provider."""
@@ -268,6 +252,38 @@ def ready(settings: Annotated[CoreSettings, Depends(get_settings)]) -> JSONRespo
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"status": "ready", "service": "mura-core", "database": "ready"},
+    )
+
+
+@router.get(
+    "/v1/capabilities",
+    response_model=CapabilitiesView,
+    dependencies=[Depends(require_core_token)],
+)
+def capabilities(
+    settings: Annotated[CoreSettings, Depends(get_settings)],
+) -> CapabilitiesView:
+    """Locally-known product capabilities. Never calls GigaAM or DeepSeek."""
+
+    registration = AsrRegistration.UNKNOWN
+    registered_at: datetime | None = None
+    try:
+        with Session(_readiness_engine(settings)) as session:
+            row = session.get(WorkerRegistrationRow, "kaggle-asr")
+        if row is None or row.status != "ready":
+            registration = AsrRegistration.UNAVAILABLE
+        else:
+            registration = AsrRegistration.REGISTERED
+            registered_at = _aware_required(row.registered_at)
+    except Exception:
+        # The registration table could not be read; say so rather than guess.
+        registration = AsrRegistration.UNKNOWN
+
+    return derive_capabilities(
+        asr_registration=registration,
+        asr_registered_at=registered_at,
+        analysis_configured=bool(settings.deepseek_api_key),
+        now=datetime.now(UTC),
     )
 
 
@@ -459,14 +475,23 @@ def current_worker(
 
 
 def _job_view(row: ProcessingJobRow) -> JobView:
+    job_status = JobStatus(row.status)
+    retryable, retry_after_seconds, next_retry_at = resolve_retry_state(
+        status=job_status,
+        stage=row.stage,
+        next_attempt_at=_aware_required(row.next_attempt_at),
+        now=datetime.now(UTC),
+    )
     return JobView(
         job_id=row.job_id,
         recording_id=row.recording_id,
-        status=JobStatus(row.status),
+        status=job_status,
         stage=row.stage,
         attempts=row.attempts,
+        retryable=retryable,
+        retry_after_seconds=retry_after_seconds,
+        next_retry_at=next_retry_at,
         error_code=row.error_code,
-        error_detail=row.error_detail,
         created_at=_aware_required(row.created_at),
         started_at=_aware_optional(row.started_at),
         completed_at=_aware_optional(row.completed_at),
@@ -534,8 +559,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             expose_headers=[REQUEST_ID_HEADER],
         )
 
-    application.add_exception_handler(DeepSeekError, handle_deepseek_error)
-    application.add_exception_handler(ContractValidationError, handle_contract_validation_error)
+    register_error_handlers(application)
     application.include_router(router)
     register_conflict_routes(
         application,
