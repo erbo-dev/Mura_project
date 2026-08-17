@@ -53,7 +53,9 @@ dev = [
   "pip-audit>=2.9,<3",
   "pytest>=8.4,<9",
   "pytest-cov>=6.2,<7",
-  "ruff>=0.12,<1",
+  # Pinned exactly: formatter output is version-sensitive, so a range makes
+  # `ruff format --check` non-reproducible between local and CI over time.
+  "ruff==0.16.3",
   "types-requests>=2.32,<3",
 ]
 
@@ -68,6 +70,10 @@ addopts = "-q --strict-config --strict-markers"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# Ruff's formatter reaches into Python code blocks inside Markdown from 0.16.
+# Documentation prose is not part of the Python formatting baseline, so keep the
+# formatter scoped to source files instead of reformatting docs.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
