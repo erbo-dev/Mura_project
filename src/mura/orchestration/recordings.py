@@ -122,6 +122,21 @@ class RecordingJobWorker:
         )
         self._thread.start()
 
+    def request_stop(self) -> None:
+        """Stop claiming new work without disturbing the job in flight.
+
+        Deliberately does not touch the current job: a shutdown must never mark
+        in-progress work completed or failed. Lease expiry is the recovery
+        mechanism if the process does not survive to finish it.
+        """
+
+        self._stop_event.set()
+
+    def run_forever(self) -> None:
+        """Claim and process until asked to stop. Used by the standalone worker."""
+
+        self._run()
+
     def stop(self, timeout_seconds: float = 5.0) -> None:
         self._stop_event.set()
         if self._thread is not None:

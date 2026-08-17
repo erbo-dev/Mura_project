@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import atexit
 import re
 import uuid
 from collections.abc import Awaitable, Callable
@@ -30,7 +29,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
 from apps.api.recordings import register_recording_routes
-from mura.asr import RemoteASRClient
 from mura.capabilities import (
     AsrRegistration,
     CapabilitiesView,
@@ -44,7 +42,7 @@ from mura.jobs import (
     JobView,
     resolve_retry_state,
 )
-from mura.orchestration import LocalAudioStorage, RecordingJobWorker
+from mura.orchestration import LocalAudioStorage
 from mura.pipeline import MuraPipeline
 from mura.security import verify_bearer_token
 from mura.storage.database import (
@@ -131,15 +129,18 @@ class WorkerRegistration(BaseModel):
 
 @dataclass
 class CoreRuntime:
+    """Everything the API needs to serve requests -- and nothing more.
+
+    There is deliberately no worker here. Recording jobs are claimed and
+    executed by the standalone mura-worker process, so serving a request can
+    never start job processing.
+    """
+
     settings: CoreSettings
     database: Database
     repository: RecordingRepository
     pipeline: MuraPipeline
     storage: LocalAudioStorage
-    worker: RecordingJobWorker
-
-    def stop(self) -> None:
-        self.worker.stop()
 
 
 def get_settings() -> CoreSettings:
@@ -182,29 +183,15 @@ def get_runtime(
                     settings.audio_storage_dir,
                     max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
                 )
-                worker = RecordingJobWorker(
-                    repository=repository,
-                    pipeline=pipeline,
-                    asr_client=RemoteASRClient(
-                        api_key=settings.kaggle_asr_api_key,
-                        timeout_seconds=settings.asr_request_timeout_seconds,
-                    ),
-                    poll_interval_seconds=settings.job_poll_interval_seconds,
-                    asr_retry_seconds=settings.asr_retry_seconds,
-                    lease_seconds=settings.job_lease_seconds,
-                    heartbeat_seconds=settings.job_heartbeat_seconds,
-                )
-                runtime = CoreRuntime(
+                # Recording jobs are executed by the standalone mura-worker
+                # process. The API only submits and reads them.
+                _runtime = CoreRuntime(
                     settings=settings,
                     database=database,
                     repository=repository,
                     pipeline=pipeline,
                     storage=storage,
-                    worker=worker,
                 )
-                _runtime = runtime
-                worker.start()
-                atexit.register(runtime.stop)
     assert _runtime is not None
     return _runtime
 

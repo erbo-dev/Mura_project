@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -44,16 +45,23 @@ OWNER_A = "worker_" + "a" * 32
 OWNER_B = "worker_" + "b" * 32
 
 
-@pytest.fixture
-def repository() -> RecordingRepository:
-    assert POSTGRES_URL is not None
-    database = Database(POSTGRES_URL)
-    database.create_schema()
-    repo = RecordingRepository(database)
+def _purge(database: Database) -> None:
     with database.session_factory.begin() as session:
         session.query(ProcessingJobRow).delete()
         session.query(RecordingRow).delete()
-    return repo
+
+
+@pytest.fixture
+def repository() -> Iterator[RecordingRepository]:
+    assert POSTGRES_URL is not None
+    database = Database(POSTGRES_URL)
+    database.create_schema()
+    _purge(database)
+    yield RecordingRepository(database)
+    # Leave the shared disposable database empty: claim_next_job takes the
+    # oldest eligible job, so rows left behind would be claimed by unrelated
+    # suites running later against the same database.
+    _purge(database)
 
 
 def _seed(repository: RecordingRepository, job_id: str, *, due_seconds: int = -1) -> None:
