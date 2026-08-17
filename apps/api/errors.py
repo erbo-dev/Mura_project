@@ -37,6 +37,26 @@ PIPELINE_OUTPUT_INVALID = "pipeline_output_invalid"
 SERVICE_UNAVAILABLE = "service_unavailable"
 UPSTREAM_TIMEOUT = "upstream_timeout"
 
+# Authorization codes. A raise site may select one of these so a client can
+# distinguish "log in" from "ask an owner"; the message still comes from the
+# table below, so no exception text ever escapes.
+AUTHENTICATION_REQUIRED = "authentication_required"
+INVALID_TOKEN = "invalid_token"
+FAMILY_NOT_FOUND = "family_not_found"
+INSUFFICIENT_FAMILY_ROLE = "insufficient_family_role"
+SOLE_OWNER_REQUIRED = "sole_owner_required"
+
+#: Codes a route may request explicitly via HTTPException(detail=...).
+SELECTABLE_CODES = frozenset(
+    {
+        AUTHENTICATION_REQUIRED,
+        INVALID_TOKEN,
+        FAMILY_NOT_FOUND,
+        INSUFFICIENT_FAMILY_ROLE,
+        SOLE_OWNER_REQUIRED,
+    }
+)
+
 _MESSAGE_BY_CODE: dict[str, str] = {
     BAD_REQUEST: "The request could not be understood.",
     UNAUTHORIZED: "Authentication is required.",
@@ -52,6 +72,11 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     PIPELINE_OUTPUT_INVALID: "The extraction output failed contract validation.",
     SERVICE_UNAVAILABLE: "The service is not available.",
     UPSTREAM_TIMEOUT: "The upstream provider did not respond in time.",
+    AUTHENTICATION_REQUIRED: "Authentication is required.",
+    INVALID_TOKEN: "Authentication is required.",
+    FAMILY_NOT_FOUND: "The requested resource was not found.",
+    INSUFFICIENT_FAMILY_ROLE: "This operation is not permitted for your role.",
+    SOLE_OWNER_REQUIRED: "A family must always retain at least one owner.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,
@@ -119,13 +144,15 @@ def error_response(
 
 async def handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
     status_code = exc.status_code if isinstance(exc, StarletteHTTPException) else 500
-    # The detail is intentionally discarded: raise sites have historically
-    # carried structured payloads and interpolated text.
-    return error_response(
-        request,
-        status_code=status_code,
-        code=_CODE_BY_STATUS.get(status_code, INTERNAL_ERROR),
+    # A raise site may select a known code; anything else is discarded, since
+    # details have historically carried structured payloads and interpolated text.
+    detail = getattr(exc, "detail", None)
+    code = (
+        detail
+        if isinstance(detail, str) and detail in SELECTABLE_CODES
+        else _CODE_BY_STATUS.get(status_code, INTERNAL_ERROR)
     )
+    return error_response(request, status_code=status_code, code=code)
 
 
 async def handle_validation_error(request: Request, _exc: Exception) -> JSONResponse:

@@ -17,7 +17,11 @@ from pydantic import Field
 from mura.domain.models import StrictModel
 from mura.identity.auth import Principal
 from mura.identity.policy import Capability, FamilyRole, capabilities_for, role_allows
-from mura.storage.identity import IdentityRepository, SoleOwnerError
+from mura.storage.identity import (
+    IdentityRepository,
+    MembershipNotFoundError,
+    SoleOwnerError,
+)
 
 
 class UserView(StrictModel):
@@ -149,6 +153,68 @@ def register_identity_routes(
             )
             for row, user in identity.list_members(family_id)
         ]
+
+
+class UpdateMemberRoleRequest(StrictModel):
+    role: FamilyRole
+
+
+def register_membership_admin_routes(
+    app: FastAPI,
+    *,
+    manage_members_dependency: Callable[..., object],
+    identity_repository_dependency: Callable[..., object],
+) -> None:
+    """Owner-only membership administration.
+
+    New in PR-03, so these are Principal-native from the start. Adding a member
+    is deliberately absent: it needs an invitation lifecycle, and faking one by
+    email would create memberships nobody agreed to.
+    """
+
+    @app.patch("/v1/families/{family_id}/members/{user_id}", response_model=MemberView)
+    def update_member_role(
+        family_id: str,
+        user_id: str,
+        request: UpdateMemberRoleRequest,
+        context: object = Depends(manage_members_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> MemberView:
+        del context  # Authorization already proven by the dependency.
+        identity = cast(IdentityRepository, repository)
+        try:
+            # The service checks the owner count under row locks; the route must
+            # never re-implement a weaker version of that invariant.
+            membership = identity.change_member_role(
+                family_id=family_id, user_id=user_id, role=request.role
+            )
+        except MembershipNotFoundError as exc:
+            raise _not_found() from exc
+        except SoleOwnerError as exc:
+            raise sole_owner_error() from exc
+        user = identity.get_user(user_id)
+        return MemberView(
+            user_id=user_id,
+            display_name=user.display_name if user else None,
+            role=FamilyRole(membership.role),
+        )
+
+    @app.delete("/v1/families/{family_id}/members/{user_id}", status_code=204)
+    def remove_member(
+        family_id: str,
+        user_id: str,
+        context: object = Depends(manage_members_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> None:
+        del context
+        identity = cast(IdentityRepository, repository)
+        try:
+            identity.remove_member(family_id=family_id, user_id=user_id)
+        except MembershipNotFoundError as exc:
+            # A membership outside this family is simply not found.
+            raise _not_found() from exc
+        except SoleOwnerError as exc:
+            raise sole_owner_error() from exc
 
 
 def sole_owner_error() -> HTTPException:

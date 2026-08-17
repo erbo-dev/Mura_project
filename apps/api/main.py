@@ -26,9 +26,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from apps.api.authz import build_capability_dependency, build_family_context_dependency
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
-from apps.api.identity import register_identity_routes
+from apps.api.identity import register_identity_routes, register_membership_admin_routes
 from apps.api.recordings import register_recording_routes
 from mura.capabilities import (
     AsrRegistration,
@@ -45,6 +46,8 @@ from mura.identity.auth import (
     OidcAuthVerifier,
     Principal,
 )
+from mura.identity.context import FamilyAuthorizationService
+from mura.identity.policy import Capability
 from mura.jobs import (
     JobStatus,
     JobView,
@@ -248,6 +251,46 @@ def get_principal(
     except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail="authentication required") from exc
     return identity.resolve_principal(verified)
+
+
+def get_family_authorization_service(
+    runtime: Annotated[CoreRuntime, Depends(get_runtime)],
+) -> FamilyAuthorizationService:
+    return FamilyAuthorizationService(runtime.database)
+
+
+#: The reusable chain PR-03B-SWITCH will apply to the remaining family routes.
+resolve_family_context = build_family_context_dependency(
+    principal_dependency=get_principal,
+    authorization_service_dependency=get_family_authorization_service,
+)
+require_family_read = build_capability_dependency(
+    Capability.READ_FAMILY, family_context_dependency=resolve_family_context
+)
+require_read_recordings = build_capability_dependency(
+    Capability.READ_RECORDINGS, family_context_dependency=resolve_family_context
+)
+require_read_jobs = build_capability_dependency(
+    Capability.READ_JOBS, family_context_dependency=resolve_family_context
+)
+require_read_review = build_capability_dependency(
+    Capability.READ_REVIEW, family_context_dependency=resolve_family_context
+)
+require_read_profiles = build_capability_dependency(
+    Capability.READ_PROFILES, family_context_dependency=resolve_family_context
+)
+require_read_conflicts = build_capability_dependency(
+    Capability.READ_CONFLICTS, family_context_dependency=resolve_family_context
+)
+require_create_recording = build_capability_dependency(
+    Capability.CREATE_RECORDING, family_context_dependency=resolve_family_context
+)
+require_resolve_conflicts = build_capability_dependency(
+    Capability.RESOLVE_CONFLICTS, family_context_dependency=resolve_family_context
+)
+require_manage_members = build_capability_dependency(
+    Capability.MANAGE_MEMBERS, family_context_dependency=resolve_family_context
+)
 
 
 def require_operations_token(
@@ -465,6 +508,13 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     register_identity_routes(
         application,
         principal_dependency=get_principal,
+        identity_repository_dependency=get_identity_repository,
+    )
+    # New in PR-03, so Principal-native from the start. Existing family routes
+    # deliberately keep CORE_API_KEY until the atomic switch in PR-03B-SWITCH.
+    register_membership_admin_routes(
+        application,
+        manage_members_dependency=require_manage_members,
         identity_repository_dependency=get_identity_repository,
     )
     register_recording_routes(
