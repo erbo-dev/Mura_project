@@ -7,7 +7,11 @@ from typing import Any
 
 from pydantic import Field
 
-from mura.domain.models import PipelineResult, StrictModel
+from mura.domain.models import (
+    LanguageContext,
+    PipelineResult,
+    StrictModel,
+)
 
 #: Stage used while Core is waiting to retry a recording by itself. A deferred
 #: job is deliberately *not* a separate status: it stays QUEUED and carries this
@@ -69,13 +73,43 @@ class JobView(StrictModel):
     updated_at: datetime
 
 
+class SpeakerResolution(StrEnum):
+    """Whether Core can name a canonical archive person for the narrator."""
+
+    #: speaker_person_id was supplied and verified against this family archive.
+    RESOLVED = "resolved"
+    #: No canonical person yet. Entity resolution may still materialise one.
+    PENDING = "pending"
+
+
+class SpeakerView(StrictModel):
+    """Narrator identity as Core can actually vouch for it.
+
+    ``person_id`` is a canonical archive person or None. An internal
+    ``narrator_<recording_id>`` reference is never surfaced here: until entity
+    resolution materialises a person, the honest answer is None.
+    """
+
+    person_id: str | None = None
+    name: str
+    resolution_status: SpeakerResolution = SpeakerResolution.PENDING
+
+
 class RecordingResultView(StrictModel):
+    """Public recording result.
+
+    ``result`` intentionally carries the whole PipelineResult rather than a
+    display projection, so evidence spans, provenance activities, conflict sets,
+    assertion modes and resolution status survive the API boundary for Story,
+    Person, Tree, Review, Ask MURA, Book and provenance inspection. No audio
+    path, database row or provider payload is exposed.
+    """
+
     recording_id: str
     family_id: str
-    speaker_id: str
-    speaker_name: str
-    job_id: str
-    status: JobStatus
+    speaker: SpeakerView
+    job: JobView
+    language_context: LanguageContext
     result: PipelineResult
 
 
@@ -86,3 +120,4 @@ class ReviewItemsView(StrictModel):
     unresolved_questions: list[dict[str, Any]] = Field(default_factory=list)
     extraction_issues: list[dict[str, Any]] = Field(default_factory=list)
     ambiguous_resolutions: list[dict[str, Any]] = Field(default_factory=list)
+    conflict_sets: list[dict[str, Any]] = Field(default_factory=list)

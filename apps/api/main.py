@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from threading import Lock
 from typing import Annotated
 
@@ -14,13 +13,10 @@ from fastapi import (
     APIRouter,
     Depends,
     FastAPI,
-    File,
-    Form,
     Header,
     HTTPException,
     Request,
     Response,
-    UploadFile,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +29,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
+from apps.api.recordings import register_recording_routes
 from mura.asr import RemoteASRClient
 from mura.capabilities import (
     AsrRegistration,
@@ -41,16 +38,13 @@ from mura.capabilities import (
 )
 from mura.config import CoreSettings
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
-from mura.domain.models import PipelineRequest, PipelineResult, ResolutionStatus
+from mura.domain.models import PipelineRequest, PipelineResult
 from mura.jobs import (
     JobStatus,
     JobView,
-    RecordingAccepted,
-    RecordingResultView,
-    ReviewItemsView,
     resolve_retry_state,
 )
-from mura.orchestration import AudioStorageError, LocalAudioStorage, RecordingJobWorker
+from mura.orchestration import LocalAudioStorage, RecordingJobWorker
 from mura.pipeline import MuraPipeline
 from mura.security import verify_bearer_token
 from mura.storage.database import (
@@ -288,144 +282,6 @@ def capabilities(
 
 
 @router.post(
-    "/v1/recordings",
-    response_model=RecordingAccepted,
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_core_token)],
-)
-def create_recording(
-    runtime: Annotated[CoreRuntime, Depends(get_runtime)],
-    file: Annotated[UploadFile, File(...)],
-    family_id: Annotated[str, Form(min_length=1, max_length=128)],
-    speaker_id: Annotated[str, Form(min_length=1, max_length=128)],
-    speaker_name: Annotated[str, Form(min_length=1, max_length=256)],
-) -> RecordingAccepted:
-    recording_id = f"rec_{uuid.uuid4().hex}"
-    job_id = f"job_{uuid.uuid4().hex}"
-    original_filename = Path(file.filename or "audio.bin").name
-
-    try:
-        file.file.seek(0)
-        audio_path = runtime.storage.save(
-            recording_id=recording_id,
-            original_filename=original_filename,
-            source=file.file,
-        )
-    except AudioStorageError as exc:
-        message = str(exc)
-        code = (
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-            if "maximum upload size" in message
-            else status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
-        )
-        raise HTTPException(status_code=code, detail=message) from exc
-
-    try:
-        runtime.repository.create_recording_and_job(
-            recording_id=recording_id,
-            job_id=job_id,
-            family_id=family_id,
-            speaker_id=speaker_id,
-            speaker_name=speaker_name,
-            original_filename=original_filename,
-            content_type=file.content_type,
-            audio_path=audio_path,
-        )
-    except Exception:
-        audio_path.unlink(missing_ok=True)
-        raise
-
-    return RecordingAccepted(recording_id=recording_id, job_id=job_id)
-
-
-@router.get(
-    "/v1/jobs/{job_id}",
-    response_model=JobView,
-    dependencies=[Depends(require_core_token)],
-)
-def get_job(
-    job_id: str,
-    runtime: Annotated[CoreRuntime, Depends(get_runtime)],
-) -> JobView:
-    row = runtime.repository.get_job(job_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    return _job_view(row)
-
-
-@router.get(
-    "/v1/recordings/{recording_id}",
-    response_model=RecordingResultView,
-    dependencies=[Depends(require_core_token)],
-)
-def get_recording_result(
-    recording_id: str,
-    runtime: Annotated[CoreRuntime, Depends(get_runtime)],
-) -> RecordingResultView:
-    recording = runtime.repository.get_recording(recording_id)
-    if recording is None:
-        raise HTTPException(status_code=404, detail="recording not found")
-    job = runtime.repository.get_job_for_recording(recording_id)
-    if job is None:
-        raise HTTPException(status_code=500, detail="recording has no processing job")
-    result = runtime.repository.get_pipeline_result(recording_id)
-    if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "recording processing is not completed",
-                "job": _job_view(job).model_dump(mode="json"),
-            },
-        )
-    return RecordingResultView(
-        recording_id=recording.recording_id,
-        family_id=recording.family_id,
-        speaker_id=recording.speaker_id,
-        speaker_name=recording.speaker_name,
-        job_id=job.job_id,
-        status=JobStatus(job.status),
-        result=result,
-    )
-
-
-@router.get(
-    "/v1/recordings/{recording_id}/review-items",
-    response_model=ReviewItemsView,
-    dependencies=[Depends(require_core_token)],
-)
-def get_review_items(
-    recording_id: str,
-    runtime: Annotated[CoreRuntime, Depends(get_runtime)],
-) -> ReviewItemsView:
-    result = runtime.repository.get_pipeline_result(recording_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail="completed recording result not found")
-
-    extractor_usage = result.processing.get("extractor_usage", {})
-    extraction_issues = (
-        extractor_usage.get("extraction_issues", []) if isinstance(extractor_usage, dict) else []
-    )
-    return ReviewItemsView(
-        recording_id=recording_id,
-        uncertain_fragments=[
-            item.model_dump(mode="json") for item in result.cleaned_transcript.uncertain_fragments
-        ],
-        detected_corrections=[
-            item.model_dump(mode="json") for item in result.cleaned_transcript.detected_corrections
-        ],
-        unresolved_questions=[
-            item.model_dump(mode="json") for item in result.extraction.unresolved_questions
-        ],
-        extraction_issues=(extraction_issues if isinstance(extraction_issues, list) else []),
-        ambiguous_resolutions=[
-            item.model_dump(mode="json")
-            for item in result.resolutions
-            if item.status == ResolutionStatus.NEEDS_REVIEW
-        ],
-    )
-
-
-@router.post(
     "/v1/process-transcript",
     response_model=PipelineResult,
     dependencies=[Depends(require_core_token)],
@@ -561,6 +417,12 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
     register_error_handlers(application)
     application.include_router(router)
+    register_recording_routes(
+        application,
+        get_runtime_dependency=get_runtime,
+        core_token_dependency=require_core_token,
+        job_view_builder=_job_view,
+    )
     register_conflict_routes(
         application,
         get_runtime_dependency=get_runtime,
