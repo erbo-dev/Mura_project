@@ -60,7 +60,14 @@ class RecordingRow(Base):
     speaker_name: Mapped[str] = mapped_column(String(256))
     original_filename: Mapped[str] = mapped_column(String(512))
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Legacy locator. Recordings created before storage keys existed have this
+    #: and a NULL storage_key; canonical recordings always populate storage_key.
     audio_path: Mapped[str] = mapped_column(Text)
+    storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    storage_backend: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    audio_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    audio_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: Nullable only so historical rows migrate cleanly. Recordings created
     #: through the canonical API always persist explicit values; NULL is read as
     #: AudioLanguage.AUTO / OutputLanguage.SAME_AS_TRANSCRIPT.
@@ -212,9 +219,14 @@ class RecordingRepository:
         speaker_name: str,
         original_filename: str,
         content_type: str | None,
-        audio_path: Path,
+        audio_path: Path | str,
         audio_language: str | None = None,
         output_language: str | None = None,
+        storage_key: str | None = None,
+        storage_backend: str | None = None,
+        audio_sha256: str | None = None,
+        audio_size_bytes: int | None = None,
+        audio_mime_type: str | None = None,
     ) -> None:
         with self.database.session_factory.begin() as session:
             session.add(
@@ -226,6 +238,11 @@ class RecordingRepository:
                     original_filename=original_filename,
                     content_type=content_type,
                     audio_path=str(audio_path),
+                    storage_key=storage_key,
+                    storage_backend=storage_backend,
+                    audio_sha256=audio_sha256,
+                    audio_size_bytes=audio_size_bytes,
+                    audio_mime_type=audio_mime_type,
                     audio_language=audio_language,
                     output_language=output_language,
                 )
