@@ -41,6 +41,8 @@ def _seed(repository: RecordingRepository, job_id: str = "job_1") -> None:
                 audio_path="/tmp/a.wav",
             )
         )
+        # PostgreSQL enforces the recordings FK, so the parent must land first.
+        session.flush()
         session.add(
             ProcessingJobRow(
                 job_id=job_id,
