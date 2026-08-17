@@ -17,6 +17,9 @@ dependencies = [
   "python-multipart>=0.0.20,<1",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
+  # Standards-compliant JWT/JWKS verification. Pinned exactly: this is the
+  # authentication trust boundary, so the version is not a floating range.
+  "PyJWT[crypto]==2.13.0",
   "requests>=2.32,<3",
   "sqlalchemy>=2.0.42,<3",
   "uvicorn[standard]>=0.35,<1",
@@ -78,6 +81,10 @@ extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
+
+# Depends(...) in a default is the documented FastAPI idiom, not a mutable-default bug.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.File", "fastapi.Form"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["mura"]

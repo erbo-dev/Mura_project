@@ -108,6 +108,10 @@ def test_production_rejects_reusing_the_core_token_for_operations() -> None:
             CORS_ALLOWED_ORIGINS="https://app.example.com",
             AUDIO_STORAGE_DIR="/srv/mura/audio",
             DATABASE_AUTO_CREATE=False,
+            AUTH_MODE="oidc",
+            AUTH_ISSUER="https://issuer.example.com/",
+            AUTH_AUDIENCE="mura-core",
+            AUTH_JWKS_URL="https://issuer.example.com/.well-known/jwks.json",
         )
 
 

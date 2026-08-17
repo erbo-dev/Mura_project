@@ -45,6 +45,11 @@ def _production_payload(**overrides: Any) -> dict[str, Any]:
         CORS_ALLOWED_ORIGINS="https://app.example.com",
         # Production must not depend on a CWD-relative storage directory.
         AUDIO_STORAGE_DIR="/srv/mura/audio",
+        # Production requires real OIDC; the disabled mode is local/test only.
+        AUTH_MODE="oidc",
+        AUTH_ISSUER="https://issuer.example.com/",
+        AUTH_AUDIENCE="mura-core",
+        AUTH_JWKS_URL="https://issuer.example.com/.well-known/jwks.json",
     )
     payload.update(overrides)
     return payload

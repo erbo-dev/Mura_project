@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from mura.identity.auth import DEFAULT_ALLOWED_ALGORITHMS, AuthMode, validate_jwks_url
 from mura.storage.audio import AudioStorageBackend
 
 _POSTGRES_SCHEME_PREFIXES = ("postgresql", "postgres")
@@ -126,6 +127,19 @@ class CoreSettings(BaseSettings):
         le=3600,
     )
 
+    auth_mode: AuthMode = Field(default=AuthMode.DISABLED, alias="AUTH_MODE")
+    auth_issuer: str | None = Field(default=None, alias="AUTH_ISSUER")
+    auth_audience: str | None = Field(default=None, alias="AUTH_AUDIENCE")
+    auth_jwks_url: str | None = Field(default=None, alias="AUTH_JWKS_URL")
+    auth_allowed_algorithms: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_ALGORITHMS),
+        alias="AUTH_ALLOWED_ALGORITHMS",
+    )
+    auth_clock_skew_seconds: int = Field(default=30, alias="AUTH_CLOCK_SKEW_SECONDS", ge=0, le=300)
+    auth_jwks_cache_seconds: int = Field(
+        default=300, alias="AUTH_JWKS_CACHE_SECONDS", ge=30, le=86_400
+    )
+
     cors_allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         alias="CORS_ALLOWED_ORIGINS",
@@ -157,7 +171,9 @@ class CoreSettings(BaseSettings):
         le=600,
     )
 
-    @field_validator("cors_allowed_origins", "allowed_hosts", mode="before")
+    @field_validator(
+        "cors_allowed_origins", "allowed_hosts", "auth_allowed_algorithms", mode="before"
+    )
     @classmethod
     def accept_delimited_values(cls, value: object) -> object:
         return _split_delimited(value)
@@ -169,6 +185,39 @@ class CoreSettings(BaseSettings):
         if self.expose_api_docs is not None:
             return self.expose_api_docs
         return self.environment in {Environment.LOCAL, Environment.TEST}
+
+    @model_validator(mode="after")
+    def validate_auth_invariants(self) -> CoreSettings:
+        production_like = self.environment.is_production_like
+        if production_like and self.auth_mode is not AuthMode.OIDC:
+            raise ValueError(
+                "AUTH_MODE must be 'oidc' in staging and production; the disabled "
+                "mode exists only for local development and tests"
+            )
+        if self.auth_mode is AuthMode.OIDC:
+            missing = [
+                name
+                for name, value in (
+                    ("AUTH_ISSUER", self.auth_issuer),
+                    ("AUTH_AUDIENCE", self.auth_audience),
+                    ("AUTH_JWKS_URL", self.auth_jwks_url),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(f"{', '.join(missing)} required when AUTH_MODE is oidc")
+            assert self.auth_jwks_url is not None
+            # The JWKS endpoint is trusted configuration; a token never picks it.
+            validate_jwks_url(self.auth_jwks_url, require_https=production_like)
+            symmetric = [a for a in self.auth_allowed_algorithms if a.upper().startswith("HS")]
+            if symmetric:
+                raise ValueError(
+                    "AUTH_ALLOWED_ALGORITHMS must not mix symmetric HS* with "
+                    "public-key verification"
+                )
+            if "none" in {a.lower() for a in self.auth_allowed_algorithms}:
+                raise ValueError("AUTH_ALLOWED_ALGORITHMS must never include 'none'")
+        return self
 
     @model_validator(mode="after")
     def validate_lease_invariants(self) -> CoreSettings:
