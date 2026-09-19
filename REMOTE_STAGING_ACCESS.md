@@ -17,9 +17,12 @@ Generated in accordance with Phase 2.4 Remote Staging Validation protocol.
 
 ### 1. GitHub
 - **CLI**: `C:\Program Files\GitHub CLI\gh.exe` is installed, but `gh auth status` reports: `You are not logged into any GitHub hosts.` -> `AVAILABLE NOT AUTHENTICATED`.
-- **Git Push Auth**: `git remote -v` is configured for `https://github.com/erbo-dev/Mura_project.git`. `git push --dry-run origin main` succeeded with exit code 0 via Windows Git Credential Manager -> `VERIFIED AUTHENTICATED`.
+- **Git Push Auth**: `git remote -v` is configured for `https://github.com/erbo-dev/Mura_project.git`. Candidate commit `6e0c09c3442557fecc2bded66146015477e1e876` was pushed to `origin main` -> `VERIFIED AUTHENTICATED`.
+- **Remote CI Workflows**:
+  - **Frontend CI**: Run ID 35462540802 -> `VERIFIED PASS` (`conclusion: success`)
+  - **Backend CI**: Run ID 35462540755 -> `VERIFIED PASS` (`conclusion: success`)
 - **Repository Resource**: `erbo-dev/Mura_project` exists on GitHub -> `VERIFIED AUTHENTICATED`.
-- **Can Mutate**: Git commits can be pushed directly to origin main/branches -> `VERIFIED AUTHENTICATED`.
+- **Can Mutate**: Git commits pushed directly to origin main -> `VERIFIED AUTHENTICATED`.
 
 ### 2. Railway
 - **CLI**: `C:\Users\erbos\AppData\Roaming\npm\railway.ps1` (v5.26.2) -> `VERIFIED AUTHENTICATED`.
