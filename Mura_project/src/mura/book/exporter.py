@@ -33,6 +33,18 @@ class WeasyPrintRenderer:
 
     def render_pdf(self, html_content: str) -> bytes:
         try:
+            from mura.testing.fault_injection import (
+                FAULT_PDF_FAILURE,
+                consume_fault,
+                is_fault_injection_enabled,
+            )
+
+            if is_fault_injection_enabled() and consume_fault(FAULT_PDF_FAILURE):
+                raise RuntimeError("Injected WeasyPrint PDF renderer failure")
+        except ImportError:
+            pass
+
+        try:
             import weasyprint
         except (ImportError, OSError) as exc:
             raise ExportEngineUnavailable(

@@ -409,6 +409,12 @@ class SupabaseAudioStorage:
         })
 
         try:
+            try:
+                from mura.testing.fault_injection import FAULT_STORAGE_503, consume_fault, is_fault_injection_enabled
+                if is_fault_injection_enabled() and consume_fault(FAULT_STORAGE_503):
+                    raise AudioStorageError("Supabase Storage rejected upload with HTTP 503: Service Unavailable")
+            except ImportError:
+                pass
             response = self.session.post(
                 upload_url,
                 headers=headers,

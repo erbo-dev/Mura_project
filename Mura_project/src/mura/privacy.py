@@ -160,10 +160,12 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                 "exports": [
                     {
                         "export_id": exp.export_id,
-                        "export_format": exp.export_format,
+                        "format": getattr(exp, "format", None),
+                        "export_format": getattr(exp, "format", None),
                         "status": exp.status,
                         "storage_backend": exp.storage_backend,
-                        "file_size_bytes": exp.file_size_bytes,
+                        "size_bytes": getattr(exp, "size_bytes", None),
+                        "file_size_bytes": getattr(exp, "size_bytes", None),
                         "created_at": exp.created_at.isoformat() if exp.created_at else None,
                     }
                     for exp in exports

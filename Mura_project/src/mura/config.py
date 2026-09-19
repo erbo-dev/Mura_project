@@ -256,6 +256,7 @@ class CoreSettings(BaseSettings):
     )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_format: str = Field(default="auto", alias="LOG_FORMAT")
+    mura_fault_injection: bool = Field(default=False, alias="MURA_FAULT_INJECTION")
 
     @field_validator(
         "cors_allowed_origins", "allowed_hosts", "auth_allowed_algorithms", mode="before"
@@ -274,6 +275,8 @@ class CoreSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_auth_invariants(self) -> CoreSettings:
+        if self.environment == Environment.PRODUCTION and self.mura_fault_injection:
+            raise ValueError("Fault injection cannot be enabled in production.")
         production_like = self.environment.is_production_like
         if production_like and self.auth_mode is not AuthMode.OIDC:
             raise ValueError(

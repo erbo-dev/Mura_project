@@ -74,6 +74,10 @@ packages = ["src/mura", "apps", "services"]
 pythonpath = [".", "src"]
 testpaths = ["tests"]
 addopts = "-q --strict-config --strict-markers"
+markers = [
+  "staging: Staging environment validation tests",
+  "staging_ai: Staging tests invoking AI model providers",
+]
 
 [tool.ruff]
 target-version = "py311"

@@ -101,6 +101,8 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
 
     # 4. HTTP response status inspections (requests / httpx)
     response: Any = getattr(exc, "response", None)
+    if response is None and hasattr(exc, "__cause__") and exc.__cause__ is not None:
+        response = getattr(exc.__cause__, "response", None)
     status_code: int | None = getattr(response, "status_code", None)
     headers: Any = getattr(response, "headers", None) or {}
 
@@ -153,7 +155,14 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
             )
 
     # 5. Network / Timeout exceptions
-    if isinstance(exc, (TimeoutError, ConnectionError)) or "timeout" in exc_type_name.lower():
+    cause = getattr(exc, "__cause__", None)
+    cause_name = type(cause).__name__.lower() if cause is not None else ""
+    if (
+        isinstance(exc, (TimeoutError, ConnectionError))
+        or "timeout" in exc_type_name.lower()
+        or "timeout" in error_str.lower()
+        or "timeout" in cause_name
+    ):
         return ClassifiedFailure(
             category=FailureCategory.PROVIDER_TIMEOUT,
             disposition=FailureDisposition.RETRY,

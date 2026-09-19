@@ -14,6 +14,10 @@ import requests
 class DeepSeekError(RuntimeError):
     """Raised when the DeepSeek API returns an unusable response."""
 
+    def __init__(self, message: str, response: requests.Response | None = None) -> None:
+        super().__init__(message)
+        self.response = response
+
 
 @dataclass(frozen=True)
 class DeepSeekUsage:
@@ -139,6 +143,39 @@ class DeepSeekClient:
         for attempt in range(1, attempts + 1):
             elapsed = 0.0
             try:
+                try:
+                    from mura.testing.fault_injection import (
+                        FAULT_DEEPSEEK_429,
+                        FAULT_DEEPSEEK_TIMEOUT,
+                        FAULT_PROVIDER_401,
+                        FAULT_PROVIDER_503,
+                        consume_fault,
+                        get_fault_metadata,
+                        is_fault_injection_enabled,
+                    )
+                    if is_fault_injection_enabled():
+                        if consume_fault(FAULT_DEEPSEEK_TIMEOUT):
+                            raise requests.exceptions.Timeout("Injected DeepSeek timeout")
+                        if consume_fault(FAULT_DEEPSEEK_429):
+                            resp = requests.Response()
+                            resp.status_code = 429
+                            meta = get_fault_metadata(FAULT_DEEPSEEK_429)
+                            resp.headers["Retry-After"] = str(meta.get("retry_after", 30))
+                            resp._content = b'{"error":{"message":"Rate limit exceeded","code":429}}'
+                            self._raise_for_status(resp)
+                        if consume_fault(FAULT_PROVIDER_401):
+                            resp = requests.Response()
+                            resp.status_code = 401
+                            resp._content = b'{"error":{"message":"Invalid API key","code":401}}'
+                            self._raise_for_status(resp)
+                        if consume_fault(FAULT_PROVIDER_503):
+                            resp = requests.Response()
+                            resp.status_code = 503
+                            resp._content = b'{"error":{"message":"Service Unavailable","code":503}}'
+                            self._raise_for_status(resp)
+                except ImportError:
+                    pass
+
                 started = time.perf_counter()
                 response = self.session.post(
                     f"{self.base_url}/chat/completions",
@@ -148,7 +185,7 @@ class DeepSeekClient:
                 elapsed = time.perf_counter() - started
 
                 if response.status_code == 429 or response.status_code >= 500:
-                    raise DeepSeekError(self._format_api_error(response))
+                    raise DeepSeekError(self._format_api_error(response), response=response)
                 self._raise_for_status(response)
 
                 response_body = response.json()
@@ -209,7 +246,8 @@ class DeepSeekClient:
                 if attempt < attempts:
                     time.sleep(min(2**attempt, 10))
 
-        raise DeepSeekError(f"request failed after {attempts} attempts: {last_error}")
+        response = getattr(last_error, "response", None)
+        raise DeepSeekError(f"request failed after {attempts} attempts: {last_error}", response=response) from last_error
 
     @staticmethod
     def _detect_operation(system_prompt: str) -> str:
@@ -264,4 +302,4 @@ class DeepSeekClient:
 
     def _raise_for_status(self, response: requests.Response) -> None:
         if not response.ok:
-            raise DeepSeekError(self._format_api_error(response))
+            raise DeepSeekError(self._format_api_error(response), response=response)
