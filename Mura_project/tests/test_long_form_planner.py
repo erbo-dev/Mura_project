@@ -38,7 +38,9 @@ def test_short_transcript_stays_on_existing_path() -> None:
 
 
 def test_eighteen_segments_create_stable_bounded_windows_with_full_coverage() -> None:
-    planner = LongFormExtractionPlanner()
+    # The window mechanics are the subject here, not the default selection
+    # threshold, so the threshold is pinned rather than inherited.
+    planner = LongFormExtractionPlanner(LongFormPolicy(segment_count_threshold=12))
     transcript = _transcript(18)
 
     first = planner.plan(transcript)
@@ -164,3 +166,39 @@ def test_clause_slices_never_end_with_a_zero_length_span() -> None:
 
     assert _bounded_clause_slices(text, 2) == [(0, 100)]
     assert all(start < end for start, end in _bounded_clause_slices(text, 4))
+
+
+def test_a_finely_segmented_short_story_stays_on_the_focused_path() -> None:
+    """Segment count must not send a short story down the window path.
+
+    A 75-second recording from Groq's whisper-large-v3 arrived as 14 segments
+    and 150 normalised tokens. With the old threshold of 12 it was windowed
+    purely on segment count, and the single-pass window extractor produced
+    seven people but no events and no story.
+    """
+
+    from mura.domain.models import RawSegment, TranscriptEnvelope
+    from mura.long_form import LongFormExtractionPlanner, LongFormMode
+
+    segments = [
+        RawSegment(
+            segment_id=f"seg_{index:04d}",
+            start=index * 5.4,
+            end=index * 5.4 + 5.0,
+            text="Моя бабушка жила в Алматы и пекла баурсаки.",
+        )
+        for index in range(14)
+    ]
+    transcript = TranscriptEnvelope(
+        recording_id="rec_short",
+        duration_seconds=75.3,
+        full_text=" ".join(segment.text for segment in segments),
+        segments=segments,
+        asr_model="whisper-large-v3",
+        asr_revision="whisper-large-v3",
+        chunker_version="whisper-segments-1",
+    )
+
+    plan = LongFormExtractionPlanner().plan(transcript)
+
+    assert plan.mode is LongFormMode.SHORT

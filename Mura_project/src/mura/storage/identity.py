@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     String,
     UniqueConstraint,
+    delete,
     func,
     select,
 )
@@ -310,6 +311,107 @@ class IdentityRepository:
                 )
                 or 0
             )
+
+    def delete_family(self, family_id: str) -> tuple[list[str], list[str]] | None:
+        """Deletes a family and all associated data, returning (audio_storage_keys, book_export_storage_keys)."""
+        with self.database.session_factory.begin() as session:
+            family = session.scalar(
+                select(FamilyRow).where(FamilyRow.family_id == family_id)
+            )
+            if family is None:
+                return None
+
+            # 1. Collect recording audio storage keys
+            from mura.storage.database import PipelineResultRow, ProcessingJobRow, RecordingRow
+
+            recording_rows = list(
+                session.scalars(
+                    select(RecordingRow).where(RecordingRow.family_id == family_id)
+                ).all()
+            )
+            audio_keys = [
+                r.storage_key or r.audio_path
+                for r in recording_rows
+                if (r.storage_key or r.audio_path)
+            ]
+            recording_ids = [r.recording_id for r in recording_rows]
+
+            # 2. Collect book export artifact keys
+            from mura.storage.book import (
+                BookChapterRow,
+                BookContinuityStateRow,
+                BookExportRow,
+                BookJobRow,
+                BookPlanRow,
+                BookRow,
+                BookSourceSnapshotRow,
+            )
+
+            book_rows = list(
+                session.scalars(
+                    select(BookRow).where(BookRow.family_id == family_id)
+                ).all()
+            )
+            book_ids = [b.book_id for b in book_rows]
+            export_keys: list[str] = []
+            if book_ids:
+                export_keys = list(
+                    session.scalars(
+                        select(BookExportRow.storage_key).where(
+                            BookExportRow.book_id.in_(book_ids),
+                            BookExportRow.storage_key.is_not(None),
+                        )
+                    ).all()
+                )
+
+            # 3. Clean up DB records
+            if book_ids:
+                session.execute(delete(BookExportRow).where(BookExportRow.book_id.in_(book_ids)))
+                session.execute(delete(BookContinuityStateRow).where(BookContinuityStateRow.book_id.in_(book_ids)))
+                session.execute(delete(BookChapterRow).where(BookChapterRow.book_id.in_(book_ids)))
+                session.execute(delete(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids)))
+                session.execute(delete(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids)))
+                session.execute(delete(BookJobRow).where(BookJobRow.book_id.in_(book_ids)))
+                session.execute(delete(BookRow).where(BookRow.family_id == family_id))
+
+            if recording_ids:
+                try:
+                    from mura.observability import ProcessingTraceRow
+
+                    session.execute(delete(ProcessingTraceRow).where(ProcessingTraceRow.recording_id.in_(recording_ids)))
+                except Exception:
+                    pass
+                try:
+                    from mura.storage.archive import ArchiveClaimRow
+
+                    session.execute(delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id.in_(recording_ids)))
+                except Exception:
+                    pass
+                session.execute(delete(ProcessingJobRow).where(ProcessingJobRow.recording_id.in_(recording_ids)))
+                session.execute(delete(PipelineResultRow).where(PipelineResultRow.recording_id.in_(recording_ids)))
+                session.execute(delete(RecordingRow).where(RecordingRow.family_id == family_id))
+
+            try:
+                from mura.storage.archive import (
+                    ArchiveClaimRow,
+                    ArchiveConflictRow,
+                    ArchiveCorrectionRow,
+                    ArchivePersonRow,
+                    FamilyGraphEdgeRow,
+                )
+
+                session.execute(delete(ArchiveCorrectionRow).where(ArchiveCorrectionRow.family_id == family_id))
+                session.execute(delete(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id))
+                session.execute(delete(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == family_id))
+                session.execute(delete(ArchiveClaimRow).where(ArchiveClaimRow.family_id == family_id))
+                session.execute(delete(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id))
+            except Exception:
+                pass
+
+            session.execute(delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id))
+            session.delete(family)
+
+            return [k for k in audio_keys if k], [k for k in export_keys if k]
 
 
 def _principal(user: UserRow) -> Principal:

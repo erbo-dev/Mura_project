@@ -57,9 +57,25 @@ export interface SavedMemory {
   cleanTranscript?: string;
   events?: SavedMemoryEvent[];
   places?: string[];
+  /** Verbatim evidence quotes from the recording backing the extracted claims. */
+  evidenceQuotes?: string[];
   status?: SavedMemoryStatus;
   /** True once a validated analysis replaced the placeholder title/summary. */
   analyzed?: boolean;
+  /**
+   * Which Core recording this local entry mirrors.
+   *
+   * Without these the link is lost the moment the processing screen unmounts,
+   * and the entry can never be reconciled: Core holds the finished transcript
+   * while the browser goes on showing "no text yet" forever. The product tells
+   * people they may close the app while a memory processes, so reconciliation
+   * has to be possible from a cold start, not only from the screen that
+   * submitted it.
+   *
+   * Optional because entries written before this existed have no way back.
+   */
+  recordingId?: string;
+  familyId?: string;
 }
 
 const STORAGE_PREFIX = "mura-saved-memories-v1";
@@ -270,6 +286,20 @@ export function updateMemory(
   patch: Partial<Omit<SavedMemory, "id" | "createdAt" | "transcript">>,
 ): SavedMemory | null {
   return mergeMemory(id, patch);
+}
+
+/**
+ * Record Core's recognised text before the finished result exists.
+ *
+ * The second of the two paths allowed to write a transcript, and the narrower:
+ * it only ever fills an empty one. The text is Core's own recognition, the same
+ * words the finished result will carry, so it is not a guess — but it must
+ * never be able to replace text that is already there.
+ */
+export function previewMemoryTranscriptFromCore(id: string, text: string): SavedMemory | null {
+  const current = getSavedMemory(id);
+  if (!current || current.transcript || !text.trim()) return current;
+  return mergeMemory(id, { transcript: text });
 }
 
 /** Complete the one transition where authoritative Core ASR may write transcript. */

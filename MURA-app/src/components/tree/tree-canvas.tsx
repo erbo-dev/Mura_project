@@ -92,8 +92,8 @@ export function TreeCanvas({
   // Islands are placed relative to the bottom of the branch in the centre, so
   // they never overlap it however many people it holds.
   const islands = useMemo(
-    () => computeIslands(relations, centerId, graphBounds(nodes).maxY),
-    [relations, centerId, nodes],
+    () => computeIslands(relations, centerId, graphBounds(nodes).maxY, isDesktop ? 4 : 2),
+    [relations, centerId, nodes, isDesktop],
   );
   const allNodes = useMemo(
     () => [...nodes, ...islands.flatMap((island) => island.nodes)],
@@ -189,10 +189,16 @@ export function TreeCanvas({
           {islands.map((island, index) => (
             <div
               key={`${centerId}:island-${index}`}
-              className="pointer-events-none absolute whitespace-nowrap text-caption font-semibold uppercase tracking-[0.16em] text-muted"
+              className="pointer-events-none absolute whitespace-nowrap text-meta font-semibold tracking-[-0.005em] text-ink/70"
               style={{ left: island.label.x, top: island.label.y }}
             >
-              {t(island.connectedToCentre ? "treeFurtherLabel" : "treeIslandLabel")}
+              {t(
+                island.unlinked
+                  ? "treeUnlinkedLabel"
+                  : island.connectedToCentre
+                    ? "treeFurtherLabel"
+                    : "treeIslandLabel",
+              )}
             </div>
           ))}
 

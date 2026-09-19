@@ -71,6 +71,10 @@ class JobView(StrictModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     updated_at: datetime
+    #: Recognised text, present only while the job is unfinished and once
+    #: recognition has produced it. The finished result, not this, is the
+    #: authoritative transcript.
+    transcript_preview: str | None = None
 
 
 class SpeakerResolution(StrEnum):

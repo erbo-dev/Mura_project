@@ -12,7 +12,12 @@ from mura.domain.models import (
     ReadableSegment,
     TranscriptEnvelope,
 )
-from mura.long_form import LongFormCallBudget
+from mura.long_form import LongFormCallBudget, LongFormPolicy
+
+#: These tests exercise the windowed path on an 18-segment fixture. They pin
+#: the selection threshold they were written against, so a change to the
+#: production default cannot silently turn them into short-path tests.
+WINDOWED = LongFormPolicy(segment_count_threshold=12)
 from mura.pipeline import MuraPipeline
 
 
@@ -96,7 +101,7 @@ class FakeDeepSeek:
 
 def test_long_form_pipeline_reports_progress_and_completes_all_windows() -> None:
     stages: list[str] = []
-    pipeline = MuraPipeline(FakeDeepSeek())  # type: ignore[arg-type]
+    pipeline = MuraPipeline(FakeDeepSeek(), long_form_policy=WINDOWED)  # type: ignore[arg-type]
 
     result = pipeline.process(
         PipelineRequest(
@@ -118,7 +123,7 @@ def test_long_form_pipeline_reports_progress_and_completes_all_windows() -> None
 
 
 def test_middle_window_timeout_keeps_successful_windows_and_marks_partial() -> None:
-    pipeline = MuraPipeline(FakeDeepSeek(fail_call=2))  # type: ignore[arg-type]
+    pipeline = MuraPipeline(FakeDeepSeek(fail_call=2), long_form_policy=WINDOWED)  # type: ignore[arg-type]
 
     result = pipeline.process(
         PipelineRequest(
@@ -141,6 +146,7 @@ def test_budget_exhaustion_skips_remaining_windows_without_losing_first_result()
     pipeline = MuraPipeline(
         FakeDeepSeek(),  # type: ignore[arg-type]
         long_form_budget=LongFormCallBudget(maximum_total_model_calls=1),
+        long_form_policy=WINDOWED,
     )
 
     result = pipeline.process(
@@ -164,7 +170,7 @@ def test_budget_rejects_a_configuration_without_a_primary_logical_call() -> None
 
 def test_default_budget_offers_each_window_one_logical_repair() -> None:
     deepseek = FakeDeepSeek()
-    pipeline = MuraPipeline(deepseek)  # type: ignore[arg-type]
+    pipeline = MuraPipeline(deepseek, long_form_policy=WINDOWED)  # type: ignore[arg-type]
 
     pipeline.process(
         PipelineRequest(
@@ -183,6 +189,7 @@ def test_zero_repair_budget_is_propagated_to_every_window() -> None:
     pipeline = MuraPipeline(
         deepseek,  # type: ignore[arg-type]
         long_form_budget=LongFormCallBudget(maximum_repairs_per_window=0),
+        long_form_policy=WINDOWED,
     )
 
     pipeline.process(

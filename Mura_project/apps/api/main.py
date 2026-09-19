@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Annotated
+from typing import Annotated, Any
+
+from mura.logging import configure_logging, request_id_ctx
+from mura.sentry import init_sentry
+
+logger = logging.getLogger("mura.api")
 
 from fastapi import (
     APIRouter,
@@ -27,6 +35,7 @@ from sqlalchemy.pool import NullPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from apps.api.archive import register_archive_routes
+from apps.api.books import register_book_routes
 from apps.api.authz import (
     authentication_required,
     build_capability_dependency,
@@ -36,15 +45,17 @@ from apps.api.authz import (
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
 from apps.api.identity import register_identity_routes, register_membership_admin_routes
+from mura.asr.factory import ASRConfigurationError, build_asr_client
 from apps.api.operations import register_operations_routes
 from apps.api.profiles import register_profile_routes
 from apps.api.recordings import register_recording_routes
+from apps.api.security_headers import SecurityHeadersMiddleware
 from mura.capabilities import (
     AsrRegistration,
     CapabilitiesView,
     derive_capabilities,
 )
-from mura.config import CoreSettings
+from mura.config import ASRProvider, CoreSettings
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.domain.models import PipelineRequest, PipelineResult
 from mura.identity.auth import (
@@ -62,7 +73,7 @@ from mura.jobs import (
     JobView,
     resolve_retry_state,
 )
-from mura.orchestration import LocalAudioStorage
+from mura.orchestration import AudioStorage, build_audio_storage
 from mura.pipeline import MuraPipeline
 from mura.security import verify_bearer_token
 from mura.storage.database import (
@@ -161,7 +172,7 @@ class CoreRuntime:
     database: Database
     repository: RecordingRepository
     pipeline: MuraPipeline
-    storage: LocalAudioStorage
+    storage: AudioStorage
 
 
 def get_settings() -> CoreSettings:
@@ -175,12 +186,45 @@ def get_settings() -> CoreSettings:
         ) from exc
 
 
-def _build_pipeline(settings: CoreSettings) -> MuraPipeline:
+from mura.storage.ai_usage import AIUsageLedger
+
+
+def _build_pipeline(settings: CoreSettings, database: Database | None = None) -> MuraPipeline:
+    on_usage = None
+    if database is not None:
+        ai_ledger = AIUsageLedger(database)
+
+        def _deepseek_usage_hook(
+            usage: Any,
+            success: bool,
+            operation: str,
+            error_code: str | None,
+            attempt: int,
+        ) -> None:
+            try:
+                ai_ledger.record_usage(
+                    provider="deepseek",
+                    model=getattr(usage, "model", "deepseek-v4-flash"),
+                    operation=operation,
+                    latency_ms=int(getattr(usage, "request_seconds", 0.0) * 1000),
+                    success=success,
+                    input_tokens=getattr(usage, "prompt_tokens", None),
+                    output_tokens=getattr(usage, "completion_tokens", None),
+                    cached_input_tokens=getattr(usage, "prompt_cache_hit_tokens", None),
+                    attempt=attempt,
+                    error_code=error_code,
+                )
+            except Exception as exc:
+                logger.warning("failed to record api deepseek usage event: %s", exc)
+
+        on_usage = _deepseek_usage_hook
+
     client = DeepSeekClient(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
         primary_model=settings.deepseek_model,
         fallback_model=settings.deepseek_fallback_model,
+        on_usage=on_usage,
     )
     return MuraPipeline(DeepSeekPipelineService(client, focused_extraction=True))
 
@@ -200,10 +244,8 @@ def get_runtime(
                     database.create_schema()
                 repository = RecordingRepository(database)
                 pipeline = _build_pipeline(settings)
-                storage = LocalAudioStorage(
-                    settings.audio_storage_dir,
-                    max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
-                )
+                pipeline = _build_pipeline(settings, database=database)
+                storage = build_audio_storage(settings)
                 # Recording jobs are executed by the standalone mura-worker
                 # process. The API only submits and reads them.
                 _runtime = CoreRuntime(
@@ -325,6 +367,12 @@ require_resolve_conflicts = build_capability_dependency(
 require_manage_members = build_capability_dependency(
     Capability.MANAGE_MEMBERS, family_context_dependency=resolve_family_context
 )
+require_read_books = build_capability_dependency(
+    Capability.READ_BOOKS, family_context_dependency=resolve_family_context
+)
+require_create_book = build_capability_dependency(
+    Capability.CREATE_BOOK, family_context_dependency=resolve_family_context
+)
 
 
 def require_operations_token(
@@ -388,17 +436,33 @@ def capabilities(
 
     registration = AsrRegistration.UNKNOWN
     registered_at: datetime | None = None
-    try:
-        with Session(_readiness_engine(settings)) as session:
-            row = session.get(WorkerRegistrationRow, "kaggle-asr")
-        if row is None or row.status != "ready":
+
+    if settings.asr_provider is ASRProvider.KAGGLE:
+        # A tunnelled worker announces itself, so the registration row is the
+        # only evidence there is that a recogniser exists.
+        try:
+            with Session(_readiness_engine(settings)) as session:
+                row = session.get(WorkerRegistrationRow, "kaggle-asr")
+            if row is None or row.status != "ready":
+                registration = AsrRegistration.UNAVAILABLE
+            else:
+                registration = AsrRegistration.REGISTERED
+                registered_at = _aware_required(row.registered_at)
+        except Exception:
+            # The registration table could not be read; say so rather than guess.
+            registration = AsrRegistration.UNKNOWN
+    else:
+        # A hosted recogniser never writes a registration row. Reading one would
+        # report UNAVAILABLE forever and disable the record button on a
+        # deployment whose recogniser is working, so configuration is the
+        # evidence here. It proves a provider is configured, not that it is
+        # reachable -- which is exactly what REGISTERED has always meant.
+        try:
+            build_asr_client(settings)
+        except ASRConfigurationError:
             registration = AsrRegistration.UNAVAILABLE
         else:
             registration = AsrRegistration.REGISTERED
-            registered_at = _aware_required(row.registered_at)
-    except Exception:
-        # The registration table could not be read; say so rather than guess.
-        registration = AsrRegistration.UNKNOWN
 
     return derive_capabilities(
         asr_registration=registration,
@@ -505,6 +569,19 @@ def _bootstrap_settings() -> CoreSettings | None:
 
 def create_app(settings: CoreSettings | None = None) -> FastAPI:
     resolved = settings if settings is not None else _bootstrap_settings()
+    if resolved is not None:
+        configure_logging(
+            "mura-api",
+            environment=resolved.environment.value,
+            log_level=resolved.log_level,
+            log_format=resolved.log_format,
+        )
+        init_sentry(
+            "mura-api",
+            dsn=resolved.sentry_dsn,
+            environment=resolved.sentry_environment or resolved.environment.value,
+            traces_sample_rate=resolved.sentry_traces_sample_rate,
+        )
     docs_enabled = resolved.api_docs_enabled if resolved is not None else False
     allowed_origins = list(resolved.cors_allowed_origins) if resolved is not None else []
     allowed_hosts = list(resolved.allowed_hosts) if resolved is not None else []
@@ -525,9 +602,35 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     ) -> Response:
         request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
         request.state.request_id = request_id
-        response = await call_next(request)
-        response.headers[REQUEST_ID_HEADER] = request_id
-        return response
+        token = request_id_ctx.set(request_id)
+        start_time = time.perf_counter()
+        response: Response | None = None
+        try:
+            response = await call_next(request)
+            response.headers[REQUEST_ID_HEADER] = request_id
+            return response
+        finally:
+            duration_ms = max(0.0, round((time.perf_counter() - start_time) * 1000, 2))
+            route_obj = request.scope.get("route")
+            route_path = getattr(route_obj, "path", None) or request.url.path
+            status_code = response.status_code if response is not None else 500
+            is_probe = request.url.path in {"/health", "/ready"}
+
+            log_extra = {
+                "event": "http_request_completed",
+                "method": request.method,
+                "route": route_path,
+                "status_code": status_code,
+                "duration_ms": duration_ms,
+            }
+            if is_probe and status_code < 400:
+                logger.debug("http_request_completed", extra=log_extra)
+            else:
+                logger.info("http_request_completed", extra=log_extra)
+
+            request_id_ctx.reset(token)
+
+    application.add_middleware(SecurityHeadersMiddleware)
 
     if allowed_hosts:
         application.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
@@ -536,7 +639,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         application.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type", REQUEST_ID_HEADER],
             allow_credentials=False,
             expose_headers=[REQUEST_ID_HEADER],
@@ -558,6 +661,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         application,
         manage_members_dependency=require_manage_members,
         identity_repository_dependency=get_identity_repository,
+        get_runtime_dependency=get_runtime,
     )
     register_recording_routes(
         application,
@@ -567,6 +671,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         read_review_dependency=require_read_review,
         read_jobs_dependency=require_read_jobs,
         job_view_builder=_job_view,
+        delete_recording_dependency=require_manage_members,
     )
     register_conflict_routes(
         application,
@@ -588,6 +693,13 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         read_profiles_dependency=require_read_profiles,
         read_recordings_dependency=require_read_recordings,
         read_review_dependency=require_read_review,
+    )
+    register_book_routes(
+        application,
+        get_runtime_dependency=get_runtime,
+        read_books_dependency=require_read_books,
+        create_book_dependency=require_create_book,
+        delete_book_dependency=require_create_book,
     )
     # Service-internal and operator surfaces, registered here rather than behind
     # the conflict module so the credential each one requires is visible in one

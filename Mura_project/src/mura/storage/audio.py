@@ -12,15 +12,23 @@ is what keeps traversal and absolute-path injection impossible by construction.
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import re
 import shutil
+import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import BinaryIO, Protocol
+from typing import TYPE_CHECKING, BinaryIO, Protocol
+
+import requests
+
+if TYPE_CHECKING:
+    from mura.config import CoreSettings
 
 #: Read size for streaming. Audio is never loaded into memory whole.
 CHUNK_BYTES = 1024 * 1024
@@ -62,6 +70,7 @@ ALLOWED_CONTENT_TYPES = {
 
 class AudioStorageBackend(StrEnum):
     LOCAL = "local"
+    SUPABASE = "supabase"
 
 
 class AudioStorageError(ValueError):
@@ -317,3 +326,191 @@ def materialize_legacy_path(audio_path: str) -> Iterator[Path]:
 def copy_stream(source: BinaryIO, destination: BinaryIO) -> int:
     shutil.copyfileobj(source, destination, CHUNK_BYTES)
     return destination.tell()
+
+
+class SupabaseAudioStorage:
+    """Supabase Object Storage implementation for production deployment.
+
+    Audio is kept in a private bucket. Uploads and downloads speak to
+    Supabase's Storage REST API using the trusted backend service role key.
+    """
+
+    backend = AudioStorageBackend.SUPABASE
+
+    def __init__(
+        self,
+        *,
+        url: str,
+        service_role_key: str,
+        bucket: str = "mura-audio",
+        max_upload_bytes: int = 25 * 1024 * 1024,
+        timeout_seconds: float = 60.0,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.url = url.rstrip("/")
+        self.service_role_key = service_role_key
+        self.bucket = bucket
+        self.max_upload_bytes = max_upload_bytes
+        self.timeout_seconds = timeout_seconds
+        self.session = session or requests.Session()
+
+    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.service_role_key}",
+            "apikey": self.service_role_key,
+        }
+        if extra:
+            headers.update(extra)
+        return headers
+
+    def save(
+        self,
+        *,
+        family_id: str,
+        recording_id: str,
+        original_filename: str,
+        content_type: str | None,
+        source: BinaryIO,
+    ) -> StoredAudio:
+        extension = safe_extension(original_filename)
+        declared = validate_content_type(content_type)
+        storage_key = build_storage_key(
+            family_id=family_id,
+            recording_id=recording_id,
+            extension=extension,
+        )
+
+        buffer = io.BytesIO()
+        digest = hashlib.sha256()
+        total = 0
+        head = b""
+
+        while chunk := source.read(CHUNK_BYTES):
+            if not head:
+                head = chunk[:16]
+                validate_container(extension, head)
+            total += len(chunk)
+            if total > self.max_upload_bytes:
+                raise AudioTooLargeError(
+                    "audio exceeds maximum upload size of "
+                    f"{self.max_upload_bytes // (1024 * 1024)} MB"
+                )
+            digest.update(chunk)
+            buffer.write(chunk)
+
+        if not total:
+            raise UnsupportedAudioError("audio upload was empty")
+
+        buffer.seek(0)
+        upload_url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
+        headers = self._headers({
+            "Content-Type": declared,
+            "x-upsert": "true",
+        })
+
+        try:
+            response = self.session.post(
+                upload_url,
+                headers=headers,
+                data=buffer.getvalue(),
+                timeout=(10.0, self.timeout_seconds),
+            )
+        except Exception as exc:
+            raise AudioStorageError(f"failed to upload audio to Supabase Storage: {exc}") from exc
+
+        if response.status_code >= 400:
+            raise AudioStorageError(
+                f"Supabase Storage rejected upload with HTTP {response.status_code}: {response.text}"
+            )
+
+        return StoredAudio(
+            storage_key=storage_key,
+            backend=self.backend,
+            sha256=digest.hexdigest(),
+            size_bytes=total,
+            content_type=declared,
+        )
+
+    def exists(self, storage_key: str) -> bool:
+        url = f"{self.url}/storage/v1/object/authenticated/{self.bucket}/{storage_key}"
+        try:
+            response = self.session.get(
+                url,
+                headers=self._headers(),
+                stream=True,
+                timeout=(5.0, 10.0),
+            )
+            response.close()
+            return response.status_code == 200
+        except Exception:
+            return False
+
+    def delete(self, storage_key: str) -> bool:
+        url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
+        try:
+            response = self.session.delete(
+                url,
+                headers=self._headers(),
+                timeout=(5.0, 15.0),
+            )
+        except Exception as exc:
+            raise AudioStorageError(f"failed to delete audio from Supabase Storage: {exc}") from exc
+
+        if response.status_code in {200, 204}:
+            return True
+        if response.status_code == 404:
+            return False
+        return False
+
+    def open(self, storage_key: str) -> BinaryIO:
+        url = f"{self.url}/storage/v1/object/authenticated/{self.bucket}/{storage_key}"
+        try:
+            response = self.session.get(
+                url,
+                headers=self._headers(),
+                stream=True,
+                timeout=(10.0, self.timeout_seconds),
+            )
+        except Exception as exc:
+            raise AudioStorageError(f"failed to retrieve audio from Supabase Storage: {exc}") from exc
+
+        if response.status_code == 404:
+            raise FileNotFoundError(f"recording audio {storage_key} not found in Supabase Storage")
+        if response.status_code >= 400:
+            raise AudioStorageError(
+                f"Supabase Storage returned HTTP {response.status_code} for {storage_key}"
+            )
+
+        response.raw.decode_content = True
+        return response.raw
+
+    @contextmanager
+    def materialize(self, storage_key: str) -> Iterator[Path]:
+        extension = Path(storage_key).suffix or ".bin"
+        temp = tempfile.NamedTemporaryFile(suffix=extension, delete=False)
+        temp_path = Path(temp.name)
+        try:
+            stream = self.open(storage_key)
+            with temp:
+                shutil.copyfileobj(stream, temp, CHUNK_BYTES)
+            yield temp_path
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+
+def build_audio_storage(settings: CoreSettings) -> AudioStorage:
+    if settings.audio_storage_backend == AudioStorageBackend.LOCAL:
+        return LocalAudioStorage(
+            settings.audio_storage_dir,
+            max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
+        )
+    if settings.audio_storage_backend == AudioStorageBackend.SUPABASE:
+        return SupabaseAudioStorage(
+            url=settings.supabase_url or "",
+            service_role_key=settings.supabase_service_role_key or "",
+            bucket=settings.supabase_storage_bucket,
+            max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
+            timeout_seconds=settings.supabase_storage_timeout_seconds,
+        )
+    raise ValueError(f"unsupported audio storage backend: {settings.audio_storage_backend}")
+

@@ -140,6 +140,8 @@ export interface JobView {
   started_at: string | null;
   completed_at: string | null;
   updated_at: string;
+  /** Recognised text while the job is unfinished; absent before recognition. */
+  transcript_preview?: string | null;
 }
 
 // ----------------------------------------------------------------- language

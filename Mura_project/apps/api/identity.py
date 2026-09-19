@@ -151,11 +151,16 @@ class UpdateMemberRoleRequest(StrictModel):
     role: FamilyRole
 
 
+class DeleteFamilyRequest(StrictModel):
+    confirm_family_id: str
+
+
 def register_membership_admin_routes(
     app: FastAPI,
     *,
     manage_members_dependency: Callable[..., object],
     identity_repository_dependency: Callable[..., object],
+    get_runtime_dependency: Callable[..., object] | None = None,
 ) -> None:
     """Owner-only membership administration.
 
@@ -208,6 +213,58 @@ def register_membership_admin_routes(
         except SoleOwnerError as exc:
             raise sole_owner_error() from exc
 
+    @app.delete("/v1/families/{family_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_family(
+        family_id: str,
+        request: DeleteFamilyRequest,
+        context: object = Depends(manage_members_dependency),
+        repository: object = Depends(identity_repository_dependency),
+        runtime: object = Depends(get_runtime_dependency) if get_runtime_dependency else None,
+    ) -> None:
+        if request.confirm_family_id != family_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="confirmation family_id does not match",
+            )
+
+        authorized = cast(AuthorizedFamilyContext, context)
+        if authorized.role != FamilyRole.OWNER:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="insufficient_family_role",
+            )
+
+        identity = cast(IdentityRepository, repository)
+        if identity.count_owners(family_id) > 1:
+            raise sole_owner_error()
+
+        result = identity.delete_family(family_id)
+        if result is None:
+            raise _not_found()
+
+        audio_keys, book_keys = result
+        if runtime is not None:
+            storage = getattr(runtime, "storage", None)
+            if storage is not None:
+                for a_key in audio_keys:
+                    try:
+                        storage.delete(a_key)
+                    except Exception:
+                        pass
+            settings = getattr(runtime, "settings", None)
+            if settings is not None:
+                try:
+                    from mura.storage.book_artifacts import build_book_artifact_storage
+
+                    artifact_storage = build_book_artifact_storage(settings)
+                    for b_key in book_keys:
+                        try:
+                            artifact_storage.delete(storage_key=b_key)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
 
 def sole_owner_error() -> HTTPException:
     """A distinguishable code: the client must explain *why* the change failed.
@@ -222,10 +279,12 @@ def sole_owner_error() -> HTTPException:
 
 __all__ = [
     "CreateFamilyRequest",
+    "DeleteFamilyRequest",
     "FamilyView",
     "MemberView",
     "SoleOwnerError",
     "UserView",
     "register_identity_routes",
+    "register_membership_admin_routes",
     "sole_owner_error",
 ]

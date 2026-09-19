@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AppHeader } from "@/components/layout/app-header";
 import { READING_WIDTH } from "@/components/shell/page-container";
+import { RecordingPlayer } from "@/components/story/recording-player";
 import { TranscriptReader } from "@/components/story/transcript-reader";
 import { formatDuration } from "@/lib/format";
 import { useMuraI18n } from "@/lib/i18n";
@@ -14,6 +15,7 @@ import {
   useMemoryOwner,
   type SavedMemory,
 } from "@/lib/memory-store";
+import { awaitsCoreResult, reconcileMemory } from "@/lib/mura/reconcile-memory";
 
 export function LocalStoryView({ memoryId }: { memoryId: string }) {
   const { locale, t } = useMuraI18n();
@@ -32,6 +34,15 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
     if (!current) {
       setLoaded(true);
       return;
+    }
+    // Core may have finished this while the app was closed. Completion used to
+    // happen only on the processing screen, so leaving it stranded the entry on
+    // "no text yet" permanently even though the transcript existed.
+    if (awaitsCoreResult(current)) {
+      void reconcileMemory(current).then((updated) => {
+        if (!active || !updated) return;
+        setMemory(getSavedMemory(memoryId));
+      });
     }
     void getMemoryAudio(memoryId)
       .then((audio) => {
@@ -79,7 +90,7 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
         animate={{ opacity: 1, y: 0 }}
         className={`mx-auto w-full ${READING_WIDTH} px-5 pt-2 sm:px-6 lg:px-8`}
       >
-        <p className="text-caption font-semibold uppercase tracking-[0.18em] text-muted">
+        <p className="text-meta font-semibold tracking-[-0.005em] text-ink/70">
           {recordedAt}
         </p>
         <h1 className="mt-2 text-display font-bold leading-[1.1] tracking-[-0.03em]">
@@ -89,19 +100,27 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
           {formatDuration(memory.durationSec)}
         </p>
 
-        {audioUrl && (
+        {audioUrl ? (
           <div className="mt-7 rounded-panel bg-raised p-5 shadow-card">
             <audio className="w-full" controls preload="metadata" src={audioUrl}>
               <track kind="captions" />
             </audio>
           </div>
-        )}
+        ) : memory.familyId && memory.recordingId ? (
+          <div className="mt-7">
+            <RecordingPlayer
+              familyId={memory.familyId}
+              recordingId={memory.recordingId}
+              available={true}
+            />
+          </div>
+        ) : null}
 
         {/* «Кратко» — the pipeline's retelling. While the analysis is still
             running this stays a status line rather than showing the raw
             transcript as if it were a finished result. */}
-        <section className="mt-10 rounded-panel bg-clay/55 p-5">
-          <h2 className="text-caption font-semibold uppercase tracking-[0.18em] text-ink/60">
+        <section className="mt-10 rounded-panel bg-peach/55 p-5">
+          <h2 className="text-meta font-semibold tracking-[-0.005em] text-ink/70">
             {t("aiSummary")}
           </h2>
           {memory.summary ? (
@@ -110,7 +129,11 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
             </p>
           ) : (
             <p className="mt-3 text-body leading-relaxed text-ink/60">
-              {memory.status === "failed" ? t("analysisFailed") : t("analysisPending")}
+              {memory.status === "failed"
+                ? t("analysisFailed")
+                : memory.status === "completed" || memory.status === "needs_review"
+                  ? t("analysisNoStory")
+                  : t("analysisPending")}
             </p>
           )}
           {memory.status === "needs_review" && memory.summary && (
@@ -122,7 +145,7 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
 
         {memory.people.length > 0 && (
           <section className="mt-12">
-            <h2 className="text-caption font-semibold uppercase tracking-[0.18em] text-ink/60">
+            <h2 className="text-meta font-semibold tracking-[-0.005em] text-ink/70">
               {t("inThisMemory")}
             </h2>
             <ul className="mt-4 space-y-2.5">
@@ -164,7 +187,7 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
 
         {Boolean(memory.events?.length || memory.places?.length) && (
           <section className="mt-12">
-            <h2 className="text-caption font-semibold uppercase tracking-[0.18em] text-ink/60">
+            <h2 className="text-meta font-semibold tracking-[-0.005em] text-ink/70">
               {t("eventsAndPlaces")}
             </h2>
             <ul className="mt-4 space-y-2.5">
@@ -199,8 +222,26 @@ export function LocalStoryView({ memoryId }: { memoryId: string }) {
           </section>
         )}
 
+        {Boolean(memory.evidenceQuotes?.length) && (
+          <section className="mt-12">
+            <h2 className="text-meta font-semibold tracking-[-0.005em] text-ink/70">
+              {t("evidenceTitle")}
+            </h2>
+            <ul className="mt-4 space-y-3">
+              {memory.evidenceQuotes?.map((quote, index) => (
+                <li
+                  key={index}
+                  className="rounded-surface border-l-2 border-ink/30 bg-raised/70 py-3 pl-4 pr-4 italic text-reading leading-relaxed text-ink/80"
+                >
+                  «{quote}»
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <section className="mt-12">
-          <h2 className="text-caption font-semibold uppercase tracking-[0.18em] text-ink/60">
+          <h2 className="text-meta font-semibold tracking-[-0.005em] text-ink/70">
             {t("transcript")}
           </h2>
           <div className="mt-4">

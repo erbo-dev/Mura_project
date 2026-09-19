@@ -51,16 +51,28 @@ export interface UseLiveTranscriptOptions {
 }
 
 /**
- * Web Speech has no honest RU+KK mode. Explicit RU/KK may set a hint.
- * AUTO/MIXED disable this English-prone preview and rely on recorded audio
- * going through multilingual ASR for the authoritative transcript.
+ * Which language the browser recogniser previews in.
+ *
+ * Web Speech takes exactly one language and has no RU+KK mode, so a
+ * code-switched sentence cannot be previewed faithfully by it at all. That is a
+ * limit of this preview, not of MURA: the archive transcript comes from Whisper
+ * with no language pinned, and nothing shown here is ever sent to the server.
+ *
+ * AUTO previews in Russian rather than showing nothing. Russian is the majority
+ * language of these recordings and shares the Cyrillic script with Kazakh, so a
+ * speaker sees their words appear as they talk and Kazakh stretches come back
+ * approximate. Showing nothing at all was the worse failure: the screen sat
+ * silent while someone spoke into it, which reads as a microphone that is not
+ * working.
+ *
+ * The approximation is why the caption under the preview says plainly that the
+ * exact text arrives after processing.
  */
 export function liveRecognitionLanguageOptions(
   audioLanguage: AudioLanguage,
 ): readonly string[] {
-  if (audioLanguage === "ru") return ["ru-RU", "ru"];
-  if (audioLanguage === "kk") return ["kk-KZ", "kk"];
-  return [];
+  if (audioLanguage === "kk") return ["kk-KZ", "kk", "ru-RU"];
+  return ["ru-RU", "ru"];
 }
 
 /** Uses the browser speech recognizer only as a non-authoritative preview. */

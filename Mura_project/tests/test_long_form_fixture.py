@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from mura.domain.models import RawSegment, TranscriptEnvelope
-from mura.long_form import LongFormExtractionPlanner, LongFormMode
+from mura.long_form import LongFormExtractionPlanner, LongFormMode, LongFormPolicy
 
 
 def test_long_form_fixture_is_synthetic_complete_and_plannable() -> None:
@@ -19,7 +19,9 @@ def test_long_form_fixture_is_synthetic_complete_and_plannable() -> None:
         chunker_version="v1",
     )
 
-    plan = LongFormExtractionPlanner().plan(transcript)
+    # The fixture exists to exercise windowing, so it is planned against the
+    # segment threshold it was built for rather than the production default.
+    plan = LongFormExtractionPlanner(LongFormPolicy(segment_count_threshold=12)).plan(transcript)
 
     assert payload["privacy"] == "synthetic"
     assert len(transcript.segments) == 18

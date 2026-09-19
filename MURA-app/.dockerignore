@@ -1,0 +1,24 @@
+node_modules/
+.next/
+.git/
+.gitignore
+.dev-auth/
+.env*.local
+!.env.example
+
+# Test configurations and mocks
+vitest.config.ts
+**/*.test.ts
+**/*.test.tsx
+docs/
+README.md
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+

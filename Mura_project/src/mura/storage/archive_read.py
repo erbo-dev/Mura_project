@@ -34,10 +34,11 @@ from mura.domain.models import ClaimObjectType, StrictModel
 from mura.storage.archive import (
     ArchiveClaimRow,
     ArchiveConflictRow,
+    ArchiveCorrectionRow,
     ArchivePersonRow,
     FamilyGraphEdgeRow,
 )
-from mura.storage.database import Database, RecordingRow
+from mura.storage.database import Database, PipelineResultRow, RecordingRow
 
 #: Claims whose object never appears in the product as a first-class thing.
 STORY_PREDICATE = "story"
@@ -129,6 +130,8 @@ class StoryDetailView(StrictModel):
     #: True only when canonical audio is genuinely retrievable for this
     #: recording. The UI must not offer a player on the strength of a guess.
     audio_available: bool = False
+    evidence_quotes: list[str] = Field(default_factory=list)
+    transcript: str | None = None
 
 
 class EventView(StrictModel):
@@ -177,6 +180,23 @@ class Page(StrictModel):
 class StoryPageView(StrictModel):
     page: Page
     items: list[StorySummaryView] = Field(default_factory=list)
+
+
+class GroundingBundle(StrictModel):
+    """The raw, authorized grounding material loaded for one family book."""
+
+    family_id: str
+    recordings: list[dict[str, Any]] = Field(default_factory=list)
+    pipeline_payloads: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    people: list[dict[str, Any]] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(default_factory=list)
+    stories: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    corrections: list[dict[str, Any]] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    unresolved_questions: list[dict[str, Any]] = Field(default_factory=list)
+    resolved_mentions: dict[str, str] = Field(default_factory=dict)
 
 
 class ArchiveResourceNotFound(LookupError):
@@ -405,6 +425,24 @@ class ArchiveReadRepository:
             if recording is None or recording.family_id != family_id:
                 raise ArchiveResourceNotFound(story_id)
 
+            # Evidence grounding: the narrator's exact words backing the story.
+            pipeline_row = session.get(PipelineResultRow, claim.recording_id)
+            evidence_quotes: list[str] = []
+            clean_transcript: str | None = None
+            if pipeline_row is not None and isinstance(pipeline_row.payload, dict):
+                extraction = pipeline_row.payload.get("extraction", {})
+                if isinstance(extraction, dict):
+                    for span in extraction.get("evidence_spans", []):
+                        if isinstance(span, dict):
+                            text = span.get("text")
+                            if isinstance(text, str) and text.strip():
+                                evidence_quotes.append(text.strip())
+                cleaned = pipeline_row.payload.get("cleaned_transcript", {})
+                if isinstance(cleaned, dict):
+                    readable = cleaned.get("full_readable_text")
+                    if isinstance(readable, str) and readable.strip():
+                        clean_transcript = readable.strip()
+
             payload = claim.payload if isinstance(claim.payload, dict) else {}
             person_ids = _story_person_ids(
                 claim,
@@ -456,6 +494,8 @@ class ArchiveReadRepository:
                 # A storage key is the only proof the bytes exist; a legacy row
                 # with only an audio_path is not offered for playback.
                 audio_available=bool(recording.storage_key),
+                evidence_quotes=evidence_quotes,
+                transcript=clean_transcript,
             )
 
     def _recordings_for(
@@ -654,6 +694,241 @@ class ArchiveReadRepository:
             recent_stories=stories.items,
         )
 
+    # ---------------------------------------------------- grounding bundle
+
+    def grounding_bundle(
+        self,
+        *,
+        family_id: str,
+        recording_ids: list[str] | None = None,
+        max_recordings: int = 100,
+    ) -> GroundingBundle:
+        with self._database.session_factory() as session:
+            return self._grounding_bundle_in_session(
+                session,
+                family_id=family_id,
+                recording_ids=recording_ids,
+                max_recordings=max_recordings,
+            )
+
+    def _grounding_bundle_in_session(
+        self,
+        session: Session,
+        *,
+        family_id: str,
+        recording_ids: list[str] | None = None,
+        max_recordings: int = 100,
+    ) -> GroundingBundle:
+        from mura.storage.book import get_eligible_recordings
+
+        eligible = get_eligible_recordings(
+            session,
+            family_id=family_id,
+            recording_ids=recording_ids,
+        )
+        if recording_ids is not None:
+            found_ids = {r.recording_id for r in eligible}
+            missing = [rid for rid in recording_ids if rid not in found_ids]
+            if missing:
+                raise ArchiveResourceNotFound(
+                    f"recording {missing[0]} not found or not eligible"
+                )
+
+        if max_recordings and len(eligible) > max_recordings:
+            eligible = eligible[:max_recordings]
+
+        rec_ids = [r.recording_id for r in eligible]
+        if not rec_ids:
+            return GroundingBundle(
+                family_id=family_id,
+                recordings=[],
+                pipeline_payloads={},
+                people=[],
+                relationships=[],
+                stories=[],
+                events=[],
+                claims=[],
+                corrections=[],
+                conflicts=[],
+                unresolved_questions=[],
+                resolved_mentions={},
+            )
+
+        pipeline_rows = list(
+            session.scalars(
+                select(PipelineResultRow).where(
+                    PipelineResultRow.recording_id.in_(rec_ids)
+                )
+            )
+        )
+        pipeline_payloads = {
+            row.recording_id: (row.payload if isinstance(row.payload, dict) else {})
+            for row in pipeline_rows
+        }
+
+        claims = list(
+            session.scalars(
+                select(ArchiveClaimRow).where(
+                    ArchiveClaimRow.family_id == family_id,
+                    ArchiveClaimRow.recording_id.in_(rec_ids),
+                    ArchiveClaimRow.status == "active",
+                ).order_by(ArchiveClaimRow.created_at.asc(), ArchiveClaimRow.claim_id)
+            )
+        )
+
+        resolved_tuples = resolve_mentions(
+            session,
+            family_id=family_id,
+            recording_ids=set(rec_ids),
+        )
+        resolved_mentions = {
+            f"{r_id}:{m_id}": pid for (r_id, m_id), pid in resolved_tuples.items()
+        }
+
+        stories: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        questions: list[dict[str, Any]] = []
+        general_claims: list[dict[str, Any]] = []
+
+        for c in claims:
+            c_dict = {
+                "claim_id": c.claim_id,
+                "family_id": c.family_id,
+                "recording_id": c.recording_id,
+                "object_type": c.object_type,
+                "source_object_id": c.source_object_id,
+                "predicate": c.predicate,
+                "subject_person_id": c.subject_person_id,
+                "object_person_id": c.object_person_id,
+                "payload": c.payload if isinstance(c.payload, dict) else {},
+                "evidence_ids": list(c.evidence_ids or []),
+                "evidence_class": c.evidence_class,
+                "assertion_mode": c.assertion_mode,
+                "verification_status": c.verification_status,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            if c.object_type == ClaimObjectType.STORY.value:
+                stories.append(c_dict)
+            elif c.object_type == ClaimObjectType.EVENT.value:
+                events.append(c_dict)
+            elif c.object_type == ClaimObjectType.QUESTION.value:
+                questions.append(c_dict)
+            else:
+                general_claims.append(c_dict)
+
+        people_rows = list(
+            session.scalars(
+                select(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id)
+            )
+        )
+        people = [
+            {
+                "person_id": p.person_id,
+                "family_id": p.family_id,
+                "canonical_name": p.canonical_name,
+                "normalized_name": p.normalized_name,
+                "aliases": list(p.aliases or []),
+                "verified_aliases": list(p.verified_aliases or []),
+                "category": p.category,
+                "relations_to_speakers": (
+                    p.relations_to_speakers
+                    if isinstance(p.relations_to_speakers, dict)
+                    else {}
+                ),
+                "source_recording_ids": list(p.source_recording_ids or []),
+            }
+            for p in people_rows
+        ]
+
+        edge_rows = list(
+            session.scalars(
+                select(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == family_id)
+            )
+        )
+        relationships = [
+            {
+                "edge_id": e.edge_id,
+                "family_id": e.family_id,
+                "relationship_type": e.relationship_type,
+                "subject_person_id": e.subject_person_id,
+                "subject_role": e.subject_role,
+                "object_person_id": e.object_person_id,
+                "object_role": e.object_role,
+                "source_claim_ids": list(e.source_claim_ids or []),
+            }
+            for e in edge_rows
+        ]
+
+        correction_rows = list(
+            session.scalars(
+                select(ArchiveCorrectionRow).where(
+                    ArchiveCorrectionRow.family_id == family_id,
+                    ArchiveCorrectionRow.recording_id.in_(rec_ids),
+                )
+            )
+        )
+        corrections = [
+            {
+                "correction_id": cor.correction_id,
+                "family_id": cor.family_id,
+                "recording_id": cor.recording_id,
+                "kind": cor.kind,
+                "subject": cor.subject,
+                "original_value": cor.original_value,
+                "corrected_value": cor.corrected_value,
+                "explanation": cor.explanation,
+                "confidence": cor.confidence,
+            }
+            for cor in correction_rows
+        ]
+
+        conflict_rows = list(
+            session.scalars(
+                select(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id)
+            )
+        )
+        conflicts = [
+            {
+                "conflict_id": conf.conflict_id,
+                "family_id": conf.family_id,
+                "conflict_type": conf.conflict_type,
+                "status": conf.status,
+                "detected_by": conf.detected_by,
+                "claim_ids": list(conf.claim_ids or []),
+                "preferred_claim_id": conf.preferred_claim_id,
+                "rationale": conf.rationale,
+                "resolution_note": conf.resolution_note,
+            }
+            for conf in conflict_rows
+        ]
+
+        recordings_dict = [
+            {
+                "recording_id": r.recording_id,
+                "family_id": r.family_id,
+                "speaker_name": r.speaker_name,
+                "speaker_id": r.speaker_id,
+                "detected_language": getattr(r, "detected_language", None),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in eligible
+        ]
+
+        return GroundingBundle(
+            family_id=family_id,
+            recordings=recordings_dict,
+            pipeline_payloads=pipeline_payloads,
+            people=people,
+            relationships=relationships,
+            stories=stories,
+            events=events,
+            claims=general_claims,
+            corrections=corrections,
+            conflicts=conflicts,
+            unresolved_questions=questions,
+            resolved_mentions=resolved_mentions,
+        )
+
 
 def _clean(value: Any) -> str | None:
     if not isinstance(value, str):
@@ -740,3 +1015,34 @@ def _story_person_ids(
 
 
 StoryDetailView.model_rebuild()
+
+
+def grounding_bundle(
+    source: Database | ArchiveReadRepository | Session,
+    *,
+    family_id: str,
+    recording_ids: list[str] | None = None,
+    max_recordings: int = 100,
+) -> GroundingBundle:
+    """Load authorized grounding material from Database, ArchiveReadRepository, or Session."""
+    if isinstance(source, ArchiveReadRepository):
+        return source.grounding_bundle(
+            family_id=family_id,
+            recording_ids=recording_ids,
+            max_recordings=max_recordings,
+        )
+    if isinstance(source, Database):
+        return ArchiveReadRepository(source).grounding_bundle(
+            family_id=family_id,
+            recording_ids=recording_ids,
+            max_recordings=max_recordings,
+        )
+    if isinstance(source, Session):
+        repo = ArchiveReadRepository.__new__(ArchiveReadRepository)
+        return repo._grounding_bundle_in_session(
+            source,
+            family_id=family_id,
+            recording_ids=recording_ids,
+            max_recordings=max_recordings,
+        )
+    raise TypeError(f"unsupported source for grounding_bundle: {type(source)}")

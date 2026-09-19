@@ -1,0 +1,80 @@
+# ==============================================================================
+# Stage 1: Build virtual environment with all production dependencies
+# ==============================================================================
+FROM python:3.11-slim AS builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+
+# Native build libraries for WeasyPrint and C extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpango-1.0-0 \
+    libharfbuzz0b \
+    libpangoft2-1.0-0 \
+    libjpeg62-turbo \
+    libopenjp2-7 \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --upgrade pip hatchling
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY apps ./apps
+COPY services ./services
+COPY migrations ./migrations
+COPY alembic.ini ./
+
+RUN pip install .
+RUN pip install ".[books]"
+
+# ==============================================================================
+# Stage 2: Standalone production runtime for MURA Worker
+# ==============================================================================
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Native runtime shared libraries for WeasyPrint (Pango, HarfBuzz, fontconfig)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpango-1.0-0 \
+    libharfbuzz0b \
+    libpangoft2-1.0-0 \
+    libjpeg62-turbo \
+    libopenjp2-7 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy compiled virtualenv from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy source tree and Alembic migrations
+COPY src ./src
+COPY apps ./apps
+COPY services ./services
+COPY migrations ./migrations
+COPY alembic.ini pyproject.toml README.md ./
+
+# Create non-root system user and storage directories
+RUN groupadd -g 10001 mura && \
+    useradd -u 10001 -g mura -d /app -s /bin/bash mura && \
+    mkdir -p /app/data/audio /app/.mura/audio && \
+    mkdir -p /app/data/audio /app/.mura/audio /app/data/books /app/.mura/books && \
+    chown -R mura:mura /app
+
+USER mura
+
+# Run standalone worker process (entrypoint: apps.worker.main:main)
+CMD ["mura-worker"]
+

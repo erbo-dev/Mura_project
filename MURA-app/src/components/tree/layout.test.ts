@@ -148,3 +148,66 @@ describe("island captions tell the truth about connection", () => {
     expect(other?.connectedToCentre).toBe(false);
   });
 });
+
+/**
+ * The state every new archive starts in: people have been named in recordings
+ * but nobody has said yet how they are related.
+ */
+describe("people with no recorded relationships", () => {
+  const PEOPLE = ["Айгуль", "Асан", "Гүлнара", "Бибігүл", "Марат", "Болат"].map(
+    (name, index) => person(`p${index}`, name),
+  );
+  const relations = buildFamilyRelations(PEOPLE, []);
+
+  it("gathers them into one block instead of one branch each", () => {
+    // Drawn as separate islands they became a column of single cards down an
+    // otherwise empty canvas, each captioned "a separate branch" — which reads
+    // as several broken branches rather than people nobody has placed yet.
+    const islands = computeIslands(relations, "p0", 0);
+
+    expect(islands).toHaveLength(1);
+    expect(islands[0].members).toHaveLength(5);
+    expect(islands[0].unlinked).toBe(true);
+  });
+
+  it("spreads them across the canvas rather than stacking one per row", () => {
+    const islands = computeIslands(relations, "p0", 0);
+    const xs = new Set(islands[0].nodes.map((node) => node.x));
+
+    // The bug was every node landing on x = 0.
+    expect(xs.size).toBeGreaterThan(1);
+  });
+
+  it("wraps instead of running off the side", () => {
+    const many = Array.from({ length: 9 }, (_, index) => person(`q${index}`, `Имя ${index}`));
+    const islands = computeIslands(buildFamilyRelations(many, []), "q0", 0);
+    const rows = new Set(islands[0].nodes.map((node) => node.y));
+
+    expect(rows.size).toBeGreaterThan(1);
+  });
+
+  it("uses fewer columns when asked, so a phone keeps cards readable", () => {
+    const islands = computeIslands(relations, "p0", 0, 2);
+    const xs = new Set(islands[0].nodes.map((node) => node.x));
+    expect(xs.size).toBe(2);
+  });
+
+  it("draws no edges between them", () => {
+    // Nobody here is related to anybody. A line would assert otherwise.
+    const islands = computeIslands(relations, "p0", 0);
+    expect(islands[0].edges).toHaveLength(0);
+  });
+
+  it("still separates a real branch from the unlinked block", () => {
+    // Бибігүл and Сабыр are married to each other and unrelated to the centre:
+    // they are a genuine branch and must keep their own caption.
+    const withPair = buildFamilyRelations(
+      [...PEOPLE, person("s0", "Сабыр")],
+      [edge("e1", "spouse", "p3", "s0")],
+    );
+    const islands = computeIslands(withPair, "p0", 0);
+
+    expect(islands.some((island) => island.unlinked === true)).toBe(true);
+    expect(islands.some((island) => !island.unlinked && island.members.length === 2)).toBe(true);
+  });
+});

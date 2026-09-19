@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, HelpCircle, Scale, Trees } from "lucide-react";
+import { BookOpen, ChevronRight, HelpCircle, Scale, Trees } from "lucide-react";
 import Link from "next/link";
 import { useMuraI18n, type TranslationKey } from "@/lib/i18n";
 import { pluralForm } from "@/lib/plural";
@@ -34,6 +34,12 @@ export function ArchiveDoorways({ overview }: { overview: ArchiveOverview }) {
         icon={Trees}
         title={t("homeOpenTree")}
         detail={count(overview.people_count, "homePeople")}
+      />
+      <Doorway
+        href="/books"
+        icon={BookOpen}
+        title={t("homeOpenBooks")}
+        detail={t("booksSubtitle")}
       />
       {overview.review_count > 0 && (
         <Doorway

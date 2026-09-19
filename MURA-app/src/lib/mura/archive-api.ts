@@ -81,6 +81,8 @@ export interface ArchiveStoryDetail {
   source: ArchiveSource;
   /** Only true when Core can genuinely serve the recording. */
   audio_available: boolean;
+  evidence_quotes: string[];
+  transcript: string | null;
 }
 
 export interface ArchiveReviewItem {

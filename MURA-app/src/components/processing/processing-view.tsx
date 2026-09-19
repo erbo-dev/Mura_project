@@ -4,17 +4,21 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MascotStage } from "@/components/mascot/mascot-stage";
+import { TranscriptPreview } from "@/components/processing/transcript-preview";
 import { useMascot } from "@/hooks/use-mascot";
 import {
-  completeMemoryFromCore,
   getSavedMemory,
+  previewMemoryTranscriptFromCore,
   updateMemory,
   type SavedMemory,
 } from "@/lib/memory-store";
-import { fetchJob, fetchRecordingResult } from "@/lib/mura/core-api";
-import { isPresentable, readAnalysis } from "@/lib/mura/pipeline-result";
+import { CoreRequestError, fetchJob, fetchRecordingResult } from "@/lib/mura/core-api";
+import { applyCoreResult } from "@/lib/mura/reconcile-memory";
 import { readWorkflow } from "@/lib/mura/recording-workflow";
 import {
+  CONNECTION_LOST_AFTER_FAILURES,
+  nextPollDelayMs,
+  pollErrorDisposition,
   retryCountdownSeconds,
   stateFromJob,
   type PipelineState,
@@ -40,7 +44,7 @@ function NameChip({ name, delay }: { name: string; delay: number }) {
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={{ delay, type: "spring", stiffness: 300, damping: 22 }}
     >
-      <span className="flex size-7 items-center justify-center rounded-full bg-clay text-caption font-bold">
+      <span className="flex size-7 items-center justify-center rounded-full bg-peach text-caption font-bold">
         {initials}
       </span>
       <span className="text-meta font-semibold">{name}</span>
@@ -65,6 +69,12 @@ export function ProcessingView() {
   const [memory, setMemory] = useState<SavedMemory | null>(null);
   const [step, setStep] = useState(0);
   const [failed, setFailed] = useState(false);
+  // Neither of these is a verdict on the recording. The server still has it
+  // and keeps processing; the screen has only lost the ability to watch.
+  const [connectionLost, setConnectionLost] = useState(false);
+  // The recognised text, from the moment Core has it. See TranscriptPreview.
+  const [preview, setPreview] = useState<string | null>(null);
+  const [sessionLost, setSessionLost] = useState(false);
   // `degraded` is the state the screen was missing. A job the backend deferred
   // because ASR is unreachable reports `queued`, which looked exactly like
   // "your turn is coming" — so the mascot thought forever while the tunnel was
@@ -150,8 +160,10 @@ export function ProcessingView() {
     if (!jobId || !recordingId || !memoryId || !recordingFamilyId) return;
     let cancelled = false;
     // A holder rather than a bare binding: `stop` closes over it, and the
-    // interval it clears is created after `stop` is defined.
+    // timer it clears is created after `stop` is defined.
     const handle: { id?: number } = {};
+    let failures = 0;
+    let previewSaved = false;
 
     /**
      * Stop polling for good.
@@ -164,13 +176,23 @@ export function ProcessingView() {
      */
     const stop = () => {
       cancelled = true;
-      if (handle.id !== undefined) window.clearInterval(handle.id);
+      if (handle.id !== undefined) window.clearTimeout(handle.id);
     };
 
     const poll = async () => {
       try {
         const job = await fetchJob(jobId, recordingFamilyId);
         if (cancelled) return;
+        failures = 0;
+        setConnectionLost(false);
+        if (job.transcript_preview && !previewSaved) {
+          previewSaved = true;
+          setPreview(job.transcript_preview);
+          // Written to the local entry too, so a speaker who closes the app now
+          // still finds their words in the archive instead of an empty page.
+          // The finished result overwrites it when extraction completes.
+          previewMemoryTranscriptFromCore(memoryId, job.transcript_preview);
+        }
         const next = stateFromJob(job);
         setPipelineState(next);
         setRetryIn(retryCountdownSeconds(job));
@@ -192,54 +214,38 @@ export function ProcessingView() {
             // written when the recording stopped. Previously this response was
             // stashed in sessionStorage and never read, so «Кратко» kept
             // showing the raw transcript.
-            const analysis = readAnalysis(coreResult);
-            if (isPresentable(analysis)) {
-              completeMemoryFromCore(memoryId, {
-                title: analysis.title ?? undefined,
-                summary: analysis.summary ?? undefined,
-                transcript: analysis.rawTranscript ?? "",
-                cleanTranscript: analysis.cleanTranscript ?? undefined,
-                audio_language: analysis.languageContext.requested_audio_language,
-                detected_audio_language:
-                  analysis.languageContext.detected_audio_language,
-                transcript_language:
-                  analysis.languageContext.transcript_language,
-                output_language: analysis.languageContext.requested_output_language,
-                people: analysis.people.map((person) => ({
-                  name: person.name,
-                  relationship: person.relationToSpeaker ?? "",
-                  personId: person.personId ?? undefined,
-                  isNew: person.isNew,
-                })),
-                events: analysis.events.map((event) => ({
-                  title: event.title,
-                  description: event.description,
-                  dateText: event.dateText,
-                  location: event.location,
-                })),
-                places: analysis.places.map((place) => place.name),
-                status: analysis.needsReview ? "needs_review" : "completed",
-                analyzed: true,
-              });
-            }
+            applyCoreResult(memoryId, coreResult);
             resultHref.current = `/story/${encodeURIComponent(memoryId)}`;
             setAnalysisDone(true);
           }
         }
-      } catch {
+      } catch (error) {
         if (cancelled) return;
-        // A request that failed is not a job that failed, but this screen has
-        // no retry budget to spend, so it reports the failure and stops rather
-        // than hammering an endpoint that just refused it.
-        stop();
-        setFailed(true);
+        // A request that failed is not a job that failed. Declaring the
+        // recording failed here stopped the screen for good on a single
+        // refused poll — a 404 while a deployment swapped over — while Core
+        // finished the recording minutes later. Only `status: "failed"` from
+        // Core means failed.
+        const status = error instanceof CoreRequestError ? error.status : null;
+        if (pollErrorDisposition(status) === "session") {
+          stop();
+          setSessionLost(true);
+          return;
+        }
+        failures += 1;
+        if (failures >= CONNECTION_LOST_AFTER_FAILURES) setConnectionLost(true);
       }
     };
-    // Interval first, then the immediate poll: `stop()` can only clear a timer
-    // that already exists, and starting the timer after an awaiting poll would
-    // leave a stopped job with a live interval nobody cancels.
-    handle.id = window.setInterval(poll, 1500);
-    void poll();
+
+    // Each poll schedules the next only after it settles, so a slow response
+    // can never overlap the following request, and the delay can back off
+    // while the server is unreachable.
+    const tick = async () => {
+      await poll();
+      if (cancelled) return;
+      handle.id = window.setTimeout(tick, nextPollDelayMs(failures));
+    };
+    void tick();
     return stop;
   }, [jobId, memoryId, recordingFamilyId, recordingId, router]);
 
@@ -276,7 +282,11 @@ export function ProcessingView() {
       animate={{ opacity: leaving ? 0 : 1 }}
       transition={{ duration: leaving ? 0.34 : 0.2, ease: EASE }}
     >
-      <MascotStage state={mascot.state} size={268} className="mb-2" />
+      {/* She steps back once there is something more important to look at:
+          the speaker's own words. */}
+      <motion.div layout transition={{ duration: 0.45, ease: EASE }}>
+        <MascotStage state={mascot.state} size={preview ? 132 : 268} className="mb-2" />
+      </motion.div>
 
       <AnimatePresence mode="wait">
         <motion.h1
@@ -291,13 +301,21 @@ export function ProcessingView() {
         </motion.h1>
       </AnimatePresence>
 
-      <div className="relative mt-9 flex min-h-[168px] w-[280px] flex-col items-center">
+      {preview && !failed && <TranscriptPreview text={preview} />}
+
+      <div
+        className={
+          preview
+            ? "relative mt-6 flex w-[280px] flex-col items-center"
+            : "relative mt-9 flex min-h-[168px] w-[280px] flex-col items-center"
+        }
+      >
         <motion.span
           className="flex max-w-[260px] items-center gap-2.5 rounded-full bg-raised py-2 pl-3 pr-4 shadow-soft"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
         >
-          <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-clay" />
+          <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-peach" />
           <span className="truncate text-meta font-semibold">
             {memory?.title ?? t("newMemory")}
           </span>
@@ -348,7 +366,7 @@ export function ProcessingView() {
               <button
                 type="button"
                 onClick={() => router.push("/record?mode=transcript")}
-                className="rounded-full bg-clay px-4 py-2 text-meta font-semibold"
+                className="rounded-full bg-peach px-4 py-2 text-meta font-semibold"
               >
                 {t("openTranscriptFallback")}
               </button>
@@ -372,13 +390,30 @@ export function ProcessingView() {
           <button
             type="button"
             onClick={restartRecording}
-            className="mt-4 rounded-full bg-clay px-5 py-2.5 text-meta font-semibold shadow-soft"
+            className="mt-4 rounded-full bg-peach px-5 py-2.5 text-meta font-semibold shadow-soft"
           >
             {t("restart")}
           </button>
         </div>
       )}
-      {!degraded && !failed && (
+      {!degraded && !failed && (sessionLost || connectionLost) && (
+        <div
+          role="status"
+          className="absolute inset-x-6 bottom-[max(env(safe-area-inset-bottom),28px)] flex flex-col items-center"
+        >
+          <p className="max-w-measure text-center text-meta leading-relaxed text-muted">
+            {t(sessionLost ? "processingSessionLost" : "processingConnectionLost")}
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push(sessionLost ? "/sign-in" : "/home")}
+            className="mt-4 rounded-full bg-sand px-5 py-2.5 text-meta font-semibold text-ink/80"
+          >
+            {t(sessionLost ? "processingSignInAgain" : "processingGoToArchive")}
+          </button>
+        </div>
+      )}
+      {!degraded && !failed && !sessionLost && !connectionLost && (
         <p className="absolute bottom-[max(env(safe-area-inset-bottom),32px)] text-meta text-muted">
           {t("processingSafe")}
         </p>

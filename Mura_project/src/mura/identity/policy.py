@@ -24,9 +24,11 @@ class Capability(StrEnum):
     READ_PROFILES = "read_profiles"
     READ_CONFLICTS = "read_conflicts"
     READ_MEMBERS = "read_members"
+    READ_BOOKS = "read_books"
 
     CREATE_RECORDING = "create_recording"
     RESOLVE_CONFLICTS = "resolve_conflicts"
+    CREATE_BOOK = "create_book"
 
     UPDATE_FAMILY = "update_family"
     MANAGE_MEMBERS = "manage_members"
@@ -41,6 +43,7 @@ _VIEWER: frozenset[Capability] = frozenset(
         Capability.READ_PROFILES,
         Capability.READ_CONFLICTS,
         Capability.READ_MEMBERS,
+        Capability.READ_BOOKS,
     }
 )
 
@@ -48,6 +51,7 @@ _VIEWER: frozenset[Capability] = frozenset(
 _EDITOR: frozenset[Capability] = _VIEWER | {
     Capability.CREATE_RECORDING,
     Capability.RESOLVE_CONFLICTS,
+    Capability.CREATE_BOOK,
 }
 
 #: An owner adds governance: family metadata and membership.

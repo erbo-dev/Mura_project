@@ -16,6 +16,18 @@ _SQLITE_SCHEME_PREFIX = "sqlite"
 _ALLOWED_ORIGIN_SCHEMES = frozenset({"http", "https"})
 
 
+class ASRProvider(StrEnum):
+    """Which recogniser the worker talks to.
+
+    Chosen in exactly one place (`mura.asr.factory`). Nothing else may branch on
+    it: a cutover that leaves one forgotten branch calling the retired provider
+    is how a migration turns into a hunt through the codebase.
+    """
+
+    KAGGLE = "kaggle"
+    WHISPER = "whisper"
+
+
 class Environment(StrEnum):
     """Deployment environment. Production-like environments fail closed on unsafe settings."""
 
@@ -86,6 +98,12 @@ class CoreSettings(BaseSettings):
     #: token must not be able to activate a release or apply retention.
     operations_api_key: str = Field(alias="OPERATIONS_API_KEY", min_length=32)
     kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
+    asr_provider: ASRProvider = Field(default=ASRProvider.KAGGLE, alias="ASR_PROVIDER")
+    whisper_api_key: str | None = Field(default=None, alias="WHISPER_API_KEY")
+    whisper_base_url: str = Field(
+        default="https://api.openai.com/v1", alias="WHISPER_BASE_URL"
+    )
+    whisper_model: str = Field(default="whisper-1", alias="WHISPER_MODEL")
     database_url: str = Field(alias="DATABASE_URL", min_length=1)
     database_auto_create: bool = Field(default=False, alias="DATABASE_AUTO_CREATE")
     audio_storage_backend: AudioStorageBackend = Field(
@@ -93,6 +111,19 @@ class CoreSettings(BaseSettings):
         alias="AUDIO_STORAGE_BACKEND",
     )
     audio_storage_dir: Path = Field(default=Path(".mura/audio"), alias="AUDIO_STORAGE_DIR")
+    supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
+    supabase_service_role_key: str | None = Field(
+        default=None, alias="SUPABASE_SERVICE_ROLE_KEY"
+    )
+    supabase_storage_bucket: str = Field(
+        default="mura-audio", alias="SUPABASE_STORAGE_BUCKET"
+    )
+    supabase_books_bucket: str = Field(
+        default="mura-books", alias="SUPABASE_BOOKS_BUCKET"
+    )
+    supabase_storage_timeout_seconds: float = Field(
+        default=60.0, alias="SUPABASE_STORAGE_TIMEOUT_SECONDS", ge=1.0, le=600.0
+    )
     core_max_upload_mb: int = Field(default=25, alias="CORE_MAX_UPLOAD_MB", ge=1, le=200)
     job_poll_interval_seconds: float = Field(
         default=1.0,
@@ -125,6 +156,54 @@ class CoreSettings(BaseSettings):
         alias="ASR_REQUEST_TIMEOUT_SECONDS",
         ge=30,
         le=3600,
+    )
+
+    book_storage_dir: Path = Field(default=Path(".mura/books"), alias="BOOK_STORAGE_DIR")
+    book_job_lease_seconds: float = Field(
+        default=600.0,
+        alias="BOOK_JOB_LEASE_SECONDS",
+        ge=30,
+        le=3600,
+    )
+    book_job_heartbeat_seconds: float = Field(
+        default=60.0,
+        alias="BOOK_JOB_HEARTBEAT_SECONDS",
+        ge=5,
+        le=300,
+    )
+    book_job_poll_interval_seconds: float = Field(
+        default=2.0,
+        alias="BOOK_JOB_POLL_INTERVAL_SECONDS",
+        ge=0.5,
+        le=60,
+    )
+    book_retry_base_seconds: float = Field(
+        default=5.0,
+        alias="BOOK_RETRY_BASE_SECONDS",
+        ge=1.0,
+        le=60.0,
+    )
+    book_retry_max_seconds: float = Field(
+        default=300.0,
+        alias="BOOK_RETRY_MAX_SECONDS",
+        ge=10.0,
+        le=3600.0,
+    )
+    book_max_active_per_family: int = Field(
+        default=1,
+        alias="BOOK_MAX_ACTIVE_PER_FAMILY",
+        ge=1,
+        le=10,
+    )
+    book_max_created_per_family_per_day: int = Field(
+        default=3,
+        alias="BOOK_MAX_CREATED_PER_FAMILY_PER_DAY",
+        ge=1,
+        le=100,
+    )
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["*"],
+        alias="ALLOWED_HOSTS",
     )
 
     auth_mode: AuthMode = Field(default=AuthMode.DISABLED, alias="AUTH_MODE")
@@ -170,6 +249,13 @@ class CoreSettings(BaseSettings):
         ge=1,
         le=600,
     )
+    sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+    sentry_environment: str | None = Field(default=None, alias="SENTRY_ENVIRONMENT")
+    sentry_traces_sample_rate: float = Field(
+        default=0.05, alias="SENTRY_TRACES_SAMPLE_RATE", ge=0.0, le=1.0
+    )
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_format: str = Field(default="auto", alias="LOG_FORMAT")
 
     @field_validator(
         "cors_allowed_origins", "allowed_hosts", "auth_allowed_algorithms", mode="before"
@@ -230,6 +316,15 @@ class CoreSettings(BaseSettings):
                 "JOB_LEASE_SECONDS must allow at least three heartbeats "
                 "so a transient database blip does not lose the lease"
             )
+        if self.book_job_heartbeat_seconds >= self.book_job_lease_seconds:
+            raise ValueError(
+                "BOOK_JOB_HEARTBEAT_SECONDS must be shorter than BOOK_JOB_LEASE_SECONDS"
+            )
+        if self.book_job_lease_seconds < 3 * self.book_job_heartbeat_seconds:
+            raise ValueError(
+                "BOOK_JOB_LEASE_SECONDS must allow at least three heartbeats "
+                "so a transient database blip does not lose the lease"
+            )
         return self
 
     @model_validator(mode="after")
@@ -255,6 +350,37 @@ class CoreSettings(BaseSettings):
                 "AUDIO_STORAGE_DIR must be an absolute path outside staging and "
                 "production working directories"
             )
+        if self.audio_storage_backend == AudioStorageBackend.SUPABASE:
+            missing = [
+                name
+                for name, val in (
+                    ("SUPABASE_URL", self.supabase_url),
+                    ("SUPABASE_SERVICE_ROLE_KEY", self.supabase_service_role_key),
+                )
+                if not val
+            ]
+            if missing:
+                raise ValueError(f"{', '.join(missing)} required when AUDIO_STORAGE_BACKEND is supabase")
+            if not self.supabase_storage_bucket:
+                raise ValueError("SUPABASE_STORAGE_BUCKET must not be empty")
+            if not self.supabase_books_bucket:
+                raise ValueError("SUPABASE_BOOKS_BUCKET must not be empty")
+        elif self.audio_storage_backend == AudioStorageBackend.LOCAL:
+            if production_like and not _is_rooted_path(self.audio_storage_dir):
+                raise ValueError(
+                    "AUDIO_STORAGE_DIR must be an absolute path outside staging and "
+                    "production working directories"
+                )
+        if production_like and not _is_rooted_path(self.book_storage_dir):
+            raise ValueError(
+                "BOOK_STORAGE_DIR must be an absolute path outside staging and "
+                "production working directories"
+            )
+            if production_like and not _is_rooted_path(self.book_storage_dir):
+                raise ValueError(
+                    "BOOK_STORAGE_DIR must be an absolute path outside staging and "
+                    "production working directories"
+                )
         if production_like and not self.cors_allowed_origins:
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must list at least one origin in staging and production"
@@ -279,6 +405,12 @@ class WorkerSettings(BaseSettings):
     #: token must not be able to activate a release or apply retention.
     operations_api_key: str = Field(alias="OPERATIONS_API_KEY", min_length=32)
     kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
+    asr_provider: ASRProvider = Field(default=ASRProvider.KAGGLE, alias="ASR_PROVIDER")
+    whisper_api_key: str | None = Field(default=None, alias="WHISPER_API_KEY")
+    whisper_base_url: str = Field(
+        default="https://api.openai.com/v1", alias="WHISPER_BASE_URL"
+    )
+    whisper_model: str = Field(default="whisper-1", alias="WHISPER_MODEL")
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
     asr_device: str = Field(default="cuda:0", alias="ASR_DEVICE")
     max_upload_mb: int = Field(default=25, alias="MAX_UPLOAD_MB", ge=1, le=200)

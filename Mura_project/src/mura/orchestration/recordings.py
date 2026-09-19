@@ -5,6 +5,7 @@ import threading
 import time
 
 from mura.asr import ASRClientError, RemoteASRClient
+from mura.asr.whisper import WhisperASRClient
 from mura.domain.models import (
     AudioLanguage,
     OutputLanguage,
@@ -13,8 +14,11 @@ from mura.domain.models import (
 )
 from mura.jobs import JobStatus
 from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
+from mura.logging import WorkerJobContextManager
 from mura.observability import ProcessingTrace, TraceOutcome
 from mura.pipeline import MuraPipeline
+from mura.sentry import capture_exception
+from mura.storage.ai_usage import AIUsageLedger
 from mura.storage.archive import ArchiveRepository
 from mura.storage.audio import AudioStorage
 from mura.storage.completion import (
@@ -23,7 +27,7 @@ from mura.storage.completion import (
     finalize_recording_job,
 )
 from mura.storage.conflict_resolution import ConflictResolutionService
-from mura.storage.database import ProcessingJobRow, RecordingRepository
+from mura.storage.database import ProcessingJobRow, RecordingRepository, RecordingRow
 from mura.storage.generic_claims import persist_generic_claims
 from mura.storage.recording_audio import materialize_recording_audio
 
@@ -36,13 +40,14 @@ class RecordingJobWorker:
         *,
         repository: RecordingRepository,
         pipeline: MuraPipeline,
-        asr_client: RemoteASRClient,
+        asr_client: RemoteASRClient | WhisperASRClient,
         storage: AudioStorage | None = None,
         poll_interval_seconds: float = 1.0,
         asr_retry_seconds: float = 15.0,
         lease_seconds: float = 300.0,
         heartbeat_seconds: float = 60.0,
         worker_id: str | None = None,
+        ai_ledger: AIUsageLedger | None = None,
     ) -> None:
         self.repository = repository
         self.archive_repository = ArchiveRepository(repository.database)
@@ -57,8 +62,35 @@ class RecordingJobWorker:
         self.heartbeat_seconds = heartbeat_seconds
         #: Operational identity only. Never a user, never exposed publicly.
         self.worker_id = worker_id or new_worker_id()
+        self.ai_ledger = ai_ledger or AIUsageLedger(repository.database)
+        if hasattr(self.asr_client, "on_usage") and getattr(self.asr_client, "on_usage") is None:
+            self.asr_client.on_usage = self._record_asr_usage
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _record_asr_usage(
+        self,
+        *,
+        provider: str,
+        model: str,
+        operation: str,
+        latency_ms: int,
+        success: bool,
+        audio_seconds: float | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        try:
+            self.ai_ledger.record_usage(
+                provider=provider,
+                model=model,
+                operation=operation,
+                latency_ms=latency_ms,
+                success=success,
+                audio_seconds=audio_seconds,
+                error_code=error_code,
+            )
+        except Exception as exc:
+            logger.warning("failed to record asr usage event: %s", exc)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -133,45 +165,101 @@ class RecordingJobWorker:
             )
             return
 
+        attempt = job.attempts + 1
+        with WorkerJobContextManager(
+            job_id=job.job_id,
+            recording_id=recording.recording_id,
+            family_id=recording.family_id,
+            attempt=attempt,
+            worker_id=self.worker_id,
+        ):
+            self._execute_job_attempt(job, recording, attempt)
+
+    def _execute_job_attempt(
+        self,
+        job: ProcessingJobRow,
+        recording: RecordingRow,
+        attempt: int,
+    ) -> None:
+        logger.info(
+            "job_claimed",
+            extra={
+                "event": "job_claimed",
+                "job_id": job.job_id,
+                "recording_id": recording.recording_id,
+                "family_id": recording.family_id,
+                "attempt": attempt,
+                "worker_id": self.worker_id,
+            },
+        )
         trace = ProcessingTrace(
             job_id=job.job_id,
             recording_id=recording.recording_id,
             family_id=recording.family_id,
-            attempt=job.attempts + 1,
+            attempt=attempt,
         )
         trace.instant(
             stage="job",
             event_name="job_claimed",
-            attributes={"attempt": job.attempts + 1},
+            attributes={"attempt": attempt},
         )
 
-        worker = self.repository.current_worker()
-        if worker is None or worker.status != "ready":
-            trace.instant(
-                stage="asr_transcription",
-                event_name="worker_unavailable",
-                outcome=TraceOutcome.DEFERRED,
-                attributes={"error_code": "asr_worker_unavailable"},
-            )
-            defer_recording_job(
-                self.repository.database,
-                job_id=job.job_id,
-                error_code="asr_worker_unavailable",
-                error_detail="no ready ASR worker is registered",
-                retry_after_seconds=self.asr_retry_seconds,
-                trace_events=trace.events,
-                lease_owner=self.worker_id,
-            )
-            return
+        # Only a tunnelled recogniser has to announce itself first. A hosted
+        # one is reached directly, and deferring its jobs to wait for a
+        # `worker_registrations` row that will never be written would park every
+        # recording forever while the recogniser sat there working.
+        worker_url: str | None = None
+        # Defaults to True: a client that does not declare itself gets the
+        # conservative path and waits, rather than silently skipping the gate.
+        if getattr(self.asr_client, "requires_registered_worker", True):
+            worker = self.repository.current_worker()
+            if worker is None or worker.status != "ready":
+                trace.instant(
+                    stage="asr_transcription",
+                    event_name="worker_unavailable",
+                    outcome=TraceOutcome.DEFERRED,
+                    attributes={"error_code": "asr_worker_unavailable"},
+                )
+                logger.info(
+                    "job_retry_scheduled",
+                    extra={
+                        "event": "job_retry_scheduled",
+                        "error_code": "asr_worker_unavailable",
+                        "retry_after_seconds": self.asr_retry_seconds,
+                    },
+                )
+                defer_recording_job(
+                    self.repository.database,
+                    job_id=job.job_id,
+                    error_code="asr_worker_unavailable",
+                    error_detail="no ready ASR worker is registered",
+                    retry_after_seconds=self.asr_retry_seconds,
+                    trace_events=trace.events,
+                    lease_owner=self.worker_id,
+                )
+                return
+            worker_url = worker.url
 
+        logger.info("job_started", extra={"event": "job_started", "attempt": attempt})
         trace.start("asr_transcription")
         try:
             with materialize_recording_audio(recording, self.storage) as audio_file:
+                # Only an explicit choice travels to the recogniser. "auto"
+                # and "mixed" pass nothing, so code-switched speech still
+                # reaches an unpinned decoder.
+                declared = recording.audio_language
                 transcript = self.asr_client.transcribe(
-                    worker_url=worker.url,
+                    worker_url=worker_url,
                     audio_path=audio_file,
                     recording_id=recording.recording_id,
                     content_type=recording.content_type,
+                    **(
+                        {"declared_language": declared}
+                        if declared in {"ru", "kk"}
+                        and hasattr(self.asr_client, "requires_registered_worker")
+                        and not self.asr_client.requires_registered_worker
+                        else {}
+                    ),
                 )
         except ASRClientError as exc:
             outcome = TraceOutcome.DEFERRED if exc.retryable else TraceOutcome.ERROR
@@ -184,6 +272,14 @@ class RecordingJobWorker:
                 },
             )
             if exc.retryable:
+                logger.info(
+                    "job_retry_scheduled",
+                    extra={
+                        "event": "job_retry_scheduled",
+                        "error_code": "asr_temporarily_unavailable",
+                        "retry_after_seconds": self.asr_retry_seconds,
+                    },
+                )
                 defer_recording_job(
                     self.repository.database,
                     job_id=job.job_id,
@@ -196,6 +292,23 @@ class RecordingJobWorker:
                     lease_owner=self.worker_id,
                 )
             else:
+                logger.error(
+                    "job_failed",
+                    exc_info=exc,
+                    extra={
+                        "event": "job_failed",
+                        "error_code": "asr_failed",
+                    },
+                )
+                capture_exception(
+                    exc,
+                    tags={"error_code": "asr_failed"},
+                    extra={
+                        "job_id": job.job_id,
+                        "recording_id": recording.recording_id,
+                        "attempt": attempt,
+                    },
+                )
                 fail_recording_job(
                     self.repository.database,
                     job_id=job.job_id,
@@ -214,6 +327,19 @@ class RecordingJobWorker:
                 "duration_seconds": transcript.duration_seconds,
             },
         )
+
+        # Recognition takes seconds and extraction most of a minute. Publishing
+        # the text now lets the speaker read their own words while people,
+        # events and stories are still being found. A failure here costs only
+        # that early view, so it must never stop the recording being processed.
+        try:
+            self.repository.save_transcript_preview(
+                job.job_id, transcript.full_text, lease_owner=self.worker_id
+            )
+        except LeaseOwnershipLost:
+            raise
+        except Exception:
+            logger.warning("transcript preview not saved job_id=%s", job.job_id)
 
         status_by_stage = {
             "cleaning": JobStatus.CLEANING,
@@ -309,7 +435,31 @@ class RecordingJobWorker:
                     trace_events=trace.events,
                     lease_owner=self.worker_id,
                 )
-        except Exception:
+                logger.info(
+                    "job_completed",
+                    extra={
+                        "event": "job_completed",
+                        "attempt": attempt,
+                    },
+                )
+        except Exception as exc:
+            logger.error(
+                "job_failed",
+                exc_info=exc,
+                extra={
+                    "event": "job_failed",
+                    "error_code": "pipeline_failed",
+                },
+            )
+            capture_exception(
+                exc,
+                tags={"error_code": "pipeline_failed"},
+                extra={
+                    "job_id": job.job_id,
+                    "recording_id": recording.recording_id,
+                    "attempt": attempt,
+                },
+            )
             trace.fail_active_stages(error_code="pipeline_failed")
             trace.instant(
                 stage="job",

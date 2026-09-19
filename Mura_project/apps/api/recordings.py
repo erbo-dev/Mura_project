@@ -27,6 +27,7 @@ from mura.domain.models import (
     build_language_context,
 )
 from mura.jobs import (
+    JobStatus,
     JobView,
     RecordingAccepted,
     RecordingResultView,
@@ -60,6 +61,10 @@ class RecordingRepositoryProtocol(Protocol):
     def get_family_pipeline_result(
         self, *, family_id: str, recording_id: str
     ) -> PipelineResult | None: ...
+
+    def delete_family_recording(
+        self, *, family_id: str, recording_id: str
+    ) -> RecordingRow | None: ...
 
     def create_recording_and_job(self, **kwargs: Any) -> None: ...
 
@@ -130,6 +135,7 @@ def register_recording_routes(
     read_review_dependency: Callable[..., object],
     read_jobs_dependency: Callable[..., object],
     job_view_builder: Callable[[ProcessingJobRow], JobView],
+    delete_recording_dependency: Callable[..., object] | None = None,
 ) -> None:
     """Each route names the capability it needs; none accepts a service token."""
 
@@ -245,6 +251,43 @@ def register_recording_routes(
             result=result,
         )
 
+    @app.delete(
+        "/v1/families/{family_id}/recordings/{recording_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(delete_recording_dependency or create_recording_dependency)],
+    )
+    def delete_family_recording(
+        family_id: str,
+        recording_id: str,
+        runtime: object = Depends(get_runtime_dependency),
+    ) -> None:
+        repository = _repository(runtime)
+        recording = repository.get_family_recording(
+            family_id=family_id,
+            recording_id=recording_id,
+        )
+        if recording is None:
+            raise _not_found()
+
+        deleted = repository.delete_family_recording(
+            family_id=family_id,
+            recording_id=recording_id,
+        )
+        if deleted is None:
+            raise _not_found()
+
+        storage: AudioStorage = cast(RecordingRuntime, runtime).storage
+        if deleted.storage_key:
+            try:
+                storage.delete(deleted.storage_key)
+            except Exception:
+                pass
+        elif deleted.audio_path:
+            try:
+                storage.delete(deleted.audio_path)
+            except Exception:
+                pass
+
     @app.get(
         "/v1/families/{family_id}/recordings/{recording_id}/review-items",
         response_model=ReviewItemsView,
@@ -303,10 +346,23 @@ def register_recording_routes(
         job_id: str,
         runtime: object = Depends(get_runtime_dependency),
     ) -> JobView:
-        job = _repository(runtime).get_family_job(
+        repository = _repository(runtime)
+        job = repository.get_family_job(
             family_id=family_id,
             job_id=job_id,
         )
         if job is None:
             raise _not_found()
-        return job_view_builder(job)
+        view = job_view_builder(job)
+        if view.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+            return view
+        # The status poll carries the recognised text so a speaker can read it
+        # while extraction runs. This route asks for READ_JOBS, and the text is
+        # recording content: it is safe only because every role holding
+        # READ_JOBS also holds READ_RECORDINGS, which a policy test enforces.
+        recording = repository.get_family_recording(
+            family_id=family_id,
+            recording_id=job.recording_id,
+        )
+        preview = recording.transcript_preview if recording is not None else None
+        return view.model_copy(update={"transcript_preview": preview}) if preview else view

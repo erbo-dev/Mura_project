@@ -10,8 +10,17 @@ from fastapi.testclient import TestClient
 
 from apps.api.main import CoreRuntime, create_app, get_settings
 from apps.worker.main import build_worker, install_signal_handlers, main
+from apps.worker.main import (
+    WorkerSupervisor,
+    build_book_worker,
+    build_worker,
+    build_worker_supervisor,
+    install_signal_handlers,
+    main,
+)
 from mura.config import CoreSettings
 from mura.orchestration import RecordingJobWorker
+from mura.orchestration.books import BookJobWorker
 
 CORE_TOKEN = "c" * 40
 
@@ -154,3 +163,85 @@ def test_worker_refuses_to_start_without_configuration(
 class _raising_settings:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise ValueError("CORE_API_KEY too short: leaky-secret-value")
+
+
+def test_build_book_worker_lease_and_heartbeat_settings() -> None:
+    worker = build_book_worker(
+        _settings(
+            BOOK_JOB_LEASE_SECONDS=300,
+            BOOK_JOB_HEARTBEAT_SECONDS=60,
+            BOOK_JOB_POLL_INTERVAL_SECONDS=1.5,
+        )
+    )
+    assert isinstance(worker, BookJobWorker)
+    assert worker.lease_seconds == 300
+    assert worker.heartbeat_seconds == 60
+    assert worker.poll_interval_seconds == 1.5
+    assert worker.worker_id.startswith("worker_")
+
+
+def test_build_worker_supervisor_constructs_both_workers() -> None:
+    supervisor = build_worker_supervisor(_settings())
+    assert isinstance(supervisor, WorkerSupervisor)
+    assert isinstance(supervisor.recording_worker, RecordingJobWorker)
+    assert isinstance(supervisor.book_worker, BookJobWorker)
+    assert supervisor.recording_worker.worker_id != supervisor.book_worker.worker_id
+    assert supervisor.recording_worker.repository.database is supervisor.book_worker.db
+
+
+def test_supervisor_request_stop_stops_both_workers() -> None:
+    supervisor = build_worker_supervisor(_settings())
+    assert not supervisor.recording_worker._stop_event.is_set()
+    assert not supervisor.book_worker._stop_event.is_set()
+
+    supervisor.request_stop()
+
+    assert supervisor.recording_worker._stop_event.is_set()
+    assert supervisor.book_worker._stop_event.is_set()
+
+
+def test_supervisor_runs_both_workers_concurrently_and_stops_on_request() -> None:
+    supervisor = build_worker_supervisor(_settings())
+    rec_polled = threading.Event()
+    book_polled = threading.Event()
+
+    def rec_process_once() -> bool:
+        rec_polled.set()
+        return False
+
+    def book_process_once() -> bool:
+        book_polled.set()
+        return False
+
+    supervisor.recording_worker.process_once = rec_process_once  # type: ignore[method-assign]
+    supervisor.book_worker.process_once = book_process_once  # type: ignore[method-assign]
+
+    thread = threading.Thread(target=supervisor.run_forever, daemon=True)
+    thread.start()
+
+    assert rec_polled.wait(timeout=5)
+    assert book_polled.wait(timeout=5)
+
+    supervisor.request_stop()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+def test_supervisor_propagates_exception_and_stops_sibling() -> None:
+    supervisor = build_worker_supervisor(_settings())
+
+    def rec_crash() -> None:
+        raise RuntimeError("simulated recording worker crash")
+
+    def book_hang() -> None:
+        while not supervisor.book_worker._stop_event.is_set():
+            supervisor.book_worker._stop_event.wait(0.1)
+
+    supervisor.recording_worker.run_forever = rec_crash  # type: ignore[method-assign]
+    supervisor.book_worker.run_forever = book_hang  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="simulated recording worker crash"):
+        supervisor.run_forever()
+
+    assert supervisor.book_worker._stop_event.is_set()
+

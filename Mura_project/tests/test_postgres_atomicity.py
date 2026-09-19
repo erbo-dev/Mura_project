@@ -94,7 +94,15 @@ def test_postgres_migration_and_atomic_completion(tmp_path: Path) -> None:
         content_type="audio/wav",
         audio_path=audio_path,
     )
-    assert repository.claim_next_job(lease_owner="worker_test", lease_seconds=300) is not None
+    claimed = None
+    for _ in range(50):
+        c = repository.claim_next_job(lease_owner="worker_test", lease_seconds=300)
+        if c is not None and c.job_id == job_id:
+            claimed = c
+            break
+        if c is None:
+            break
+    assert claimed is not None and claimed.job_id == job_id
 
     trace = ProcessingTrace(
         job_id=job_id,

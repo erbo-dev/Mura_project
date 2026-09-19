@@ -19,6 +19,7 @@ OPERATOR_ROUTES = [
     ("post", "/v1/operations/release/rollback"),
     ("get", "/v1/operations/retention"),
     ("post", "/v1/operations/retention/apply"),
+    ("get", "/v1/operations/monitoring/summary"),
 ]
 
 

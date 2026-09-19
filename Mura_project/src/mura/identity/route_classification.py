@@ -53,6 +53,16 @@ ROUTE_AUTH_CLASSES: dict[str, AuthClass] = {
     "/v1/families/{family_id}/conflicts/{conflict_id}/resolve": AuthClass.USER_APP,
     "/v1/families/{family_id}/conflicts/{conflict_id}/dismiss": AuthClass.USER_APP,
     "/v1/families/{family_id}/conflicts/{conflict_id}/reopen": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/sources": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}/status": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}/chapters": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}/chapters/{chapter_number}": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}/download": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}/cancel": AuthClass.USER_APP,
+    "/v1/families/{family_id}/books/{book_id}/regenerate": AuthClass.USER_APP,
+    "/v1/families/{family_id}/privacy/export": AuthClass.USER_APP,
     # Deterministic replay is release/evaluation tooling reached only by the
     # smoke gate and evaluation tests. Family membership must not grant it.
     "/v1/families/{family_id}/replays": AuthClass.SERVICE_INTERNAL,
@@ -65,6 +75,7 @@ ROUTE_AUTH_CLASSES: dict[str, AuthClass] = {
     "/v1/operations/release/rollback": AuthClass.OPERATIONS,
     "/v1/operations/retention": AuthClass.OPERATIONS,
     "/v1/operations/retention/apply": AuthClass.OPERATIONS,
+    "/v1/operations/monitoring/summary": AuthClass.OPERATIONS,
     "/v1/workers/register": AuthClass.WORKER,
     "/v1/workers/current": AuthClass.WORKER,
 }
@@ -106,6 +117,16 @@ PRINCIPAL_NATIVE: frozenset[str] = frozenset(
         "/v1/families/{family_id}/conflicts/{conflict_id}/resolve",
         "/v1/families/{family_id}/conflicts/{conflict_id}/dismiss",
         "/v1/families/{family_id}/conflicts/{conflict_id}/reopen",
+        "/v1/families/{family_id}/books",
+        "/v1/families/{family_id}/books/sources",
+        "/v1/families/{family_id}/books/{book_id}",
+        "/v1/families/{family_id}/books/{book_id}/status",
+        "/v1/families/{family_id}/books/{book_id}/chapters",
+        "/v1/families/{family_id}/books/{book_id}/chapters/{chapter_number}",
+        "/v1/families/{family_id}/books/{book_id}/download",
+        "/v1/families/{family_id}/books/{book_id}/cancel",
+        "/v1/families/{family_id}/books/{book_id}/regenerate",
+        "/v1/families/{family_id}/privacy/export",
     }
 )
 
@@ -134,6 +155,16 @@ CAPABILITY_BY_ROUTE: dict[str, str] = {
     "/v1/families/{family_id}/conflicts/{conflict_id}/resolve": "resolve_conflicts",
     "/v1/families/{family_id}/conflicts/{conflict_id}/dismiss": "resolve_conflicts",
     "/v1/families/{family_id}/conflicts/{conflict_id}/reopen": "resolve_conflicts",
+    "/v1/families/{family_id}/books": "create_book",
+    "/v1/families/{family_id}/books/sources": "read_books",
+    "/v1/families/{family_id}/books/{book_id}": "read_books",
+    "/v1/families/{family_id}/books/{book_id}/status": "read_books",
+    "/v1/families/{family_id}/books/{book_id}/chapters": "read_books",
+    "/v1/families/{family_id}/books/{book_id}/chapters/{chapter_number}": "read_books",
+    "/v1/families/{family_id}/books/{book_id}/download": "read_books",
+    "/v1/families/{family_id}/books/{book_id}/cancel": "create_book",
+    "/v1/families/{family_id}/books/{book_id}/regenerate": "create_book",
+    "/v1/families/{family_id}/privacy/export": "read_family",
 }
 
 

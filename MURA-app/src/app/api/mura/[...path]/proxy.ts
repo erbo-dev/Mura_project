@@ -23,6 +23,8 @@ const USER = "user_[a-f0-9]{32}";
 const RECORDING = "rec_[a-f0-9]{32}";
 const JOB = "job_[a-f0-9]{32}";
 const PERSON = "person_[a-f0-9]{32}";
+const BOOK = "book_[a-f0-9]{32}";
+const CHAPTER_NUM = "[0-9]{1,3}";
 /** Story and conflict ids are extraction-minted, so their shape is looser. */
 const STORY = "[A-Za-z0-9_-]{1,128}";
 const CONFLICT = "[A-Za-z0-9_-]{1,128}";
@@ -75,6 +77,30 @@ const ALLOWED: ReadonlyArray<{ method: Method; pattern: RegExp }> = [
   {
     method: "POST",
     pattern: new RegExp(`^v1/families/${FAMILY}/conflicts/${CONFLICT}/reopen$`),
+  },
+
+  // Phase 2.1 Family Book endpoints
+  { method: "POST", pattern: new RegExp(`^v1/families/${FAMILY}/books$`) },
+  { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}/books/sources$`) },
+  { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}/books$`) },
+  { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}$`) },
+  { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/status$`) },
+  { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/chapters$`) },
+  {
+    method: "GET",
+    pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/chapters/${CHAPTER_NUM}$`),
+  },
+  {
+    method: "GET",
+    pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/download$`),
+  },
+  {
+    method: "POST",
+    pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/cancel$`),
+  },
+  {
+    method: "POST",
+    pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/regenerate$`),
   },
 ];
 

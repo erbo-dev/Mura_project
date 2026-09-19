@@ -8,6 +8,7 @@ import { FamilyGate } from "@/components/family/family-gate";
 import { AppHeader } from "@/components/layout/app-header";
 import { READING_WIDTH } from "@/components/shell/page-container";
 import { RecordingPlayer } from "@/components/story/recording-player";
+import { TranscriptReader } from "@/components/story/transcript-reader";
 import { PersonAvatar } from "@/components/ui/person-avatar";
 import { useMuraI18n } from "@/lib/i18n";
 import { fetchArchiveStory, type ArchiveDate, type ArchiveStoryDetail } from "@/lib/mura/archive-api";
@@ -67,7 +68,7 @@ function StoryContent({ storyId }: { storyId: string }) {
           >
             <motion.p
               variants={item}
-              className="text-caption font-semibold uppercase tracking-[0.2em] text-muted"
+              className="text-meta font-semibold tracking-[-0.005em] text-ink/70"
             >
               {new Date(data.recorded_at).toLocaleDateString(dateLocale)}
             </motion.p>
@@ -149,6 +150,31 @@ function StoryContent({ storyId }: { storyId: string }) {
               </motion.section>
             )}
 
+            {Boolean(data.evidence_quotes?.length) && (
+              <motion.section variants={item} className="mt-10">
+                <SectionLabel>{t("evidenceTitle")}</SectionLabel>
+                <ul className="space-y-3">
+                  {data.evidence_quotes.map((quote, index) => (
+                    <li
+                      key={index}
+                      className="rounded-surface border-l-2 border-ink/30 bg-raised/70 py-3 pl-4 pr-4 italic text-reading leading-relaxed text-ink/80"
+                    >
+                      «{quote}»
+                    </li>
+                  ))}
+                </ul>
+              </motion.section>
+            )}
+
+            {data.transcript && (
+              <motion.section variants={item} className="mt-10">
+                <SectionLabel>{t("transcript")}</SectionLabel>
+                <div className="mt-3">
+                  <TranscriptReader paragraphs={[data.transcript]} />
+                </div>
+              </motion.section>
+            )}
+
             {/* Provenance in human terms. The evidence machinery -- classes,
                 assertion modes, confidences -- stays on the server; what a
                 family member needs is which recording this came from. */}
@@ -170,7 +196,7 @@ function StoryContent({ storyId }: { storyId: string }) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="mb-3 text-caption font-semibold uppercase tracking-[0.18em] text-muted">
+    <h2 className="mb-3 text-meta font-semibold tracking-[-0.005em] text-ink/70">
       {children}
     </h2>
   );

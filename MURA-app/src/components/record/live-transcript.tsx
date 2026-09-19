@@ -60,7 +60,7 @@ function Word({
   const className = cn(
     wordClass,
     wordTint,
-    highlight && toneBg.clay,
+    highlight && toneBg.peach,
     // The negative inline-start margin cancels the lead-in padding, so the
     // highlighted line still aligns with the paragraphs above it.
     highlight && first && "rounded-s-[0.3em] ps-[0.14em] -ms-[0.14em]",
@@ -138,7 +138,12 @@ export function LiveTranscript({
       : supported === false
         ? t("liveTextUnavailable")
         : recognitionError
-          ? t("speechRecognitionError")
+          ? // A browser without this language is a limit of the preview, not a
+            // failure of the recording. Saying "speech could not be recognised"
+            // reads as "your memory is not being captured", which is false.
+            recognitionError === "language-not-supported"
+            ? t("liveLanguageUnsupported")
+            : t("speechRecognitionError")
           : t("listening");
 
   return (
@@ -193,6 +198,23 @@ export function LiveTranscript({
             </p>
           );
         })}
+
+        {/*
+          Said once the first words land, and never while the screen is empty:
+          the preview is a different recogniser from the one that writes the
+          archive, and a speaker watching approximate Kazakh appear deserves to
+          know the exact text is still coming rather than assume this is it.
+        */}
+        {sentences.length > 0 && (
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4, delay: 0.2, ease: [0.23, 1, 0.32, 1] }}
+            className="mt-6 max-w-measure text-meta leading-relaxed text-muted"
+          >
+            {t("livePreviewNote")}
+          </motion.p>
+        )}
       </div>
     </div>
   );

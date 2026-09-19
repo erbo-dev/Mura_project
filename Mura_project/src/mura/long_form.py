@@ -11,7 +11,7 @@ from pydantic import Field, model_validator
 
 from mura.domain.models import RawSegment, StrictModel, TranscriptEnvelope
 
-PLANNER_VERSION = "long-form-planner-v1"
+PLANNER_VERSION = "long-form-planner-v2"
 WINDOW_POLICY_VERSION = "long-form-window-policy-v1"
 
 
@@ -25,7 +25,14 @@ class LongFormPolicy(StrictModel):
 
     planner_version: str = PLANNER_VERSION
     window_policy_version: str = WINDOW_POLICY_VERSION
-    segment_count_threshold: int = Field(default=12, ge=2)
+    #: Segment count is only a proxy for length, and a recogniser-dependent one.
+    #: At 12 it was tuned to coarse segmentation; Groq's whisper-large-v3 splits
+    #: speech roughly every five seconds, so an ordinary one-minute story of 150
+    #: tokens crossed it and was sent down the single-pass window path, which
+    #: yields people but no events or stories. The token thresholds below are
+    #: the real budget guards and are unchanged; this one now only catches
+    #: recordings the token counts would also call long.
+    segment_count_threshold: int = Field(default=40, ge=2)
     normalized_token_threshold: int = Field(default=1_200, ge=128)
     estimated_input_token_threshold: int = Field(default=6_000, ge=128)
     maximum_segment_tokens: int = Field(default=480, ge=64)

@@ -93,6 +93,8 @@ export interface MemoryAnalysis {
   places: MemoryPlace[];
   /** Open questions the pipeline could not settle on its own. */
   reviewQuestions: string[];
+  /** Verbatim evidence quotes backing the extracted claims. */
+  evidenceQuotes?: string[];
   needsReview: boolean;
   durationSec: number | null;
   /** Canonical Core language state. Never overwritten by a client heuristic. */
@@ -295,6 +297,9 @@ export function readAnalysis(payload: unknown): MemoryAnalysis {
   const questions = arr(extraction.unresolved_questions)
     .map((raw) => str(obj(raw).question))
     .filter((question): question is string => question !== null);
+  const evidenceQuotes: string[] = arr(extraction.evidence_spans)
+    .map((raw) => str(obj(raw).text))
+    .filter((text): text is string => text !== null);
 
   const duration = result.transcript ? Number(transcript.duration_seconds) : NaN;
 
@@ -308,6 +313,7 @@ export function readAnalysis(payload: unknown): MemoryAnalysis {
     events,
     places,
     reviewQuestions: questions,
+    evidenceQuotes,
     needsReview:
       questions.length > 0 ||
       people.some((person) => person.needsReview) ||

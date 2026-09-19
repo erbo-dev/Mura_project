@@ -8,7 +8,9 @@ from mura.storage.audio import (
     AudioStorageError,
     AudioTooLargeError,
     LocalAudioStorage,
+    SupabaseAudioStorage,
     UnsupportedAudioError,
+    build_audio_storage,
 )
 
 __all__ = [
@@ -18,5 +20,8 @@ __all__ = [
     "AudioTooLargeError",
     "LocalAudioStorage",
     "RecordingJobWorker",
+    "SupabaseAudioStorage",
     "UnsupportedAudioError",
+    "build_audio_storage",
 ]
+

@@ -471,6 +471,33 @@ def _validate_claim_uncertainty(
         raise ContractValidationError(f"{object_name} uncertainty is auto-materializable")
 
 
+#: Personal pronouns in every case form, in the languages MURA records.
+#:
+#: The extractor sometimes lists a pronoun as a person: «поехали к ней летом»
+#: produced a person called «ней», and «Она пекла баурсаки» one called «Она».
+#: Those then became canonical people in the family tree beside the real ones.
+#: A pronoun refers to someone; it never names them, so a mention whose entire
+#: name is one is rejected. Coreference still uses these words to link mentions.
+_PERSONAL_PRONOUNS = frozenset(
+    (
+        # Russian
+        "я меня мне мной мною мы нас нам нами ты тебя тебе тобой тобою вы вас вам вами "
+        "он его него ему нему им ним нём нем она её ее неё нее ей ней ею нею "
+        "оно они их них ими ними себя себе собой собою "
+        # Kazakh
+        "мен менің маған мені менімен менде менен біз біздің бізге бізді бізбен бізде "
+        "сен сенің саған сені сенімен сіз сіздің сізге сізді сізбен "
+        "ол оның оған оны онымен онда одан олар олардың оларға оларды олармен оларда олардан "
+        # English
+        "i me my we us our you your he him his she her hers it its they them their"
+    ).split()
+)
+
+
+def _is_pronoun_name(name: str) -> bool:
+    return _normalize_evidence(name) in _PERSONAL_PRONOUNS
+
+
 def validate_extraction_result(
     transcript: TranscriptEnvelope,
     result: ExtractionResult,
@@ -499,6 +526,8 @@ def validate_extraction_result(
     open_conflicted_relationship_ids = _open_conflicted_relationship_ids(result)
 
     for person in result.people_mentions:
+        if _is_pronoun_name(person.name):
+            raise ContractValidationError(f"{person.mention_id} name is a pronoun, not a name")
         _ensure_known_segments(person.source_segment_ids, valid_segments, person.mention_id)
         if person.verification_status is not VerificationStatus.UNREVIEWED:
             raise ContractValidationError(f"{person.mention_id} is not unreviewed")

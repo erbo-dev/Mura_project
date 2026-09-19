@@ -329,3 +329,57 @@ def test_unique_third_person_endpoint_is_context_resolved_with_provenance() -> N
     link = result.coreference_links[0]
     assert link.status is CoreferenceStatus.RESOLVED
     assert link.antecedent_mention_ids == ["mention_erlan"]
+
+
+def test_a_pronoun_is_never_accepted_as_a_person() -> None:
+    """«поехали к ней летом» once put a person called «ней» into the family tree.
+
+    The pronoun is present in the cited segment, so the only thing that can
+    reject it is the pronoun rule itself.
+    """
+
+    transcript = _transcript()
+    transcript = transcript.model_copy(
+        update={
+            "full_text": transcript.full_text + " Потом мы поехали к ней летом, ол келді.",
+            "segments": [
+                *transcript.segments,
+                RawSegment(
+                    segment_id="seg_004",
+                    start=30,
+                    end=40,
+                    text="потом мы поехали к ней летом ол келді",
+                ),
+            ],
+        }
+    )
+    raw = _base_raw()
+    raw["people_mentions"] = [
+        *raw["people_mentions"],  # type: ignore[misc]
+        {
+            "mention_id": "mention_pronoun_ru",
+            "name": "ней",
+            "category": "unknown",
+            "source_segment_ids": ["seg_004"],
+            "confidence": 1.0,
+        },
+        {
+            "mention_id": "mention_pronoun_kk",
+            "name": "Ол",
+            "category": "unknown",
+            "source_segment_ids": ["seg_004"],
+            "confidence": 1.0,
+        },
+    ]
+
+    result, _issues, _closure = sanitize_extraction_output(
+        raw=raw,
+        transcript=transcript,
+        speaker_id="speaker_1",
+        speaker_name="Күләш",
+    )
+
+    names = {person.name for person in result.people_mentions}
+    assert "ней" not in names
+    assert "Ол" not in names
+    assert {"Сапар", "Нұрғали", "Диас"} <= names

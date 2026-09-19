@@ -10,8 +10,19 @@ from pydantic import ValidationError
 from mura.domain.models import TranscriptEnvelope
 
 
-@dataclass(frozen=True)
+@dataclass
 class ASRClientError(RuntimeError):
+    """A recogniser call that failed, and whether it is worth retrying.
+
+    Deliberately not `frozen`. Python writes `__traceback__`, `__context__` and
+    `__cause__` onto an exception as it propagates, and a frozen dataclass
+    refuses those writes with `FrozenInstanceError`. That turned every
+    *retryable* ASR failure into a crash: the timeout was recoverable, the
+    handler that would have deferred the job blew up instead, the worker died,
+    supervision restarted it, and it picked up the same recording again. A
+    provider being briefly slow became an unbounded crash loop.
+    """
+
     message: str
     retryable: bool = False
     status_code: int | None = None
@@ -21,6 +32,10 @@ class ASRClientError(RuntimeError):
 
 
 class RemoteASRClient:
+    #: A tunnelled GPU worker announces itself in `worker_registrations`
+    #: before it can be reached, so the orchestrator must wait for one.
+    requires_registered_worker = True
+
     def __init__(
         self,
         *,

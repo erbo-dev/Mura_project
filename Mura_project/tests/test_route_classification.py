@@ -99,6 +99,7 @@ def test_expected_routes_land_in_expected_classes() -> None:
         "/v1/operations/release/rollback",
         "/v1/operations/retention",
         "/v1/operations/retention/apply",
+        "/v1/operations/monitoring/summary",
     }
     assert routes_in(AuthClass.SERVICE_INTERNAL) == {
         "/v1/process-transcript",

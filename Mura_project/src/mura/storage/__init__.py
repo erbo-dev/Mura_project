@@ -1,3 +1,8 @@
+from mura.storage.ai_usage import (
+    AIUsageEvent,
+    AIUsageEventRow,
+    AIUsageLedger,
+)
 from mura.storage.archive import (
     ArchiveClaimRow,
     ArchiveConflictRow,
@@ -8,6 +13,25 @@ from mura.storage.archive import (
     FamilyGraphEdgeRow,
 )
 from mura.storage.archive_conflict_guard import install_archive_conflict_guard
+from mura.storage.book import (
+    BookChapterRepository,
+    BookChapterRow,
+    BookContinuityRepository,
+    BookContinuityStateRow,
+    BookCreationRepository,
+    BookExportRepository,
+    BookExportRow,
+    BookJobRepository,
+    BookJobRow,
+    BookPlanRepository,
+    BookPlanRow,
+    BookRepository,
+    BookRow,
+    BookSourceSnapshotRepository,
+    BookSourceSnapshotRow,
+    QueuedBookResult,
+    get_eligible_recordings,
+)
 from mura.storage.conflict_resolution import (
     ArchiveConflictDecisionRow,
     ConflictAction,
@@ -18,6 +42,19 @@ from mura.storage.conflict_resolution import (
     ConflictResolutionError,
     ConflictResolutionService,
     ConflictReviewView,
+)
+from mura.storage.ai_usage import (
+    AIUsageEvent,
+    AIUsageEventRow,
+    AIUsageLedger,
+)
+from mura.storage.identity import (
+    FamilyMembershipRow,
+    FamilyRow,
+    IdentityRepository,
+    MembershipNotFoundError,
+    SoleOwnerError,
+    UserRow,
 )
 from mura.storage.database import (
     Database,
@@ -48,6 +85,9 @@ from mura.storage.profile_models import (
 install_archive_conflict_guard()
 
 __all__ = [
+    "AIUsageEvent",
+    "AIUsageEventRow",
+    "AIUsageLedger",
     "ArchiveClaimRow",
     "ArchiveConflictDecisionRow",
     "ArchiveConflictRow",
@@ -55,6 +95,22 @@ __all__ = [
     "ArchivePersonRow",
     "ArchiveRepository",
     "ArchiveWriteReport",
+    "BookChapterRepository",
+    "BookChapterRow",
+    "BookContinuityRepository",
+    "BookContinuityStateRow",
+    "BookCreationRepository",
+    "BookExportRepository",
+    "BookExportRow",
+    "BookJobRepository",
+    "BookJobRow",
+    "BookPlanRepository",
+    "BookPlanRow",
+    "BookRepository",
+    "BookRow",
+    "BookSourceSnapshotRepository",
+    "BookSourceSnapshotRow",
+    "QueuedBookResult",
     "ConflictAction",
     "ConflictClaimView",
     "ConflictDecisionView",
@@ -78,6 +134,7 @@ __all__ = [
     "RecordingRow",
     "UnifiedConflictReviewService",
     "WorkerRegistrationRow",
+    "get_eligible_recordings",
     "persist_generic_claims",
     "rebuild_materialized_profiles",
     "reconcile_generic_conflicts",

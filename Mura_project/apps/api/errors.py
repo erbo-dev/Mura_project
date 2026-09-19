@@ -11,6 +11,8 @@ response body, a transcript or a name cannot reach the client through an error.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -18,7 +20,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mura.deepseek import DeepSeekError
 from mura.domain.models import StrictModel
+from mura.sentry import capture_exception
 from mura.validation import ContractValidationError
+
+logger = logging.getLogger("mura.api.errors")
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
@@ -46,6 +51,8 @@ INVALID_TOKEN = "invalid_token"
 FAMILY_NOT_FOUND = "family_not_found"
 INSUFFICIENT_FAMILY_ROLE = "insufficient_family_role"
 SOLE_OWNER_REQUIRED = "sole_owner_required"
+BOOK_GENERATION_ALREADY_ACTIVE = "book_generation_already_active"
+BOOK_DAILY_LIMIT_REACHED = "book_daily_limit_reached"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -55,6 +62,8 @@ SELECTABLE_CODES = frozenset(
         FAMILY_NOT_FOUND,
         INSUFFICIENT_FAMILY_ROLE,
         SOLE_OWNER_REQUIRED,
+        BOOK_GENERATION_ALREADY_ACTIVE,
+        BOOK_DAILY_LIMIT_REACHED,
     }
 )
 
@@ -79,6 +88,8 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     FAMILY_NOT_FOUND: "The requested resource was not found.",
     INSUFFICIENT_FAMILY_ROLE: "This operation is not permitted for your role.",
     SOLE_OWNER_REQUIRED: "A family must always retain at least one owner.",
+    BOOK_GENERATION_ALREADY_ACTIVE: "A book generation is already active for this family.",
+    BOOK_DAILY_LIMIT_REACHED: "The daily limit for book generation has been reached for this family.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,
@@ -105,7 +116,13 @@ _CODE_BY_STATUS: dict[int, str] = {
 # Retryable means the same request may succeed later without the caller
 # changing anything. Client contract errors are never retryable.
 _RETRYABLE_CODES = frozenset(
-    {RATE_LIMITED, UPSTREAM_PROVIDER_FAILED, SERVICE_UNAVAILABLE, UPSTREAM_TIMEOUT}
+    {
+        RATE_LIMITED,
+        UPSTREAM_PROVIDER_FAILED,
+        SERVICE_UNAVAILABLE,
+        UPSTREAM_TIMEOUT,
+        BOOK_DAILY_LIMIT_REACHED,
+    }
 )
 
 
@@ -157,6 +174,22 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
         if isinstance(detail, str) and detail in SELECTABLE_CODES
         else _CODE_BY_STATUS.get(status_code, INTERNAL_ERROR)
     )
+    if status_code >= 500:
+        capture_exception(
+            exc,
+            tags={"status_code": str(status_code)},
+            extra={"request_id": request_id_of(request)},
+        )
+        logger.error(
+            "http_server_error",
+            exc_info=exc,
+            extra={
+                "event": "http_server_error",
+                "status_code": status_code,
+                "request_id": request_id_of(request),
+                "code": code,
+            },
+        )
     return error_response(request, status_code=status_code, code=code)
 
 
@@ -168,7 +201,22 @@ async def handle_validation_error(request: Request, _exc: Exception) -> JSONResp
     )
 
 
-async def handle_deepseek_error(request: Request, _exc: Exception) -> JSONResponse:
+async def handle_deepseek_error(request: Request, exc: Exception) -> JSONResponse:
+    capture_exception(
+        exc,
+        tags={"provider": "deepseek", "status_code": "502"},
+        extra={"request_id": request_id_of(request)},
+    )
+    logger.error(
+        "upstream_provider_failed",
+        exc_info=exc,
+        extra={
+            "event": "upstream_provider_failed",
+            "provider": "deepseek",
+            "status_code": 502,
+            "request_id": request_id_of(request),
+        },
+    )
     return error_response(
         request,
         status_code=502,
@@ -176,11 +224,48 @@ async def handle_deepseek_error(request: Request, _exc: Exception) -> JSONRespon
     )
 
 
-async def handle_contract_validation_error(request: Request, _exc: Exception) -> JSONResponse:
+async def handle_contract_validation_error(request: Request, exc: Exception) -> JSONResponse:
+    capture_exception(
+        exc,
+        tags={"status_code": "502"},
+        extra={"request_id": request_id_of(request)},
+    )
+    logger.error(
+        "contract_validation_failed",
+        exc_info=exc,
+        extra={
+            "event": "contract_validation_failed",
+            "status_code": 502,
+            "request_id": request_id_of(request),
+        },
+    )
     return error_response(
         request,
         status_code=502,
         code=PIPELINE_OUTPUT_INVALID,
+        retryable=False,
+    )
+
+
+async def handle_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    capture_exception(
+        exc,
+        tags={"status_code": "500"},
+        extra={"request_id": request_id_of(request)},
+    )
+    logger.error(
+        "unhandled_server_error",
+        exc_info=exc,
+        extra={
+            "event": "unhandled_server_error",
+            "status_code": 500,
+            "request_id": request_id_of(request),
+        },
+    )
+    return error_response(
+        request,
+        status_code=500,
+        code=INTERNAL_ERROR,
         retryable=False,
     )
 
@@ -190,3 +275,4 @@ def register_error_handlers(application: FastAPI) -> None:
     application.add_exception_handler(RequestValidationError, handle_validation_error)
     application.add_exception_handler(DeepSeekError, handle_deepseek_error)
     application.add_exception_handler(ContractValidationError, handle_contract_validation_error)
+    application.add_exception_handler(Exception, handle_unhandled_exception)

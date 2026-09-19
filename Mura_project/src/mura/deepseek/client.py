@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +27,9 @@ class DeepSeekUsage:
     prompt_cache_miss_tokens: int | None = None
 
 
+DeepSeekUsageCallback = Callable[[DeepSeekUsage, bool, str, str | None, int], None]
+
+
 class DeepSeekClient:
     def __init__(
         self,
@@ -35,6 +40,7 @@ class DeepSeekClient:
         fallback_model: str = "deepseek-v4-pro",
         connect_timeout: int = 30,
         read_timeout: int = 600,
+        on_usage: DeepSeekUsageCallback | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("DeepSeek API key must not be empty")
@@ -43,6 +49,7 @@ class DeepSeekClient:
         self.primary_model = primary_model
         self.fallback_model = fallback_model
         self.timeout = (connect_timeout, read_timeout)
+        self.on_usage = on_usage
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -67,12 +74,19 @@ class DeepSeekClient:
         payload: dict[str, Any],
         max_tokens: int,
         attempts: int = 3,
+        operation: str = "llm_chat",
+        temperature: float | None = None,
     ) -> tuple[dict[str, Any], DeepSeekUsage]:
         errors: list[str] = []
         models = [self.primary_model]
         if self.fallback_model and self.fallback_model != self.primary_model:
             models.append(self.fallback_model)
 
+        resolved_op = (
+            operation
+            if operation != "llm_chat"
+            else self._detect_operation(system_prompt)
+        )
         for model in models:
             try:
                 return self._request_model_json(
@@ -81,6 +95,8 @@ class DeepSeekClient:
                     payload=payload,
                     max_tokens=max_tokens,
                     attempts=attempts,
+                    operation=resolved_op,
+                    temperature=temperature,
                 )
             except DeepSeekError as exc:
                 errors.append(f"{model}: {exc}")
@@ -95,8 +111,10 @@ class DeepSeekClient:
         payload: dict[str, Any],
         max_tokens: int,
         attempts: int,
+        operation: str = "llm_chat",
+        temperature: float | None = None,
     ) -> tuple[dict[str, Any], DeepSeekUsage]:
-        body = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -114,9 +132,12 @@ class DeepSeekClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
 
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
+            elapsed = 0.0
             try:
                 started = time.perf_counter()
                 response = self.session.post(
@@ -146,7 +167,7 @@ class DeepSeekClient:
                 parsed = self._parse_json_object(content)
                 usage = response_body.get("usage") or {}
 
-                return parsed, DeepSeekUsage(
+                result_usage = DeepSeekUsage(
                     model=response_body.get("model", model),
                     finish_reason=finish_reason,
                     request_seconds=round(elapsed, 3),
@@ -156,12 +177,50 @@ class DeepSeekClient:
                     prompt_cache_hit_tokens=usage.get("prompt_cache_hit_tokens"),
                     prompt_cache_miss_tokens=usage.get("prompt_cache_miss_tokens"),
                 )
+                if self.on_usage is not None:
+                    try:
+                        self.on_usage(result_usage, True, operation, None, attempt)
+                    except Exception:
+                        pass
+                return parsed, result_usage
             except (requests.Timeout, requests.ConnectionError, DeepSeekError) as exc:
                 last_error = exc
+                if self.on_usage is not None:
+                    try:
+                        err_code = (
+                            "provider_timeout"
+                            if isinstance(exc, requests.Timeout)
+                            else ("provider_rate_limit" if "429" in str(exc) else "extraction_failed")
+                        )
+                        if isinstance(exc, requests.Timeout):
+                            err_code = "provider_timeout"
+                        elif "429" in str(exc):
+                            err_code = "provider_rate_limit"
+                        else:
+                            err_code = "extraction_failed"
+                        failed_usage = DeepSeekUsage(
+                            model=model,
+                            finish_reason=None,
+                            request_seconds=round(elapsed, 3),
+                        )
+                        self.on_usage(failed_usage, False, operation, err_code, attempt)
+                    except Exception:
+                        pass
                 if attempt < attempts:
                     time.sleep(min(2**attempt, 10))
 
         raise DeepSeekError(f"request failed after {attempts} attempts: {last_error}")
+
+    @staticmethod
+    def _detect_operation(system_prompt: str) -> str:
+        sp_lower = system_prompt.lower()
+        if "cleaner" in sp_lower:
+            return "cleaner_repair" if "repair" in sp_lower else "cleaner"
+        if "repair" in sp_lower:
+            return "extractor_repair"
+        if "extractor" in sp_lower or "anchor" in sp_lower or "extraction" in sp_lower:
+            return "extractor"
+        return "llm_chat"
 
     @staticmethod
     def _parse_json_object(content: str | None) -> dict[str, Any]:

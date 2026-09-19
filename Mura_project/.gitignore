@@ -23,5 +23,6 @@ artifacts/
 outputs/
 .kaggle/
 .mura/
+supabase/.temp/
 .ipynb_checkpoints/
 .DS_Store

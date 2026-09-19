@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from mura.linguistics.morphology import same_word
 from mura.relationship_evidence import normalize_evidence
 
 
@@ -96,6 +97,9 @@ def evaluate_factual_support(statement: str, evidence_text: str) -> FactualSuppo
 
     statement_set = set(statement_tokens)
     evidence_set = set(evidence_tokens)
+    # Negation and causality are judged on surface words, before any inflection
+    # tolerance: «не» and «потому» are not inflected, and a match that softened
+    # them would be exactly the kind of drift these checks exist to catch.
     if statement_set.intersection(_CAUSALITY) and not evidence_set.intersection(_CAUSALITY):
         return FactualSupportResult(
             status=FactualSupportStatus.ADDS_CAUSALITY,
@@ -112,7 +116,12 @@ def evaluate_factual_support(statement: str, evidence_text: str) -> FactualSuppo
             evidence_tokens=evidence_tokens,
         )
 
-    if not statement_set.issubset(evidence_set):
+    # Every statement word must be a form of some evidence word. Each is mapped
+    # onto the evidence form it matches — an exact form when one exists — and
+    # the ordering checks below then run on evidence forms, so they behave as
+    # they always did, only without rejecting a declined noun.
+    mapped = _map_onto_evidence(statement_tokens, evidence_tokens)
+    if mapped is None:
         return FactualSupportResult(
             status=FactualSupportStatus.UNSUPPORTED,
             supported=False,
@@ -120,7 +129,7 @@ def evaluate_factual_support(statement: str, evidence_text: str) -> FactualSuppo
             evidence_tokens=evidence_tokens,
         )
 
-    if _is_ordered_subsequence(statement_tokens, evidence_tokens):
+    if _is_ordered_subsequence(mapped, evidence_tokens):
         return FactualSupportResult(
             status=FactualSupportStatus.ORDERED,
             supported=True,
@@ -128,8 +137,8 @@ def evaluate_factual_support(statement: str, evidence_text: str) -> FactualSuppo
             evidence_tokens=evidence_tokens,
         )
 
-    shared = statement_set.intersection(evidence_set)
-    if len(shared) >= 2 and _relative_order(statement_tokens, shared) != _relative_order(
+    shared = set(mapped).intersection(evidence_set)
+    if len(shared) >= 2 and _relative_order(mapped, shared) != _relative_order(
         evidence_tokens, shared
     ):
         return FactualSupportResult(
@@ -145,6 +154,24 @@ def evaluate_factual_support(statement: str, evidence_text: str) -> FactualSuppo
         statement_tokens=statement_tokens,
         evidence_tokens=evidence_tokens,
     )
+
+
+def _map_onto_evidence(
+    statement_tokens: tuple[str, ...], evidence_tokens: tuple[str, ...]
+) -> tuple[str, ...] | None:
+    """Each statement word as the evidence form it matches, or None if any has none."""
+
+    evidence_forms = set(evidence_tokens)
+    mapped: list[str] = []
+    for token in statement_tokens:
+        if token in evidence_forms:
+            mapped.append(token)
+            continue
+        match = next((form for form in evidence_tokens if same_word(token, form)), None)
+        if match is None:
+            return None
+        mapped.append(match)
+    return tuple(mapped)
 
 
 def unsupported_statement_count(value: str, evidence_text: str) -> int:

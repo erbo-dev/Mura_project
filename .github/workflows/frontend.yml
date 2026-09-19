@@ -1,0 +1,45 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "MURA-app/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "MURA-app/**"
+      - ".github/workflows/frontend.yml"
+
+jobs:
+  test:
+    name: Test & Build Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MURA-app
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "MURA-app/package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck TypeScript
+        run: npx tsc --noEmit
+
+      - name: Run unit & integration tests
+        run: npm test -- --run
+
+      - name: Production build
+        run: npm run build
+

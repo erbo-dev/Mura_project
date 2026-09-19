@@ -3,8 +3,10 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useCallback, useState, useRef } from "react";
+import { Mic, Upload } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { Lastochka } from "@/components/mascot/lastochka";
+import { Button } from "@/components/ui/button";
 import { submitRecording } from "@/lib/mura/core-api";
 import { processingHref } from "@/lib/mura/recording-workflow";
 import {
@@ -14,12 +16,15 @@ import {
   processingNotice,
   type CaptureBlocker,
 } from "@/lib/mura/recording-availability";
+import { useAudioLanguage } from "@/lib/mura/audio-language";
 import { useMuraSession } from "@/lib/mura/session-provider";
 import { useMicrophoneState } from "@/hooks/use-microphone-state";
 import { fetchArchivePeople, type ArchivePerson } from "@/lib/mura/archive-api";
 import { useArchiveResource } from "@/lib/mura/use-archive";
 import { MascotStage } from "@/components/mascot/mascot-stage";
 import { LiveTranscript } from "@/components/record/live-transcript";
+import { AudioLanguagePicker } from "@/components/record/audio-language-picker";
+import { AudioUploader } from "@/components/record/audio-uploader";
 import { RecordButton } from "@/components/record/record-button";
 import { RecordCompanion, type Speaker } from "@/components/record/record-companion";
 import { RecordControls } from "@/components/record/record-controls";
@@ -29,7 +34,6 @@ import { useMascot } from "@/hooks/use-mascot";
 import { useRecorder } from "@/hooks/use-recorder";
 import { formatTimer } from "@/lib/format";
 import {
-  DEFAULT_AUDIO_LANGUAGE,
   DEFAULT_OUTPUT_LANGUAGE,
 } from "@/lib/language";
 import { cn } from "@/lib/utils";
@@ -104,7 +108,18 @@ export function RecordView() {
     [],
   );
   const people = useArchiveResource<ArchivePerson[]>(loadPeople);
-  const [audioLanguage] = useState(DEFAULT_AUDIO_LANGUAGE);
+  /*
+   * What MURA should expect to hear, chosen by the user in Settings.
+   *
+   * This was `useState(DEFAULT_AUDIO_LANGUAGE)` with no setter, so the four
+   * language types were correctly separated but the audio one was unreachable —
+   * a Kazakh-speaking family could not say what they were about to speak.
+   *
+   * Deliberately *not* derived from `uiLanguage`. Reading the interface in
+   * Russian while recording a Kazakh grandmother is the normal case here, and
+   * coupling the two is the bug this whole architecture exists to prevent.
+   */
+  const { audioLanguage } = useAudioLanguage();
   const [outputLanguage] = useState(DEFAULT_OUTPUT_LANGUAGE);
   const { status, seconds, level, error: recorderError, start, pause, resume, restart, finish: finishAudio } = useRecorder();
   const [uploading, setUploading] = useState(false);
@@ -116,6 +131,8 @@ export function RecordView() {
     audioLanguage,
   });
   const mascot = useMascot();
+  const [recordMode, setRecordMode] = useState<"mic" | "upload">("mic");
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
   const startRecording = async () => {
     reset();
@@ -191,6 +208,11 @@ export function RecordView() {
           source: "mura_core",
           status: "processing",
           analyzed: false,
+          // The way back to Core. Kept on the entry so a memory can be
+          // reconciled after the app is closed, which is what the processing
+          // screen invites people to do.
+          recordingId: accepted.recording_id,
+          familyId: recordingFamilyId,
         };
         await saveMemory({ ...baseMemory, source: "mura_core" }, audio);
         // The captured family travels with the workflow rather than being
@@ -206,6 +228,68 @@ export function RecordView() {
         );
         return;
       }
+    } catch {
+      setUploadError("upload");
+      setUploading(false);
+      submitting.current = false;
+    }
+  };
+
+  const submitUploadedFile = async () => {
+    if (!uploadedFile || uploading || submitting.current) return;
+    if (!speaker) return;
+    const recordingFamilyId = family?.family_id;
+    if (!recordingFamilyId) {
+      setUploadError("upload");
+      return;
+    }
+    submitting.current = true;
+    mascot.send("PROCESS");
+    setUploading(true);
+    setUploadError(null);
+    const extMatch = uploadedFile.name.match(/\.([a-zA-Z0-9]+)$/);
+    const extension = extMatch ? extMatch[1].toLowerCase() : "m4a";
+    const memoryId = `local-${crypto.randomUUID()}`;
+    try {
+      const accepted = await submitRecording(
+        {
+          audio: uploadedFile,
+          filename: uploadedFile.name || `mura-upload.${extension}`,
+          speakerName: speaker.name,
+          speakerPersonId: speaker.personId,
+          audioLanguage,
+          outputLanguage,
+        },
+        recordingFamilyId,
+      );
+      const baseMemory: SavedMemory = {
+        id: memoryId,
+        createdAt: new Date().toISOString(),
+        ui_language_at_creation: uiLanguage,
+        audio_language: audioLanguage,
+        detected_audio_language: "unknown",
+        transcript_language: "unknown",
+        output_language: outputLanguage,
+        title: t("audioMemoryTitle"),
+        summary: "",
+        transcript: "",
+        people: [],
+        durationSec: 0,
+        source: "mura_core",
+        status: "processing",
+        analyzed: false,
+        recordingId: accepted.recording_id,
+        familyId: recordingFamilyId,
+      };
+      await saveMemory({ ...baseMemory, source: "mura_core" }, uploadedFile);
+      router.push(
+        processingHref({
+          jobId: accepted.job_id,
+          recordingId: accepted.recording_id,
+          memoryId,
+          familyId: recordingFamilyId,
+        }),
+      );
     } catch {
       setUploadError("upload");
       setUploading(false);
@@ -260,73 +344,203 @@ export function RecordView() {
               half is unchanged and still the whole screen on a phone; the right
               half is the companion, which stacks underneath below `lg`.
             */}
-            <div className="mx-auto grid min-h-full w-full max-w-focus grid-cols-1 items-center gap-10 px-page pb-8 lg:max-w-wide lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-16">
+            {/*
+              The composition, rebuilt.
+
+              What it replaces: a 224px swallow marooned at the top of an empty
+              column, a display-sized heading crushed against the bottom of it,
+              and the microphone — the only control this screen exists for —
+              *below the fold* at 1440x900. Beside it, eight prompt cards in a
+              wall that dominated the screen.
+
+              Now the left column is one vertical group: mascot, question,
+              control, in that order, sized so all three are visible together at
+              900px. The heading steps down from display to title because it is
+              a sentence spoken to a person, not a hero; the swallow grows
+              because she is the warmth this moment needs.
+            */}
+            <div className="mx-auto grid min-h-full w-full max-w-focus grid-cols-1 items-center gap-10 px-page pb-8 lg:max-w-wide lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-16 xl:gap-20">
             <div className="flex w-full flex-col items-center justify-center gap-5 text-center">
-              {/* 312px put the swallow, a two-line heading and a two-line hint
-                  above the microphone, which landed the one control on this
-                  screen at y=568 of an 844px phone — and off a 667px one
-                  entirely. She is warmth before you speak, not the subject of
-                  the screen. */}
-              <MascotStage state={mascot.state} size={224} />
+              <MascotStage state={mascot.state} size={244} />
               <div className="w-full">
-                <h1 className="text-balance text-display font-bold leading-[1.15] tracking-[-0.03em]">
+                <h1 className="text-balance text-title font-bold leading-[1.1] tracking-[-0.03em]">
                   {t("rememberPrompt").split("\n").map((line) => (
                     <span key={line} className="block">{line}</span>
                   ))}
                 </h1>
-                <p className="mt-4 text-body leading-relaxed text-muted">
-                  {t("rememberHint").split("\n").map((line) => (
-                    <span key={line} className="block">{line}</span>
-                  ))}
+                <p className="mx-auto mt-3 max-w-[32ch] text-body leading-relaxed text-muted">
+                  {t("recordHintSecondary")}
                 </p>
               </div>
               {/*
-                Degradation is a status, not a footnote. «Сервис анализа сейчас
-                недоступен» was `text-meta text-muted` under the button — the
-                faintest text on the screen — while it is the one thing that
-                changes what happens to the recording. It sits above the control
-                now, in the warning colour from the palette.
-              */}
-              {capture.available && maySubmit && notice === "queued_later" && (
-                <p
-                  role="status"
-                  className="w-full max-w-measure rounded-surface bg-warning-surface px-4 py-2.5 text-meta leading-relaxed text-warning"
-                >
-                  {t("processingDelayedNotice")}
-                </p>
-              )}
+                The control is always here.
 
-              {capture.available && maySubmit && speaker ? (
-                <RecordButton
-                  onClick={startRecording}
-                  size={112}
-                  label={t("startRecording")}
-                />
-              ) : capture.available && maySubmit ? (
-                // Not a dead button: the one missing thing is named, and it is
-                // one tap away in the panel beside this.
-                <p className="max-w-measure text-meta leading-relaxed text-muted">
-                  {t("recordWhoRequired")}
-                </p>
+                It used to be replaced by a line of grey text whenever a speaker
+                had not been chosen, which meant the record screen frequently
+                had no record button on it at all. Now it is present and plainly
+                disabled, with the one missing thing named directly underneath —
+                and that thing is one tap away in the panel beside this.
+              */}
+              {/* Mode switch: Record mic or upload file */}
+              <div className="inline-flex rounded-full bg-sand/60 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecordMode("mic");
+                    setUploadError(null);
+                  }}
+                  className={cn(
+                    "flex items-center gap-2 rounded-full px-4 py-2 text-meta font-medium transition-colors focus-ring",
+                    recordMode === "mic"
+                      ? "bg-raised text-ink shadow-soft"
+                      : "text-ink/60 hover:text-ink",
+                  )}
+                >
+                  <Mic className="size-4" strokeWidth={2} />
+                  {t("recordModeRecord")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecordMode("upload");
+                    setUploadError(null);
+                  }}
+                  className={cn(
+                    "flex items-center gap-2 rounded-full px-4 py-2 text-meta font-medium transition-colors focus-ring",
+                    recordMode === "upload"
+                      ? "bg-raised text-ink shadow-soft"
+                      : "text-ink/60 hover:text-ink",
+                  )}
+                >
+                  <Upload className="size-4" strokeWidth={2} />
+                  {t("recordModeUpload")}
+                </button>
+              </div>
+
+              {recordMode === "mic" ? (
+                <>
+                  {capture.available && maySubmit ? (
+                    <div className="flex flex-col items-center gap-4">
+                      {/* Asked before recording, not after: the browser preview is
+                          handed one language when it starts, and switching it
+                          mid-sentence restarts the recogniser. */}
+                      <AudioLanguagePicker className="mb-2" />
+                      <RecordButton
+                        onClick={startRecording}
+                        size={104}
+                        label={t("startRecording")}
+                        disabled={!speaker}
+                      />
+                      {!speaker && (
+                        // On a phone the narrator field sits below the fold, so a
+                        // sentence naming it was a dead end: the microphone stayed
+                        // disabled and the thing that enables it was out of sight.
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const field = document.getElementById("record-speaker");
+                            field?.scrollIntoView({ behavior: "smooth", block: "center" });
+                            field?.focus({ preventScroll: true });
+                          }}
+                          className="max-w-measure text-meta leading-relaxed text-ink/70 underline decoration-ink/25 underline-offset-4 hover:text-ink focus-ring"
+                        >
+                          {t("recordWhoRequired")}
+                        </button>
+                      )}
+                      {/* Degradation is a status the user should see, but it is not
+                          the subject of the screen: a filled warning block above the
+                          microphone shouted louder than the thing it qualifies. */}
+                      {notice === "queued_later" && (
+                        <p
+                          role="status"
+                          className="flex max-w-measure items-start gap-2 text-meta leading-relaxed text-warning"
+                        >
+                          <span aria-hidden className="mt-[0.45em] size-1.5 shrink-0 rounded-full bg-warning" />
+                          {t("processingDelayedNotice")}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    // Never a silently disabled button: say which condition failed
+                    // and, where the user can act, what to do about it.
+                    <p
+                      role="status"
+                      className="w-full max-w-measure rounded-surface bg-warning-surface px-4 py-2.5 text-meta leading-relaxed text-warning"
+                    >
+                      {capture.available
+                        ? t(processing === "unconfigured" ? "processingUnconfigured" : "coreUnavailable")
+                        : t(BLOCKER_MESSAGE[capture.reason])}
+                    </p>
+                  )}
+                  {(recorderError || uploadError) && (
+                    <p
+                      role="alert"
+                      className="w-full max-w-measure rounded-surface bg-danger-surface px-4 py-2.5 text-meta leading-relaxed text-danger"
+                    >
+                      {recorderError ? t("microphoneError") : t("uploadError")}
+                    </p>
+                  )}
+                </>
               ) : (
-                // Never a silently disabled button: say which condition failed
-                // and, where the user can act, what to do about it.
-                <p
-                  role="status"
-                  className="w-full max-w-measure rounded-surface bg-warning-surface px-4 py-2.5 text-meta leading-relaxed text-warning"
-                >
-                  {capture.available
-                    ? t(processing === "unconfigured" ? "processingUnconfigured" : "coreUnavailable")
-                    : t(BLOCKER_MESSAGE[capture.reason])}
-                </p>
-              )}
-              {(recorderError || uploadError) && (
-                <p
-                  role="alert"
-                  className="w-full max-w-measure rounded-surface bg-danger-surface px-4 py-2.5 text-meta leading-relaxed text-danger"
-                >
-                  {recorderError ? t("microphoneError") : t("uploadError")}
-                </p>
+                /* Upload mode */
+                <div className="flex w-full max-w-[420px] flex-col items-center gap-4">
+                  {auth.status === "authenticated" && family && maySubmit ? (
+                    <>
+                      <AudioLanguagePicker className="mb-2" />
+                      <AudioUploader
+                        className="w-full"
+                        selectedFile={uploadedFile}
+                        onFileSelected={setUploadedFile}
+                        onFileRemoved={() => setUploadedFile(null)}
+                        disabled={uploading}
+                      />
+                      {uploadedFile && (
+                        <div className="flex w-full flex-col items-center gap-2">
+                          <Button
+                            size="lg"
+                            className="w-full"
+                            onClick={submitUploadedFile}
+                            disabled={!speaker || uploading}
+                          >
+                            {uploading ? t("uploadSending") : t("uploadReady")}
+                          </Button>
+                          {!speaker && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const field = document.getElementById("record-speaker");
+                                field?.scrollIntoView({ behavior: "smooth", block: "center" });
+                                field?.focus({ preventScroll: true });
+                              }}
+                              className="max-w-measure text-meta leading-relaxed text-ink/70 underline decoration-ink/25 underline-offset-4 hover:text-ink focus-ring"
+                            >
+                              {t("recordWhoRequired")}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p
+                      role="status"
+                      className="w-full max-w-measure rounded-surface bg-warning-surface px-4 py-2.5 text-meta leading-relaxed text-warning"
+                    >
+                      {auth.status !== "authenticated"
+                        ? t("signInRequired")
+                        : !family
+                          ? t("familyRequiredToRecord")
+                          : t(processing === "unconfigured" ? "processingUnconfigured" : "coreUnavailable")}
+                    </p>
+                  )}
+                  {uploadError && (
+                    <p
+                      role="alert"
+                      className="w-full max-w-measure rounded-surface bg-danger-surface px-4 py-2.5 text-meta leading-relaxed text-danger"
+                    >
+                      {t("uploadError")}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 

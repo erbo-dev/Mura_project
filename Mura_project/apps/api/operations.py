@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from mura.monitoring import MonitoringSummary, MonitoringThresholds, QueueHealthService
 from mura.observability import JobTraceView, TraceRepository
 from mura.release_control import (
     ReleaseControlError,
@@ -25,6 +26,7 @@ from mura.storage.database import Database, RecordingRepository
 class RuntimeWithDatabase(Protocol):
     database: Database
     repository: RecordingRepository
+    settings: Any
 
 
 class ReleaseActivateRequest(BaseModel):
@@ -204,3 +206,29 @@ def register_operations_routes(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
             ) from exc
+
+    @app.get(
+        "/v1/operations/monitoring/summary",
+        response_model=MonitoringSummary,
+        dependencies=operations,
+    )
+    def get_monitoring_summary(
+        runtime: object = Depends(get_runtime_dependency),
+    ) -> MonitoringSummary:
+        typed_runtime = cast(RuntimeWithDatabase, runtime)
+        db = typed_runtime.database
+        settings = getattr(typed_runtime, "settings", None)
+        thresholds = (
+            MonitoringThresholds.from_settings(
+                job_lease_seconds=settings.job_lease_seconds,
+                job_heartbeat_seconds=settings.job_heartbeat_seconds,
+                asr_request_timeout_seconds=settings.asr_request_timeout_seconds,
+                book_job_lease_seconds=getattr(settings, "book_job_lease_seconds", 600.0),
+                book_job_heartbeat_seconds=getattr(settings, "book_job_heartbeat_seconds", 60.0),
+            )
+            if settings is not None
+            else None
+        )
+        service = QueueHealthService(db, thresholds=thresholds)
+        return service.get_summary()
+

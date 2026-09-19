@@ -5,6 +5,8 @@ export const CARD_HEIGHT = 108;
 const COLUMN_WIDTH = 256;
 const ROW = 136;
 const PAIR_GAP = 200;
+/** How many unlinked people sit in one row before wrapping. */
+const UNLINKED_PER_ROW = 4;
 
 export type NodeRole =
   | "center"
@@ -371,6 +373,12 @@ export interface FamilyIsland {
    * connected component is genuinely unconnected.
    */
   connectedToCentre: boolean;
+  /**
+   * True for the block of people the archive holds no relationship for at
+   * all. They are not a branch — calling them one would assert a structure
+   * nobody has described yet.
+   */
+  unlinked?: boolean;
 }
 
 /**
@@ -393,14 +401,42 @@ export function computeIslands(
   relations: FamilyRelations,
   centerId: string,
   below: number,
+  /**
+   * Unlinked people per row. Fitting a wide grid onto a phone shrinks every
+   * card until the names cannot be read, so the canvas asks for fewer columns
+   * when it is narrow and lets the grid grow downward instead.
+   */
+  unlinkedPerRow: number = UNLINKED_PER_ROW,
 ): FamilyIsland[] {
   const drawable = drawableFrom(relations, centerId);
   const islands: FamilyIsland[] = [];
 
   let y = below + ROW * 1.5;
-  for (const component of connectedComponents(relations)) {
+
+  // People the archive knows of but has recorded no relationship for are their
+  // own connected component, one member each. Drawn as separate islands they
+  // became a column of single cards down the middle of an empty canvas, each
+  // captioned "a separate branch" — six times over, which reads as six broken
+  // branches rather than six people nobody has told a story about yet.
+  //
+  // They are gathered into one block instead, wrapped across the canvas. One
+  // caption, one group, and the shape of the screen stops implying structure
+  // the archive never recorded.
+  const components = connectedComponents(relations);
+  const singles: string[] = [];
+  const groups: string[][] = [];
+  for (const component of components) {
     const members = component.filter((id) => !drawable.has(id)).sort();
     if (members.length === 0) continue;
+    if (members.length === 1 && !component.includes(centerId)) {
+      singles.push(members[0]);
+      continue;
+    }
+    groups.push(members);
+  }
+
+  for (const members of groups) {
+    const component = components.find((c) => c.includes(members[0])) ?? members;
     const connectedToCentre = component.includes(centerId);
 
     const nodes: FamilyGraphNode[] = members.map((id, index) => ({
@@ -445,6 +481,34 @@ export function computeIslands(
       connectedToCentre,
     });
     y += ROW * 2.2;
+  }
+
+  if (singles.length > 0) {
+    singles.sort();
+    // Wrapped rather than laid out in one long line, so a family with twenty
+    // unlinked people does not scroll off the side of the canvas.
+    const perRow = Math.max(1, Math.min(unlinkedPerRow, singles.length));
+    const nodes: FamilyGraphNode[] = singles.map((id, index) => {
+      const column = index % perRow;
+      const row = Math.floor(index / perRow);
+      return {
+        id,
+        x: (column - (perRow - 1) / 2) * COLUMN_WIDTH,
+        y: y + row * ROW * 1.6,
+        role: "sibling",
+      };
+    });
+
+    islands.push({
+      members: singles,
+      nodes,
+      // Nobody in this block is related to anybody, by definition: there is
+      // nothing to draw between them.
+      edges: [],
+      label: { x: nodes[0].x - CARD_WIDTH / 2, y: y - CARD_HEIGHT / 2 - 28 },
+      connectedToCentre: false,
+      unlinked: true,
+    });
   }
 
   return islands;

@@ -120,3 +120,38 @@ export function retryCountdownSeconds(job: JobView): number | null {
   if (!isAwaitingAutomaticRetry(job)) return null;
   return job.retry_after_seconds ?? null;
 }
+
+/**
+ * What a failed status request means for the processing screen.
+ *
+ * A request that failed is not a job that failed. The screen used to treat
+ * them as the same thing: one refused poll — a 404 while Railway swaps a
+ * deployment, a phone switching networks — marked the recording failed, stopped
+ * polling for good, and told the user to restart a worker, while Core went on
+ * and finished the recording a few minutes later. Only Core can say a job
+ * failed, and it says so with `status: "failed"`.
+ *
+ *   - `session`  the account is no longer signed in; polling cannot succeed
+ *                until it is, but the recording is still safe on the server.
+ *   - `retry`    anything else. Keep asking, and after a sustained run of
+ *                failures say that the connection is gone — never that the
+ *                recording is.
+ */
+export type PollErrorDisposition = "session" | "retry";
+
+export function pollErrorDisposition(status: number | null): PollErrorDisposition {
+  if (status === 401 || status === 403) return "session";
+  return "retry";
+}
+
+/** Consecutive failed polls before the screen admits it has lost contact. */
+export const CONNECTION_LOST_AFTER_FAILURES = 8;
+
+/**
+ * Delay before the next poll. Steady while the server answers, then backing
+ * off so a phone left on this screen during an outage is not hammering it.
+ */
+export function nextPollDelayMs(consecutiveFailures: number): number {
+  if (consecutiveFailures <= 0) return 1500;
+  return Math.min(1500 * 2 ** Math.min(consecutiveFailures, 4), 15_000);
+}

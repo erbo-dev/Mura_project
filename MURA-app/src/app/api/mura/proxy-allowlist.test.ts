@@ -63,6 +63,19 @@ describe("proxy allowlist", () => {
     expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/stories`)).toBe(true);
     expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/review-items`)).toBe(true);
     expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/conflicts`)).toBe(true);
+
+    // Phase 2.1 Family Book endpoints
+    const BOOK = `book_${"d".repeat(32)}`;
+    expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/books`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/sources`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/${BOOK}`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/${BOOK}/status`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/${BOOK}/chapters`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/${BOOK}/chapters/1`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/${BOOK}/download`)).toBe(true);
+    expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/books/${BOOK}/cancel`)).toBe(true);
+    expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/books/${BOOK}/regenerate`)).toBe(true);
   });
 
   it("still refuses family surfaces nothing consumes", () => {

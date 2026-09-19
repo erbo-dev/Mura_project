@@ -88,3 +88,18 @@ def test_one_command_release_smoke_passes(tmp_path: Path) -> None:
     checks = report["checks"]
     assert isinstance(checks, dict)
     assert all(checks.values())
+
+
+def test_isolated_schema_creation_includes_all_storage_models(tmp_path: Path) -> None:
+    from sqlalchemy import inspect
+
+    db = Database(f"sqlite+pysqlite:///{tmp_path / 'isolated_schema.db'}")
+    db.create_schema()
+    inspector = inspect(db.engine)
+    tables = set(inspector.get_table_names())
+    assert "users" in tables
+    assert "families" in tables
+    assert "books" in tables
+    assert "recordings" in tables
+    assert "processing_jobs" in tables
+

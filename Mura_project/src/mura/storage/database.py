@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     and_,
     create_engine,
+    delete,
     or_,
     select,
     update,
@@ -73,6 +74,10 @@ class RecordingRow(Base):
     #: AudioLanguage.AUTO / OutputLanguage.SAME_AS_TRANSCRIPT.
     audio_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
     output_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: Recognised text, written as soon as recognition finishes and before the
+    #: finished result exists. A reading aid only: the finished result in
+    #: `pipeline_results` remains the authoritative transcript.
+    transcript_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -282,6 +287,50 @@ class RecordingRepository:
             )
             return session.scalar(statement)
 
+    def delete_family_recording(
+        self,
+        *,
+        family_id: str,
+        recording_id: str,
+    ) -> RecordingRow | None:
+        with self.database.session_factory.begin() as session:
+            recording = session.scalar(
+                select(RecordingRow).where(
+                    RecordingRow.recording_id == recording_id,
+                    RecordingRow.family_id == family_id,
+                )
+            )
+            if recording is None:
+                return None
+
+            session.execute(
+                delete(ProcessingJobRow).where(ProcessingJobRow.recording_id == recording_id)
+            )
+            session.execute(
+                delete(PipelineResultRow).where(PipelineResultRow.recording_id == recording_id)
+            )
+            try:
+                from mura.observability import ProcessingTraceRow
+
+                session.execute(
+                    delete(ProcessingTraceRow).where(ProcessingTraceRow.recording_id == recording_id)
+                )
+            except Exception:
+                pass
+            try:
+                from mura.storage.archive import ArchiveClaimRow
+
+                session.execute(
+                    delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)
+                )
+            except Exception:
+                pass
+
+            session.delete(recording)
+            session.flush()
+            session.expunge(recording)
+            return recording
+
     def get_family_job(self, *, family_id: str, job_id: str) -> ProcessingJobRow | None:
         with self.database.session_factory() as session:
             statement = (
@@ -481,6 +530,25 @@ class RecordingRepository:
             job.status = status.value
             job.stage = stage
             job.updated_at = utcnow()
+
+    def save_transcript_preview(
+        self,
+        job_id: str,
+        text: str,
+        *,
+        lease_owner: str | None = None,
+    ) -> None:
+        """Store recognised text for the recording this job is processing.
+
+        Guarded by the same lease as every other job write: a worker that has
+        lost the job must not overwrite what the worker that reclaimed it saw.
+        """
+
+        with self.database.session_factory.begin() as session:
+            job = self._owned_job(session, job_id, lease_owner)
+            recording = session.get(RecordingRow, job.recording_id)
+            if recording is not None:
+                recording.transcript_preview = text
 
     def defer_job(
         self,

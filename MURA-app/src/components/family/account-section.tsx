@@ -3,8 +3,12 @@
 /**
  * Account controls: who is signed in, and how to leave.
  *
- * Sign-out goes through Clerk's own button so the provider clears its session
- * cookie properly. That matters more than it looks: the server token cache is
+ * Each provider ends its own session: Clerk through its own button, Supabase
+ * by dropping the httpOnly cookie server-side. Routing one provider's
+ * sign-out through another's leaves the session live and the user still
+ * signed in after being told they left.
+ *
+ * Clerk's button clears its session cookie properly. That matters more than it looks: the server token cache is
  * keyed by Clerk session id and only ever read after `auth()` confirms the
  * session is live, so ending the session at the provider is what makes the
  * cached token unreachable. Nothing needs clearing in the browser, because the
@@ -16,12 +20,20 @@
  */
 
 import { SignOutButton } from "@clerk/nextjs";
+import { DevSignOutButton } from "@/components/auth/dev-auth-panel";
+import { SupabaseSignOutButton } from "@/components/auth/supabase-sign-out";
 import { useMuraI18n } from "@/lib/i18n";
 import { useMuraSession } from "@/lib/mura/session-provider";
 
+// Outlined, not `bg-sand`. Sand reads as a button on a raised card, but this
+// group sits directly on paper now and #ece9e2 on #eee8df is not a visible
+// edge — the control had stopped looking like one.
+const SIGN_OUT_CLASS =
+  "h-11 shrink-0 rounded-full border border-ink/20 px-5 text-meta font-semibold text-ink/75 focus-ring";
+
 export function AccountSection() {
   const { t } = useMuraI18n();
-  const { auth } = useMuraSession();
+  const { auth, provider } = useMuraSession();
 
   if (auth.status !== "authenticated") return null;
 
@@ -36,17 +48,20 @@ export function AccountSection() {
       <p className="min-w-0 truncate text-body font-semibold">
         {auth.user.displayName ?? auth.user.email ?? t("accountSignedIn")}
       </p>
-      <SignOutButton>
-        <button
-          type="button"
-          // Outlined, not `bg-sand`. Sand reads as a button on a raised card,
-          // but this group sits directly on paper now and #ece9e2 on #eee8df
-          // is not a visible edge — the control had stopped looking like one.
-          className="h-11 shrink-0 rounded-full border border-ink/20 px-5 text-meta font-semibold text-ink/75 focus-ring"
-        >
-          {t("signOut")}
-        </button>
-      </SignOutButton>
+      {/* `SignOutButton` throws outside `<ClerkProvider>`, which the app does
+          not mount when another provider is in force. Each provider ends its
+          own session; nothing here reaches across that seam. */}
+      {provider === "clerk" ? (
+        <SignOutButton>
+          <button type="button" className={SIGN_OUT_CLASS}>
+            {t("signOut")}
+          </button>
+        </SignOutButton>
+      ) : provider === "supabase" ? (
+        <SupabaseSignOutButton className={SIGN_OUT_CLASS} />
+      ) : (
+        <DevSignOutButton className={SIGN_OUT_CLASS} />
+      )}
     </section>
   );
 }

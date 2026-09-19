@@ -1,0 +1,47 @@
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Tests & caches
+tests/
+.cache/
+.pytest_cache/
+.coverage
+.coverage.*
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+
+# Local configuration and storage
+.env
+.env.*
+!.env.example
+.mura/
+data/audio/
+*.pem
+
+# Git & IDE
+.git/
+.gitignore
+.idea/
+.vscode/

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Capabilities, JobView } from "@/lib/mura/core-api";
 import {
+  CONNECTION_LOST_AFTER_FAILURES,
   canRecordLive,
   isAwaitingAutomaticRetry,
   isDegradedCapability,
+  nextPollDelayMs,
+  pollErrorDisposition,
   recordingAvailability,
   retryCountdownSeconds,
   stateFromJob,
@@ -142,5 +145,29 @@ describe("job mapping", () => {
 
   it("keeps long-form window stages in the extracting state", () => {
     expect(stateFromJob(job({ stage: "window_2_extracting" }))).toBe("extracting");
+  });
+});
+
+describe("a failed poll is not a failed recording", () => {
+  it("keeps polling through transient errors, including a deployment's 404", () => {
+    // A 404 is what Railway answers for a few seconds while a deployment swaps.
+    for (const status of [null, 404, 500, 502, 503]) {
+      expect(pollErrorDisposition(status)).toBe("retry");
+    }
+  });
+
+  it("stops only when the session is gone, and still does not call the recording failed", () => {
+    expect(pollErrorDisposition(401)).toBe("session");
+    expect(pollErrorDisposition(403)).toBe("session");
+  });
+
+  it("backs off while the server is unreachable instead of hammering it", () => {
+    expect(nextPollDelayMs(0)).toBe(1500);
+    expect(nextPollDelayMs(1)).toBeGreaterThan(nextPollDelayMs(0));
+    expect(nextPollDelayMs(50)).toBe(15_000);
+  });
+
+  it("gives the connection a real chance before saying it is lost", () => {
+    expect(CONNECTION_LOST_AFTER_FAILURES).toBeGreaterThan(3);
   });
 });

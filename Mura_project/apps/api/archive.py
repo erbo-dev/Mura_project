@@ -213,3 +213,20 @@ def register_archive_routes(
         """
 
         return _repository(runtime).list_review_items(family_id=family_id)
+
+    @app.get(
+        "/v1/families/{family_id}/privacy/export",
+        dependencies=[Depends(read_family_dependency)],
+    )
+    def get_family_privacy_export(
+        family_id: str,
+        runtime: object = Depends(get_runtime_dependency),
+    ) -> dict[str, Any]:
+        """Complete structured export of all family data for privacy/GDPR compliance."""
+        typed = cast(RuntimeWithDatabase, runtime)
+        from mura.privacy import export_family_data
+
+        data = export_family_data(typed.database, family_id=family_id)
+        if data is None:
+            raise _not_found()
+        return data
