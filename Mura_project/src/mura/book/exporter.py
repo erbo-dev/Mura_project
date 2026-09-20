@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from sqlalchemy import select
+
 from mura.book.export_document import build_book_html, write_epub3
 from mura.domain.book_models import ChapterStatus, ExportFormat, ExportStatus
 from mura.storage.book import (
@@ -16,8 +18,13 @@ from mura.storage.book import (
     BookExportRepository,
     BookExportRow,
     BookRepository,
+    BookRow,
 )
 from mura.storage.book_artifacts import BookArtifactStorage
+
+
+class BookExportCancelled(RuntimeError):
+    """Artifact publication lost the race with Book deletion/cancellation."""
 
 
 class ExportEngineUnavailable(RuntimeError):
@@ -154,29 +161,46 @@ class ExportService:
         sha256 = hashlib.sha256(data).hexdigest()
         size_bytes = len(data)
 
-        storage_key = self.artifact_storage.store(
-            family_id=family_id,
-            book_id=book_id,
-            export_format=export_format,
-            data=data,
-        )
+        # Book deletion takes this same row lock. Holding it through
+        # storage publication and metadata persistence creates a strict ordering:
+        # deletion either wins first (no upload) or captures the committed key.
+        with self.book_repo.database.session_factory.begin() as session:
+            locked_book = session.scalar(
+                select(BookRow)
+                .where(
+                    BookRow.book_id == book_id,
+                    BookRow.family_id == family_id,
+                )
+                .with_for_update()
+            )
+            if locked_book is None or locked_book.cancel_requested_at is not None:
+                raise BookExportCancelled(
+                    "book export cancelled before artifact publication"
+                )
 
-        backend_name = "local"
-        if hasattr(self.artifact_storage, "backend"):
-            backend_attr = self.artifact_storage.backend
-            backend_name = getattr(backend_attr, "value", str(backend_attr))
+            storage_key = self.artifact_storage.store(
+                family_id=family_id,
+                book_id=book_id,
+                export_format=export_format,
+                data=data,
+            )
 
-        export_row = self.export_repo.save_export(
-            book_id=book_id,
-            format=export_format.value,
-            status=ExportStatus.READY.value,
-            storage_key=storage_key,
-            storage_backend=backend_name,
-            size_bytes=size_bytes,
-            sha256=sha256,
-            content_type=content_type,
-            chapter_count=chapter_count,
-            word_count=total_words,
-            engine=engine,
-        )
-        return export_row
+            backend_name = "local"
+            if hasattr(self.artifact_storage, "backend"):
+                backend_attr = self.artifact_storage.backend
+                backend_name = getattr(backend_attr, "value", str(backend_attr))
+
+            return self.export_repo.save_export(
+                book_id=book_id,
+                format=export_format.value,
+                status=ExportStatus.READY.value,
+                storage_key=storage_key,
+                storage_backend=backend_name,
+                size_bytes=size_bytes,
+                sha256=sha256,
+                content_type=content_type,
+                chapter_count=chapter_count,
+                word_count=total_words,
+                engine=engine,
+                session=session,
+            )
