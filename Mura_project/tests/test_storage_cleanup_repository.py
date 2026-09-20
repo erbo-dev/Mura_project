@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from mura.storage.cleanup import (
     StorageCleanupRepository,
@@ -9,6 +9,10 @@ from mura.storage.cleanup import (
     StorageKind,
 )
 from mura.storage.database import Database, utcnow
+
+
+def _aware(value):
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 def _db() -> Database:
@@ -67,7 +71,7 @@ def test_cleanup_lease_heartbeat_and_complete() -> None:
     assert renewed is not None
     assert renewed.lease_expires_at is not None
     assert before is not None
-    assert renewed.lease_expires_at > before
+    assert _aware(renewed.lease_expires_at) > _aware(before)
 
     repo.complete(job.cleanup_job_id, lease_owner="worker_a")
     completed = repo.get_job(job.cleanup_job_id)
