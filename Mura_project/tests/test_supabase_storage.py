@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from mura.config import AudioStorageBackend, CoreSettings
+from mura.storage.storage_errors import StorageDeleteError
 from mura.storage.audio import (
     AudioStorageError,
     AudioTooLargeError,
