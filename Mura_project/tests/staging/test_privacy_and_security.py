@@ -36,7 +36,8 @@ from mura.storage.archive import (
     ArchivePersonRow,
     FamilyGraphEdgeRow,
 )
-from mura.storage.audio import LocalAudioStorage
+from mura.orchestration.cleanup import StorageCleanupWorker
+from mura.storage.audio import LegacyLocalAudioStorage, LocalAudioStorage
 from mura.storage.book import (
     BookChapterRepository,
     BookChapterRow,
@@ -48,6 +49,7 @@ from mura.storage.book import (
     BookRow,
 )
 from mura.storage.book_artifacts import LocalBookArtifactStorage
+from mura.storage.cleanup import StorageCleanupRepository, StorageKind
 from mura.storage.database import (
     Database,
     PipelineResultRow,
@@ -304,6 +306,20 @@ def staging_security_env(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def _drain_cleanup(env: dict[str, Any]) -> None:
+    worker = StorageCleanupWorker(
+        repository=StorageCleanupRepository(env["db"]),
+        storage_targets={
+            (StorageKind.AUDIO.value, "local"): env["audio_storage"],
+            (StorageKind.AUDIO.value, "legacy_local"): LegacyLocalAudioStorage(),
+            (StorageKind.BOOK_ARTIFACT.value, "local"): env["book_artifact_storage"],
+        },
+        worker_id="worker_staging_cleanup",
+    )
+    while worker.process_once():
+        pass
+
+
 # ==============================================================================
 # 1. CROSS-FAMILY BOLA MATRIX (10 Endpoints)
 # ==============================================================================
@@ -441,7 +457,8 @@ def test_privacy_cascade_delete_recording(staging_security_env: dict[str, Any]) 
     resp = client.delete(f"/v1/families/{fam_1}/recordings/{rec_1}", headers=owner_1.headers)
     assert resp.status_code == status.HTTP_204_NO_CONTENT
 
-    # Audio file must be completely wiped from storage
+    assert audio_storage.exists(staging_security_env["audio_storage_key_1"])
+    _drain_cleanup(staging_security_env)
     assert not audio_storage.exists(staging_security_env["audio_storage_key_1"])
 
     # Database records must be removed
@@ -474,8 +491,9 @@ def test_privacy_cascade_delete_book(staging_security_env: dict[str, Any]) -> No
         exp = session.scalars(select(BookExportRow).where(BookExportRow.book_id == book_1)).all()
         assert len(exp) == 0
 
-    # Artifact storage must be cleaned up
     book_artifacts: LocalBookArtifactStorage = staging_security_env["book_artifact_storage"]
+    assert book_artifacts.exists(storage_key=staging_security_env["storage_key"])
+    _drain_cleanup(staging_security_env)
     assert not book_artifacts.exists(storage_key=staging_security_env["storage_key"])
 
 
