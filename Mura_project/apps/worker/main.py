@@ -6,9 +6,10 @@ and scale on demand, and a job runner that holds a lease for many minutes. This
 entrypoint separates them. The API now only submits and reads jobs; this process
 claims and executes them.
 
-This process hosts two concurrent worker loops under a unified supervisor:
+This process hosts three concurrent worker loops under a unified supervisor:
 - RecordingJobWorker: claims and processes audio recording transcription & knowledge extraction
 - BookJobWorker: claims and processes family book generation, chapter drafting, and exports
+- StorageCleanupWorker: durably erases audio and Book artifacts after relational deletion
 
 Safety rests on DB leases, not on shutdown bookkeeping. If this process dies
 mid-job -- SIGTERM, power loss, anything -- the lease simply expires and another
@@ -31,10 +32,18 @@ from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.logging import configure_logging
 from mura.orchestration import RecordingJobWorker, build_audio_storage
 from mura.orchestration.books import BookJobWorker
+from mura.orchestration.cleanup import StorageCleanupWorker
 from mura.pipeline import MuraPipeline
 from mura.sentry import flush_sentry, init_sentry
 from mura.storage.ai_usage import AIUsageLedger
-from mura.storage.book_artifacts import build_book_artifact_storage
+from mura.storage.audio import AudioStorageBackend, LocalAudioStorage, SupabaseAudioStorage
+from mura.storage.book_artifacts import (
+    BookArtifactStorageBackend,
+    LocalBookArtifactStorage,
+    SupabaseBookArtifactStorage,
+    build_book_artifact_storage,
+)
+from mura.storage.cleanup import StorageCleanupRepository, StorageKind
 from mura.storage.database import Database, DatabaseRuntimeSettings, RecordingRepository
 
 logger = logging.getLogger("mura.worker")
@@ -174,41 +183,108 @@ def build_book_worker(
     )
 
 
+def build_cleanup_worker(
+    settings: CoreSettings,
+    database: Database | None = None,
+) -> StorageCleanupWorker:
+    if database is None:
+        database = Database(
+            settings.database_url,
+            runtime=DatabaseRuntimeSettings(
+                pool_size=settings.db_pool_size,
+                max_overflow=settings.db_max_overflow,
+                pool_recycle_seconds=settings.db_pool_recycle_seconds,
+                connect_timeout_seconds=settings.db_connect_timeout_seconds,
+                statement_timeout_seconds=settings.db_statement_timeout_seconds,
+            ),
+        )
+
+    targets: dict[tuple[str, str], Any] = {
+        (
+            StorageKind.AUDIO.value,
+            AudioStorageBackend.LOCAL.value,
+        ): LocalAudioStorage(
+            settings.audio_storage_dir,
+            max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
+        ),
+        (
+            StorageKind.BOOK_ARTIFACT.value,
+            BookArtifactStorageBackend.LOCAL.value,
+        ): LocalBookArtifactStorage(settings.book_storage_dir),
+    }
+    # Keep both backend implementations available when credentials exist. A
+    # cleanup job must use the backend recorded when the object was created,
+    # even if the application's current write backend later changes.
+    if settings.supabase_url and settings.supabase_service_role_key:
+        targets[
+            (StorageKind.AUDIO.value, AudioStorageBackend.SUPABASE.value)
+        ] = SupabaseAudioStorage(
+            url=settings.supabase_url,
+            service_role_key=settings.supabase_service_role_key,
+            bucket=settings.supabase_storage_bucket,
+            max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
+            timeout_seconds=settings.supabase_storage_timeout_seconds,
+        )
+        targets[
+            (StorageKind.BOOK_ARTIFACT.value, BookArtifactStorageBackend.SUPABASE.value)
+        ] = SupabaseBookArtifactStorage(
+            url=settings.supabase_url,
+            service_role_key=settings.supabase_service_role_key,
+            bucket=settings.supabase_books_bucket,
+            timeout_seconds=settings.supabase_storage_timeout_seconds,
+        )
+
+    return StorageCleanupWorker(
+        repository=StorageCleanupRepository(database),
+        storage_targets=targets,
+        poll_interval_seconds=settings.storage_cleanup_poll_interval_seconds,
+        lease_seconds=settings.storage_cleanup_lease_seconds,
+        heartbeat_seconds=settings.storage_cleanup_heartbeat_seconds,
+        retry_base_seconds=settings.storage_cleanup_retry_base_seconds,
+        retry_max_seconds=settings.storage_cleanup_retry_max_seconds,
+    )
+
+
 def build_worker(settings: CoreSettings) -> RecordingJobWorker:
     """Legacy helper returning RecordingJobWorker for backwards compatibility."""
     return build_recording_worker(settings)
 
 
 class WorkerSupervisor:
-    """Supervises concurrent execution of RecordingJobWorker and BookJobWorker."""
+    """Supervises all durable queue workers in one process."""
 
     def __init__(
         self,
         recording_worker: RecordingJobWorker,
         book_worker: BookJobWorker,
+        cleanup_worker: StorageCleanupWorker,
     ) -> None:
         self.recording_worker = recording_worker
         self.book_worker = book_worker
+        self.cleanup_worker = cleanup_worker
 
     def request_stop(self) -> None:
         """Signal both workers to stop claiming new jobs."""
         self.recording_worker.request_stop()
         self.book_worker.request_stop()
+        self.cleanup_worker.request_stop()
 
     def stop(self, timeout_seconds: float = 5.0) -> None:
         """Stop both workers gracefully."""
         self.request_stop()
         self.recording_worker.stop(timeout_seconds=timeout_seconds)
         self.book_worker.stop(timeout_seconds=timeout_seconds)
+        self.cleanup_worker.stop(timeout_seconds=timeout_seconds)
 
     def run_forever(self) -> None:
         """Run both worker loops concurrently until stopped or until an unhandled exception occurs."""
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="mura-worker"
+            max_workers=3, thread_name_prefix="mura-worker"
         ) as executor:
             future_rec = executor.submit(self.recording_worker.run_forever)
             future_book = executor.submit(self.book_worker.run_forever)
-            futures = [future_rec, future_book]
+            future_cleanup = executor.submit(self.cleanup_worker.run_forever)
+            futures = [future_rec, future_book, future_cleanup]
 
             try:
                 while True:
@@ -248,10 +324,17 @@ def build_worker_supervisor(settings: CoreSettings) -> WorkerSupervisor:
     ai_ledger = AIUsageLedger(database)
     recording_worker = build_recording_worker(settings, database=database, ai_ledger=ai_ledger)
     book_worker = build_book_worker(settings, database=database, ai_ledger=ai_ledger)
-    return WorkerSupervisor(recording_worker=recording_worker, book_worker=book_worker)
+    cleanup_worker = build_cleanup_worker(settings, database=database)
+    return WorkerSupervisor(
+        recording_worker=recording_worker,
+        book_worker=book_worker,
+        cleanup_worker=cleanup_worker,
+    )
 
 
-def install_signal_handlers(target: WorkerSupervisor | RecordingJobWorker | BookJobWorker | Any) -> None:
+def install_signal_handlers(
+    target: WorkerSupervisor | RecordingJobWorker | BookJobWorker | StorageCleanupWorker | Any,
+) -> None:
     """Stop claiming new work on termination. Works on Windows and POSIX."""
 
     def handle(signum: int, _frame: FrameType | None) -> None:
@@ -299,10 +382,13 @@ def main() -> int:
             "event": "worker_started",
             "recording_worker_id": supervisor.recording_worker.worker_id,
             "book_worker_id": supervisor.book_worker.worker_id,
+            "cleanup_worker_id": supervisor.cleanup_worker.worker_id,
             "recording_lease_seconds": settings.job_lease_seconds,
             "book_lease_seconds": settings.book_job_lease_seconds,
             "recording_heartbeat_seconds": settings.job_heartbeat_seconds,
             "book_heartbeat_seconds": settings.book_job_heartbeat_seconds,
+            "cleanup_lease_seconds": settings.storage_cleanup_lease_seconds,
+            "cleanup_heartbeat_seconds": settings.storage_cleanup_heartbeat_seconds,
         },
     )
     try:

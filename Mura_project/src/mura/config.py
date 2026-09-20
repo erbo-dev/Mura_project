@@ -193,6 +193,42 @@ class CoreSettings(BaseSettings):
         ge=10.0,
         le=3600.0,
     )
+    storage_cleanup_lease_seconds: float = Field(
+        default=120.0,
+        alias="STORAGE_CLEANUP_LEASE_SECONDS",
+        ge=30.0,
+        le=3600.0,
+    )
+    storage_cleanup_heartbeat_seconds: float = Field(
+        default=30.0,
+        alias="STORAGE_CLEANUP_HEARTBEAT_SECONDS",
+        ge=5.0,
+        le=600.0,
+    )
+    storage_cleanup_poll_interval_seconds: float = Field(
+        default=2.0,
+        alias="STORAGE_CLEANUP_POLL_INTERVAL_SECONDS",
+        ge=0.5,
+        le=60.0,
+    )
+    storage_cleanup_max_attempts: int = Field(
+        default=8,
+        alias="STORAGE_CLEANUP_MAX_ATTEMPTS",
+        ge=1,
+        le=100,
+    )
+    storage_cleanup_retry_base_seconds: float = Field(
+        default=5.0,
+        alias="STORAGE_CLEANUP_RETRY_BASE_SECONDS",
+        ge=1.0,
+        le=300.0,
+    )
+    storage_cleanup_retry_max_seconds: float = Field(
+        default=3600.0,
+        alias="STORAGE_CLEANUP_RETRY_MAX_SECONDS",
+        ge=10.0,
+        le=86400.0,
+    )
     book_max_active_per_family: int = Field(
         default=1,
         alias="BOOK_MAX_ACTIVE_PER_FAMILY",
@@ -326,6 +362,15 @@ class CoreSettings(BaseSettings):
             raise ValueError(
                 "BOOK_JOB_LEASE_SECONDS must allow at least three heartbeats "
                 "so a transient database blip does not lose the lease"
+            )
+        if self.storage_cleanup_heartbeat_seconds >= self.storage_cleanup_lease_seconds:
+            raise ValueError(
+                "STORAGE_CLEANUP_HEARTBEAT_SECONDS must be shorter than "
+                "STORAGE_CLEANUP_LEASE_SECONDS"
+            )
+        if self.storage_cleanup_lease_seconds < 3 * self.storage_cleanup_heartbeat_seconds:
+            raise ValueError(
+                "STORAGE_CLEANUP_LEASE_SECONDS must allow at least three heartbeats"
             )
         return self
 
