@@ -42,6 +42,16 @@ def _validate_storage_key(storage_key: str) -> None:
         raise ValueError(f"Storage path traversal detected for key: {storage_key}")
 
 
+def build_book_storage_key(
+    *,
+    family_id: str,
+    book_id: str,
+    export_format: ExportFormat,
+) -> str:
+    _validate_ids(family_id, book_id)
+    return f"families/{family_id}/books/{book_id}/book.{export_format.value}"
+
+
 class BookArtifactStorage(Protocol):
     @property
     def backend(self) -> BookArtifactStorageBackend: ...
@@ -96,9 +106,11 @@ class LocalBookArtifactStorage:
         export_format: ExportFormat,
         data: bytes,
     ) -> str:
-        _validate_ids(family_id, book_id)
-        filename = f"book.{export_format.value}"
-        storage_key = f"families/{family_id}/books/{book_id}/{filename}"
+        storage_key = build_book_storage_key(
+            family_id=family_id,
+            book_id=book_id,
+            export_format=export_format,
+        )
         target_path = self._key_to_path(storage_key)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(data)
