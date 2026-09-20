@@ -615,17 +615,16 @@ def register_book_routes(
     ) -> None:
         typed = cast(RuntimeWithDatabaseAndSettings, runtime)
         book_repo = BookRepository(typed.database)
-        book = book_repo.get_book(family_id=family_id, book_id=book_id)
-        if book is None:
+        backend = getattr(
+            typed.settings.book_storage_backend,
+            "value",
+            typed.settings.book_storage_backend,
+        )
+        cleanup_jobs = book_repo.delete_family_book(
+            family_id=family_id,
+            book_id=book_id,
+            default_storage_backend=str(backend),
+            cleanup_max_attempts=typed.settings.storage_cleanup_max_attempts,
+        )
+        if cleanup_jobs is None:
             raise _not_found()
-
-        export_keys = book_repo.delete_family_book(family_id=family_id, book_id=book_id)
-        if export_keys is None:
-            raise _not_found()
-
-        artifact_storage = build_book_artifact_storage(typed.settings)
-        for key in export_keys:
-            try:
-                artifact_storage.delete(storage_key=key)
-            except Exception:
-                pass
