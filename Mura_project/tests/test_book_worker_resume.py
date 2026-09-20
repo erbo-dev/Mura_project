@@ -423,6 +423,45 @@ def test_book_worker_resumes_without_rewriting_approved(
     assert len(write_calls) == 1
 
 
+def test_book_worker_fails_closed_when_snapshot_is_missing(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
+    fid, uid = family_and_user
+    book_repo = BookRepository(db)
+    job_repo = BookJobRepository(db)
+    snapshot_repo = BookSourceSnapshotRepository(db)
+    artifact_storage = LocalBookArtifactStorage(tmp_path / "artifacts")
+    client = _build_mock_client()
+
+    book = book_repo.create_book(
+        book_id="book_missing_snapshot",
+        family_id=fid,
+        created_by_user_id=uid,
+        title="Must stay frozen",
+        output_language=BookLanguage.RU.value,
+        target_word_count=1000,
+    )
+    job = job_repo.create_job(book_id=book.book_id, family_id=fid)
+
+    worker = BookJobWorker(
+        db=db,
+        deepseek_client=client,
+        artifact_storage=artifact_storage,
+        pdf_renderer=FakePDFRenderer(),
+    )
+
+    assert worker.process_once() is True
+
+    failed_book = book_repo.get_book_unscoped(book.book_id)
+    failed_job = job_repo.get_job(job.job_id)
+    assert failed_book is not None
+    assert failed_book.status == BookStatus.FAILED.value
+    assert failed_job is not None
+    assert failed_job.status == BookJobStatus.FAILED.value
+    assert snapshot_repo.get_snapshot(book.book_id) is None
+    assert client.request_json.call_count == 0
+
+
 def test_book_worker_cancellation(
     db: Database, family_and_user: tuple[str, str], tmp_path: Path
 ) -> None:
