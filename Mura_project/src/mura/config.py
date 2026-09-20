@@ -158,6 +158,10 @@ class CoreSettings(BaseSettings):
         le=3600,
     )
 
+    book_storage_backend: AudioStorageBackend = Field(
+        default=AudioStorageBackend.LOCAL,
+        alias="BOOK_STORAGE_BACKEND",
+    )
     book_storage_dir: Path = Field(default=Path(".mura/books"), alias="BOOK_STORAGE_DIR")
     book_job_lease_seconds: float = Field(
         default=600.0,
@@ -201,11 +205,6 @@ class CoreSettings(BaseSettings):
         ge=1,
         le=100,
     )
-    allowed_hosts: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["*"],
-        alias="ALLOWED_HOSTS",
-    )
-
     auth_mode: AuthMode = Field(default=AuthMode.DISABLED, alias="AUTH_MODE")
     auth_issuer: str | None = Field(default=None, alias="AUTH_ISSUER")
     auth_audience: str | None = Field(default=None, alias="AUTH_AUDIENCE")
@@ -348,11 +347,6 @@ class CoreSettings(BaseSettings):
                 "OPERATIONS_API_KEY must differ from CORE_API_KEY so a leaked "
                 "application token cannot reach destructive operator routes"
             )
-        if production_like and not _is_rooted_path(self.audio_storage_dir):
-            raise ValueError(
-                "AUDIO_STORAGE_DIR must be an absolute path outside staging and "
-                "production working directories"
-            )
         if self.audio_storage_backend == AudioStorageBackend.SUPABASE:
             missing = [
                 name
@@ -363,27 +357,37 @@ class CoreSettings(BaseSettings):
                 if not val
             ]
             if missing:
-                raise ValueError(f"{', '.join(missing)} required when AUDIO_STORAGE_BACKEND is supabase")
+                raise ValueError(
+                    f"{', '.join(missing)} required when AUDIO_STORAGE_BACKEND is supabase"
+                )
             if not self.supabase_storage_bucket:
                 raise ValueError("SUPABASE_STORAGE_BUCKET must not be empty")
+        elif production_like and not _is_rooted_path(self.audio_storage_dir):
+            raise ValueError(
+                "AUDIO_STORAGE_DIR must be an absolute path outside staging and "
+                "production working directories"
+            )
+
+        if self.book_storage_backend == AudioStorageBackend.SUPABASE:
+            missing = [
+                name
+                for name, val in (
+                    ("SUPABASE_URL", self.supabase_url),
+                    ("SUPABASE_SERVICE_ROLE_KEY", self.supabase_service_role_key),
+                )
+                if not val
+            ]
+            if missing:
+                raise ValueError(
+                    f"{', '.join(missing)} required when BOOK_STORAGE_BACKEND is supabase"
+                )
             if not self.supabase_books_bucket:
                 raise ValueError("SUPABASE_BOOKS_BUCKET must not be empty")
-        elif self.audio_storage_backend == AudioStorageBackend.LOCAL:
-            if production_like and not _is_rooted_path(self.audio_storage_dir):
-                raise ValueError(
-                    "AUDIO_STORAGE_DIR must be an absolute path outside staging and "
-                    "production working directories"
-                )
-        if production_like and not _is_rooted_path(self.book_storage_dir):
+        elif production_like and not _is_rooted_path(self.book_storage_dir):
             raise ValueError(
                 "BOOK_STORAGE_DIR must be an absolute path outside staging and "
                 "production working directories"
             )
-            if production_like and not _is_rooted_path(self.book_storage_dir):
-                raise ValueError(
-                    "BOOK_STORAGE_DIR must be an absolute path outside staging and "
-                    "production working directories"
-                )
         if production_like and not self.cors_allowed_origins:
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must list at least one origin in staging and production"
