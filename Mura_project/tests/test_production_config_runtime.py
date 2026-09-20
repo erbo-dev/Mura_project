@@ -67,6 +67,10 @@ def test_local_environment_is_the_default() -> None:
     assert CoreSettings.model_validate(_payload()).environment is Environment.LOCAL
 
 
+def test_allowed_hosts_default_is_empty() -> None:
+    assert CoreSettings.model_validate(_payload()).allowed_hosts == []
+
+
 def test_local_may_still_use_sqlite_and_auto_create() -> None:
     settings = CoreSettings.model_validate(_payload(DATABASE_AUTO_CREATE="true"))
 
@@ -127,6 +131,50 @@ def test_valid_production_configuration_is_accepted() -> None:
         "https://www.example.com",
     ]
     assert settings.api_docs_enabled is False
+
+
+def test_production_supabase_book_storage_does_not_require_local_book_path() -> None:
+    settings = CoreSettings.model_validate(
+        _production_payload(
+            BOOK_STORAGE_BACKEND="supabase",
+            BOOK_STORAGE_DIR=".mura/books",
+            SUPABASE_URL="https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY="service-role-key",
+        )
+    )
+
+    assert settings.book_storage_backend.value == "supabase"
+    assert settings.book_storage_dir == Path(".mura/books")
+
+
+def test_production_local_book_storage_requires_rooted_path() -> None:
+    with pytest.raises(ValidationError, match="BOOK_STORAGE_DIR"):
+        CoreSettings.model_validate(_production_payload(BOOK_STORAGE_DIR=".mura/books"))
+
+
+def test_supabase_book_storage_requires_supabase_credentials() -> None:
+    with pytest.raises(ValidationError, match="BOOK_STORAGE_BACKEND"):
+        CoreSettings.model_validate(
+            _production_payload(
+                BOOK_STORAGE_BACKEND="supabase",
+                SUPABASE_URL="",
+                SUPABASE_SERVICE_ROLE_KEY="",
+            )
+        )
+
+
+def test_production_supabase_audio_storage_does_not_require_local_audio_path() -> None:
+    settings = CoreSettings.model_validate(
+        _production_payload(
+            AUDIO_STORAGE_BACKEND="supabase",
+            AUDIO_STORAGE_DIR=".mura/audio",
+            SUPABASE_URL="https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY="service-role-key",
+        )
+    )
+
+    assert settings.audio_storage_backend.value == "supabase"
+    assert settings.audio_storage_dir == Path(".mura/audio")
 
 
 @pytest.mark.parametrize(
