@@ -355,7 +355,7 @@ class IdentityRepository:
         between an owner-count read and family deletion.
         """
 
-        from mura.observability import ProcessingTraceRow
+        from mura.observability import ProcessingTraceEventRow
         from mura.storage.archive import (
             ArchiveClaimRow,
             ArchiveConflictRow,
@@ -504,8 +504,8 @@ class IdentityRepository:
 
             if recording_ids:
                 session.execute(
-                    delete(ProcessingTraceRow).where(
-                        ProcessingTraceRow.recording_id.in_(recording_ids)
+                    delete(ProcessingTraceEventRow).where(
+                        ProcessingTraceEventRow.recording_id.in_(recording_ids)
                     )
                 )
                 session.execute(
