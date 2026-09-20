@@ -8,7 +8,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Annotated
 from typing import Annotated, Any
 
 from mura.logging import configure_logging, request_id_ctx
@@ -243,7 +242,6 @@ def get_runtime(
                 if settings.database_auto_create:
                     database.create_schema()
                 repository = RecordingRepository(database)
-                pipeline = _build_pipeline(settings)
                 pipeline = _build_pipeline(settings, database=database)
                 storage = build_audio_storage(settings)
                 # Recording jobs are executed by the standalone mura-worker
