@@ -8,7 +8,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mura.domain.book_models import (\n    BookJobStatus,\n    BookLanguage,\n    BookSourceSnapshot,\n    BookStatus,\n    CompiledSnapshot,\n    SnapshotManifest,\n)
+from mura.domain.book_models import (
+    BookJobStatus,
+    BookLanguage,
+    BookSourceSnapshot,
+    BookStatus,
+    CompiledSnapshot,
+    SnapshotManifest,
+)
 from mura.leases import LeaseOwnershipLost
 from mura.orchestration.books import BookJobWorker
 from mura.reliability.failures import (
