@@ -59,7 +59,13 @@ from mura.domain.book_models import (
     ChapterStatus as ChapterStatusEnum,
 )
 from mura.jobs import JobStatus
+from mura.storage.cleanup import (
+    StorageCleanupRepository,
+    StorageCleanupResourceType,
+    StorageKind,
+)
 from mura.leases import LeaseOwnershipLost
+from mura.storage.book_artifacts import build_book_storage_key
 from mura.storage.database import (
     JSON_VALUE,
     Base,
@@ -416,35 +422,97 @@ class BookRepository:
             )
             return session.scalar(stmt)
 
-    def delete_family_book(self, *, family_id: str, book_id: str) -> list[str] | None:
-        """Delete a family book and all dependent rows, returning export artifact keys to clean up."""
+    def delete_family_book(
+        self,
+        *,
+        family_id: str,
+        book_id: str,
+        default_storage_backend: str = "local",
+        cleanup_repository: StorageCleanupRepository | None = None,
+        cleanup_max_attempts: int = 8,
+    ) -> list[str] | None:
+        """Delete a Book and persist physical erasure in the same transaction.
+
+        ExportService takes the same Book row lock at its artifact durability
+        boundary. Either deletion wins and prevents the upload, or export wins
+        first and deletion observes/queues the resulting object.
+        """
+
+        cleanup_repo = cleanup_repository or StorageCleanupRepository(self.database)
         with self.database.session_factory.begin() as session:
             book = session.scalar(
-                select(BookRow).where(
+                select(BookRow)
+                .where(
                     BookRow.book_id == book_id,
                     BookRow.family_id == family_id,
                 )
+                .with_for_update()
             )
             if book is None:
                 return None
 
-            export_keys = list(
+            book.cancel_requested_at = utcnow()
+            exports = list(
                 session.scalars(
-                    select(BookExportRow.storage_key).where(
-                        BookExportRow.book_id == book_id,
-                        BookExportRow.storage_key.is_not(None),
-                    )
+                    select(BookExportRow).where(BookExportRow.book_id == book_id)
                 ).all()
+            )
+            cleanup_items: list[dict[str, str]] = []
+            for export in exports:
+                if not export.storage_key:
+                    continue
+                cleanup_items.append(
+                    {
+                        "resource_type": (
+                            StorageCleanupResourceType.BOOK_PDF.value
+                            if export.format == "pdf"
+                            else StorageCleanupResourceType.BOOK_EPUB.value
+                        ),
+                        "storage_kind": StorageKind.BOOK_ARTIFACT.value,
+                        "storage_backend": export.storage_backend or default_storage_backend,
+                        "storage_key": export.storage_key,
+                    }
+                )
+
+            # Canonical keys are deterministic. Queue both formats even when
+            # metadata is missing (e.g. a crash after upload but before commit).
+            for export_format, resource_type in (
+                (ExportFormat.PDF, StorageCleanupResourceType.BOOK_PDF),
+                (ExportFormat.EPUB, StorageCleanupResourceType.BOOK_EPUB),
+            ):
+                cleanup_items.append(
+                    {
+                        "resource_type": resource_type.value,
+                        "storage_kind": StorageKind.BOOK_ARTIFACT.value,
+                        "storage_backend": default_storage_backend,
+                        "storage_key": build_book_storage_key(
+                            family_id=family_id,
+                            book_id=book_id,
+                            export_format=export_format,
+                        ),
+                    }
+                )
+
+            cleanup_rows = cleanup_repo.enqueue_many(
+                cleanup_items,
+                max_attempts=cleanup_max_attempts,
+                session=session,
             )
 
             session.execute(delete(BookExportRow).where(BookExportRow.book_id == book_id))
-            session.execute(delete(BookContinuityStateRow).where(BookContinuityStateRow.book_id == book_id))
+            session.execute(
+                delete(BookContinuityStateRow).where(
+                    BookContinuityStateRow.book_id == book_id
+                )
+            )
             session.execute(delete(BookChapterRow).where(BookChapterRow.book_id == book_id))
             session.execute(delete(BookPlanRow).where(BookPlanRow.book_id == book_id))
-            session.execute(delete(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id == book_id))
+            session.execute(
+                delete(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id == book_id)
+            )
             session.execute(delete(BookJobRow).where(BookJobRow.book_id == book_id))
             session.delete(book)
-            return [k for k in export_keys if k]
+            return [row.cleanup_job_id for row in cleanup_rows]
 
     def get_book_unscoped(self, book_id: str) -> BookRow | None:
         with self.database.session_factory() as session:
