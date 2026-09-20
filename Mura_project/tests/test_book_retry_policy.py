@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mura.domain.book_models import BookJobStatus, BookLanguage, BookStatus
+from mura.domain.book_models import (\n    BookJobStatus,\n    BookLanguage,\n    BookSourceSnapshot,\n    BookStatus,\n    CompiledSnapshot,\n    SnapshotManifest,\n)
 from mura.leases import LeaseOwnershipLost
 from mura.orchestration.books import BookJobWorker
 from mura.reliability.failures import (
@@ -245,19 +245,24 @@ def test_book_worker_defers_on_retryable_provider_error(db: Database, tmp_path: 
     job_repo = BookJobRepository(db)
     artifact_storage = LocalBookArtifactStorage(tmp_path / "artifacts")
 
-    book = book_repo.create_book(
-        book_id="book_worker_retry_1",
+    compiled_snapshot = CompiledSnapshot(
+        snapshot=BookSourceSnapshot(
+            compiler_version="test-retry-policy",
+            family_id="fam_worker_retry",
+            manifest=SnapshotManifest(created_at=now),
+        ),
+        content_hash="0" * 64,
+    )
+    queued = BookCreationRepository(db).create_queued_book(
         family_id="fam_worker_retry",
         created_by_user_id="user_worker_retry",
         title="Retry Flow Book",
         output_language=BookLanguage.RU.value,
         target_word_count=5000,
+        compiled_snapshot=compiled_snapshot,
     )
-    job = job_repo.create_job(
-        book_id=book.book_id,
-        family_id="fam_worker_retry",
-        max_attempts=3,
-    )
+    book = queued.book
+    job = queued.job
 
     # Mock client that raises HTTP 429
     failing_client = MagicMock()
