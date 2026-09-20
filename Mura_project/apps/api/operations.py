@@ -225,6 +225,15 @@ def register_operations_routes(
                 asr_request_timeout_seconds=settings.asr_request_timeout_seconds,
                 book_job_lease_seconds=getattr(settings, "book_job_lease_seconds", 600.0),
                 book_job_heartbeat_seconds=getattr(settings, "book_job_heartbeat_seconds", 60.0),
+                storage_cleanup_lease_seconds=getattr(
+                    settings, "storage_cleanup_lease_seconds", 120.0
+                ),
+                storage_cleanup_heartbeat_seconds=getattr(
+                    settings, "storage_cleanup_heartbeat_seconds", 30.0
+                ),
+                storage_cleanup_max_attempts=getattr(
+                    settings, "storage_cleanup_max_attempts", 8
+                ),
             )
             if settings is not None
             else None
