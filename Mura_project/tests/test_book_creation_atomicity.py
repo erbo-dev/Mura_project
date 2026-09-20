@@ -114,6 +114,29 @@ def test_create_queued_book_atomic_success() -> None:
     assert persisted_job.status == "queued"
 
 
+def test_create_queued_book_joins_caller_transaction() -> None:
+    db, family_id, user_id = _setup_db()
+    creation_repo = BookCreationRepository(db)
+    compiled = _dummy_compiled_snapshot(family_id)
+
+    with pytest.raises(RuntimeError, match="rollback outer transaction"):
+        with db.session_factory.begin() as session:
+            creation_repo.create_queued_book(
+                family_id=family_id,
+                created_by_user_id=user_id,
+                title="Transactional Book",
+                output_language="ru",
+                target_word_count=20000,
+                compiled_snapshot=compiled,
+                session=session,
+            )
+            raise RuntimeError("rollback outer transaction")
+
+    books, total = BookRepository(db).list_books(family_id=family_id)
+    assert total == 0
+    assert books == []
+
+
 def test_create_queued_book_atomic_rollback_on_failure() -> None:
     db, family_id, user_id = _setup_db()
     creation_repo = BookCreationRepository(db)
