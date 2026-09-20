@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
 import re
 from typing import Any, Protocol
 
@@ -261,13 +260,14 @@ class SupabaseBookArtifactStorage:
 
 
 def build_book_artifact_storage(settings: Any) -> BookArtifactStorage:
-    """Construct book artifact storage based on settings."""
-    backend_val = getattr(settings, "audio_storage_backend", None)
-    is_supabase = (
-        backend_val == "supabase"
-        or getattr(backend_val, "value", None) == "supabase"
+    """Construct book artifact storage from BOOK_STORAGE_BACKEND."""
+    backend_val = getattr(
+        settings,
+        "book_storage_backend",
+        BookArtifactStorageBackend.LOCAL,
     )
-    if is_supabase:
+    backend = getattr(backend_val, "value", backend_val)
+    if backend == BookArtifactStorageBackend.SUPABASE.value:
         url = getattr(settings, "supabase_url", None)
         key = getattr(settings, "supabase_service_role_key", None)
         if not url or not key:
@@ -283,5 +283,8 @@ def build_book_artifact_storage(settings: Any) -> BookArtifactStorage:
             timeout_seconds=timeout,
         )
 
-    base_dir = getattr(settings, "book_storage_dir", Path(".mura/books"))
-    return LocalBookArtifactStorage(base_dir)
+    if backend == BookArtifactStorageBackend.LOCAL.value:
+        base_dir = getattr(settings, "book_storage_dir", Path(".mura/books"))
+        return LocalBookArtifactStorage(base_dir)
+
+    raise ValueError(f"Unsupported BOOK_STORAGE_BACKEND: {backend!r}")
