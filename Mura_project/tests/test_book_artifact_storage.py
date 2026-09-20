@@ -131,14 +131,16 @@ def test_supabase_book_artifact_storage() -> None:
 
 def test_build_book_artifact_storage_factory(tmp_path: Path) -> None:
     class MockLocalSettings:
-        audio_storage_backend = "local"
+        audio_storage_backend = "supabase"
+        book_storage_backend = "local"
         book_storage_dir = tmp_path
 
     storage_local = build_book_artifact_storage(MockLocalSettings())
     assert isinstance(storage_local, LocalBookArtifactStorage)
 
     class MockSupabaseSettings:
-        audio_storage_backend = "supabase"
+        audio_storage_backend = "local"
+        book_storage_backend = "supabase"
         supabase_url = "https://example.supabase.co"
         supabase_service_role_key = "test-key"
         supabase_books_bucket = "test-books"
@@ -147,4 +149,13 @@ def test_build_book_artifact_storage_factory(tmp_path: Path) -> None:
     storage_supabase = build_book_artifact_storage(MockSupabaseSettings())
     assert isinstance(storage_supabase, SupabaseBookArtifactStorage)
     assert storage_supabase.bucket == "test-books"
+
+
+def test_book_artifact_storage_rejects_unknown_backend(tmp_path: Path) -> None:
+    class InvalidSettings:
+        book_storage_backend = "typo"
+        book_storage_dir = tmp_path
+
+    with pytest.raises(ValueError, match="BOOK_STORAGE_BACKEND"):
+        build_book_artifact_storage(InvalidSettings())
 
