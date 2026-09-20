@@ -258,7 +258,6 @@ def install_signal_handlers(target: WorkerSupervisor | RecordingJobWorker | Book
         logger.info("worker received signal %s; finishing current work", signum)
         # Only stops the claim loop. In-flight processing is left alone and its
         # lease expiry, not this handler, is what makes the job recoverable.
-        worker.request_stop()
         target.request_stop()
 
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
@@ -292,17 +291,12 @@ def main() -> int:
         traces_sample_rate=settings.sentry_traces_sample_rate,
     )
 
-    worker = build_worker(settings)
-    install_signal_handlers(worker)
     supervisor = build_worker_supervisor(settings)
     install_signal_handlers(supervisor)
     logger.info(
         "worker_started",
         extra={
             "event": "worker_started",
-            "worker_id": worker.worker_id,
-            "lease_seconds": settings.job_lease_seconds,
-            "heartbeat_seconds": settings.job_heartbeat_seconds,
             "recording_worker_id": supervisor.recording_worker.worker_id,
             "book_worker_id": supervisor.book_worker.worker_id,
             "recording_lease_seconds": settings.job_lease_seconds,
@@ -312,12 +306,10 @@ def main() -> int:
         },
     )
     try:
-        worker.run_forever()
         supervisor.run_forever()
     except KeyboardInterrupt:
         logger.info("worker interrupted")
     finally:
-        worker.stop()
         supervisor.stop()
         flush_sentry()
     logger.info("worker stopped")
