@@ -1124,11 +1124,13 @@ class BookExportRepository:
         word_count: int = 0,
         engine: str | None = None,
         error_code: str | None = None,
+        session: Session | None = None,
     ) -> BookExportRow:
         now = utcnow()
         eid = export_id or new_export_id()
-        with self.database.session_factory.begin() as session:
-            existing = session.scalar(
+
+        def persist(target: Session) -> BookExportRow:
+            existing = target.scalar(
                 select(BookExportRow).where(
                     BookExportRow.book_id == book_id,
                     BookExportRow.format == format,
@@ -1152,7 +1154,7 @@ class BookExportRepository:
                     created_at=now,
                     updated_at=now,
                 )
-                session.add(row)
+                target.add(row)
             else:
                 existing.status = status
                 if storage_key is not None:
@@ -1172,9 +1174,15 @@ class BookExportRepository:
                 existing.error_code = error_code
                 existing.updated_at = now
                 row = existing
-            session.flush()
-            session.expunge(row)
+            target.flush()
+            if session is None:
+                target.expunge(row)
             return row
+
+        if session is not None:
+            return persist(session)
+        with self.database.session_factory.begin() as owned:
+            return persist(owned)
 
     def get_export(self, *, book_id: str, format: str) -> BookExportRow | None:
         with self.database.session_factory() as session:
