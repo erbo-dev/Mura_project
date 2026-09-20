@@ -29,7 +29,6 @@ from mura.book.prompts import (
     BOOK_PLANNER_PROMPT_VERSION,
 )
 from mura.book.reviewer import review_chapter
-from mura.book.snapshot import compile_source_snapshot
 from mura.book.writer import repair_chapter, write_chapter
 from mura.domain.book_models import (
     BookBlueprint,
@@ -47,7 +46,6 @@ from mura.domain.book_models import (
 )
 from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
 from mura.reliability.failures import calculate_retry_delay, classify_failure
-from mura.logging import WorkerBookJobContextManager
 from mura.logging import BookChapterContextManager, WorkerBookJobContextManager
 from mura.sentry import capture_exception
 from mura.storage.ai_usage import AIUsageLedger
@@ -63,8 +61,8 @@ from mura.storage.book import (
     BookSourceSnapshotRepository,
 )
 from mura.storage.book_artifacts import BookArtifactStorage
-from mura.storage.database import Database
-from datetime import datetime, timedelta
+from datetime import timedelta
+
 from mura.storage.database import Database, utcnow
 
 logger = logging.getLogger(__name__)
@@ -320,37 +318,18 @@ class BookJobWorker:
         if self._check_cancellation(job, book.book_id):
             return
 
-        # 1. PREPARING_SOURCES (Snapshot Compilation / Verification)
+        # 1. PREPARING_SOURCES (immutable snapshot verification)
         snapshot_row = self.snapshot_repo.get_snapshot(book.book_id)
         if snapshot_row is None:
-            self.book_repo.update_stage(
-                book.book_id,
-                stage=BookStage.PREPARING_SOURCES.value,
-                status=BookStatus.PLANNING.value,
-            )
-            self.job_repo.update_job_stage(
-                job.job_id,
-                stage=BookStage.PREPARING_SOURCES.value,
-                lease_owner=self.worker_id,
-            )
-            compiled = compile_source_snapshot(
-                self.db,
-                family_id=book.family_id,
-            )
-            snapshot = compiled.snapshot
-            self.snapshot_repo.save_snapshot(
-                book_id=book.book_id,
-                family_id=book.family_id,
-                compiler_version=snapshot.compiler_version,
-                content_hash=compiled.content_hash,
-                payload=snapshot.model_dump(mode="json"),
-                manifest=snapshot.manifest.model_dump(mode="json"),
-                source_recording_count=len(snapshot.manifest.source_recording_ids),
-                source_story_count=len(snapshot.manifest.source_story_ids),
-                source_claim_count=len(snapshot.manifest.source_claim_ids),
-            )
-        else:
-            snapshot = BookSourceSnapshot.model_validate(snapshot_row.payload)
+            # A queued book must already own the exact source snapshot compiled
+            # by the API. Recompiling here from the live archive would allow
+            # later or unrequested recordings to enter an existing book.
+            raise RuntimeError(f"source snapshot missing for book {book.book_id}")
+        if snapshot_row.family_id != book.family_id:
+            raise RuntimeError(f"source snapshot family mismatch for book {book.book_id}")
+        snapshot = BookSourceSnapshot.model_validate(snapshot_row.payload)
+        if snapshot.family_id != book.family_id:
+            raise RuntimeError(f"source snapshot payload family mismatch for book {book.book_id}")
 
         if self._check_cancellation(job, book.book_id):
             return
