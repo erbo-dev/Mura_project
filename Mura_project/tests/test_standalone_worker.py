@@ -21,6 +21,7 @@ from apps.worker.main import (
 from mura.config import CoreSettings
 from mura.orchestration import RecordingJobWorker
 from mura.orchestration.books import BookJobWorker
+from mura.orchestration.cleanup import StorageCleanupWorker
 
 CORE_TOKEN = "c" * 40
 
@@ -202,6 +203,7 @@ def test_main_runs_only_the_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self) -> None:
             self.recording_worker = SubWorker("worker_recording")
             self.book_worker = SubWorker("worker_book")
+            self.cleanup_worker = SubWorker("worker_cleanup")
 
         def request_stop(self) -> None:
             events.append("request_stop")
@@ -244,30 +246,44 @@ def test_build_book_worker_lease_and_heartbeat_settings() -> None:
     assert worker.worker_id.startswith("worker_")
 
 
-def test_build_worker_supervisor_constructs_both_workers() -> None:
+def test_build_worker_supervisor_constructs_all_workers() -> None:
     supervisor = build_worker_supervisor(_settings())
     assert isinstance(supervisor, WorkerSupervisor)
     assert isinstance(supervisor.recording_worker, RecordingJobWorker)
     assert isinstance(supervisor.book_worker, BookJobWorker)
-    assert supervisor.recording_worker.worker_id != supervisor.book_worker.worker_id
+    assert isinstance(supervisor.cleanup_worker, StorageCleanupWorker)
+    assert len(
+        {
+            supervisor.recording_worker.worker_id,
+            supervisor.book_worker.worker_id,
+            supervisor.cleanup_worker.worker_id,
+        }
+    ) == 3
     assert supervisor.recording_worker.repository.database is supervisor.book_worker.db
+    assert (
+        supervisor.cleanup_worker.repository.database
+        is supervisor.recording_worker.repository.database
+    )
 
 
-def test_supervisor_request_stop_stops_both_workers() -> None:
+def test_supervisor_request_stop_stops_all_workers() -> None:
     supervisor = build_worker_supervisor(_settings())
     assert not supervisor.recording_worker._stop_event.is_set()
     assert not supervisor.book_worker._stop_event.is_set()
+    assert not supervisor.cleanup_worker._stop_event.is_set()
 
     supervisor.request_stop()
 
     assert supervisor.recording_worker._stop_event.is_set()
     assert supervisor.book_worker._stop_event.is_set()
+    assert supervisor.cleanup_worker._stop_event.is_set()
 
 
-def test_supervisor_runs_both_workers_concurrently_and_stops_on_request() -> None:
+def test_supervisor_runs_all_workers_concurrently_and_stops_on_request() -> None:
     supervisor = build_worker_supervisor(_settings())
     rec_polled = threading.Event()
     book_polled = threading.Event()
+    cleanup_polled = threading.Event()
 
     def rec_process_once() -> bool:
         rec_polled.set()
@@ -277,14 +293,20 @@ def test_supervisor_runs_both_workers_concurrently_and_stops_on_request() -> Non
         book_polled.set()
         return False
 
+    def cleanup_process_once() -> bool:
+        cleanup_polled.set()
+        return False
+
     supervisor.recording_worker.process_once = rec_process_once  # type: ignore[method-assign]
     supervisor.book_worker.process_once = book_process_once  # type: ignore[method-assign]
+    supervisor.cleanup_worker.process_once = cleanup_process_once  # type: ignore[method-assign]
 
     thread = threading.Thread(target=supervisor.run_forever, daemon=True)
     thread.start()
 
     assert rec_polled.wait(timeout=5)
     assert book_polled.wait(timeout=5)
+    assert cleanup_polled.wait(timeout=5)
 
     supervisor.request_stop()
     thread.join(timeout=5)
@@ -301,11 +323,17 @@ def test_supervisor_propagates_exception_and_stops_sibling() -> None:
         while not supervisor.book_worker._stop_event.is_set():
             supervisor.book_worker._stop_event.wait(0.1)
 
+    def cleanup_hang() -> None:
+        while not supervisor.cleanup_worker._stop_event.is_set():
+            supervisor.cleanup_worker._stop_event.wait(0.1)
+
     supervisor.recording_worker.run_forever = rec_crash  # type: ignore[method-assign]
     supervisor.book_worker.run_forever = book_hang  # type: ignore[method-assign]
+    supervisor.cleanup_worker.run_forever = cleanup_hang  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="simulated recording worker crash"):
         supervisor.run_forever()
 
     assert supervisor.book_worker._stop_event.is_set()
+    assert supervisor.cleanup_worker._stop_event.is_set()
 
