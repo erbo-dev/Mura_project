@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+from threading import Event, Thread
 import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import delete, func, select
 
+from mura.domain.book_models import BookSourceSnapshot, CompiledSnapshot, SnapshotManifest
 from mura.domain.models import (
     CleanerResult,
     ExtractionResult,
@@ -17,6 +20,7 @@ from mura.domain.models import (
 )
 from mura.jobs import JobStatus
 from mura.observability import ProcessingTrace, TraceOutcome, TraceRepository
+from mura.quotas import BookQuotaService
 from mura.release_control import (
     CURRENT_RELEASE_ID,
     RELEASE_CONTROL_KEY,
@@ -24,7 +28,14 @@ from mura.release_control import (
 )
 from mura.storage.archive import ArchivePersonRow
 from mura.storage.completion import finalize_recording_job
-from mura.storage.database import Database, RecordingRepository
+from mura.storage.book import (
+    BookCreationRepository,
+    BookJobRow,
+    BookRow,
+    BookSourceSnapshotRow,
+)
+from mura.storage.database import Database, RecordingRepository, utcnow
+from mura.storage.identity import FamilyRow, UserRow
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
 pytestmark = pytest.mark.skipif(
@@ -183,3 +194,156 @@ def test_postgres_migration_and_atomic_completion(tmp_path: Path) -> None:
     assert isinstance(budget, dict)
     assert budget["passed"] is True
     assert TraceRepository(database).get_job_trace(job_id=job_id) is not None
+
+
+
+def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
+    """Two real PostgreSQL transactions cannot both pass the active-book check."""
+
+    assert POSTGRES_URL is not None
+    suffix = uuid.uuid4().hex[:12]
+    family_id = f"family_quota_pg_{suffix}"
+    user_id = f"user_quota_pg_{suffix}"
+    database = Database(POSTGRES_URL)
+    now = utcnow()
+
+    with database.session_factory.begin() as session:
+        session.add(
+            UserRow(
+                user_id=user_id,
+                auth_issuer="https://auth.mura.test",
+                auth_subject=f"quota-{suffix}",
+                email=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            FamilyRow(
+                family_id=family_id,
+                name="Postgres quota race",
+                created_by_user_id=user_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    snapshot = BookSourceSnapshot(
+        compiler_version="postgres-quota-test",
+        family_id=family_id,
+        manifest=SnapshotManifest(created_at=now),
+    )
+    compiled = CompiledSnapshot(snapshot=snapshot, content_hash="0" * 64)
+    settings = type(
+        "QuotaSettings",
+        (),
+        {
+            "book_max_active_per_family": 1,
+            "book_max_created_per_family_per_day": 3,
+        },
+    )()
+
+    first_inserted = Event()
+    release_first = Event()
+    second_started = Event()
+    second_done = Event()
+    outcomes: dict[str, object] = {}
+
+    def first_transaction() -> None:
+        try:
+            with database.session_factory.begin() as session:
+                BookQuotaService.check_creation_allowed(session, family_id, settings)
+                BookCreationRepository(database).create_queued_book(
+                    family_id=family_id,
+                    created_by_user_id=user_id,
+                    title="First",
+                    output_language="ru",
+                    target_word_count=20000,
+                    compiled_snapshot=compiled,
+                    session=session,
+                )
+                first_inserted.set()
+                if not release_first.wait(timeout=5):
+                    raise RuntimeError("test did not release first transaction")
+            outcomes["first"] = "committed"
+        except BaseException as exc:
+            outcomes["first"] = exc
+            first_inserted.set()
+            release_first.set()
+
+    def second_transaction() -> None:
+        if not first_inserted.wait(timeout=5):
+            outcomes["second"] = RuntimeError("first transaction did not reach lock")
+            second_done.set()
+            return
+        try:
+            with database.session_factory.begin() as session:
+                second_started.set()
+                BookQuotaService.check_creation_allowed(session, family_id, settings)
+                BookCreationRepository(database).create_queued_book(
+                    family_id=family_id,
+                    created_by_user_id=user_id,
+                    title="Second",
+                    output_language="ru",
+                    target_word_count=20000,
+                    compiled_snapshot=compiled,
+                    session=session,
+                )
+            outcomes["second"] = "created"
+        except HTTPException as exc:
+            outcomes["second"] = (exc.status_code, exc.detail)
+        except BaseException as exc:
+            outcomes["second"] = exc
+        finally:
+            second_done.set()
+
+    first = Thread(target=first_transaction, daemon=True)
+    second = Thread(target=second_transaction, daemon=True)
+    try:
+        first.start()
+        assert first_inserted.wait(timeout=5)
+        assert outcomes.get("first") is None
+
+        second.start()
+        assert second_started.wait(timeout=5)
+        # Transaction B must be waiting on FamilyRow FOR UPDATE while A owns it.
+        assert second_done.wait(timeout=0.25) is False
+
+        release_first.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert outcomes["first"] == "committed"
+        assert outcomes["second"] == (409, "book_generation_already_active")
+
+        with database.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(func.count(BookRow.book_id)).where(BookRow.family_id == family_id)
+                )
+                == 1
+            )
+            assert (
+                session.scalar(
+                    select(func.count(BookSourceSnapshotRow.snapshot_id)).where(
+                        BookSourceSnapshotRow.family_id == family_id
+                    )
+                )
+                == 1
+            )
+            assert (
+                session.scalar(
+                    select(func.count(BookJobRow.job_id)).where(
+                        BookJobRow.family_id == family_id
+                    )
+                )
+                == 1
+            )
+    finally:
+        release_first.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+        with database.session_factory.begin() as session:
+            session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
+            session.execute(delete(UserRow).where(UserRow.user_id == user_id))
