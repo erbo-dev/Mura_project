@@ -42,7 +42,8 @@ from mura.speaker import (
     validate_speaker_person_id,
 )
 from mura.storage.audio import AudioStorage, AudioStorageError, AudioTooLargeError
-from mura.storage.database import ProcessingJobRow, RecordingRow
+from mura.storage.database import Database, ProcessingJobRow, RecordingRow
+from mura.storage.deletion import RecordingDeletionService
 
 
 class RecordingRepositoryProtocol(Protocol):
@@ -72,8 +73,10 @@ class RecordingRepositoryProtocol(Protocol):
 class RecordingRuntime(Protocol):
     """Structural view of the pieces of CoreRuntime these routes need."""
 
+    database: Database
     repository: RecordingRepositoryProtocol
     storage: AudioStorage
+    settings: Any
 
 
 def _repository(runtime: object) -> RecordingRepositoryProtocol:
@@ -261,32 +264,17 @@ def register_recording_routes(
         recording_id: str,
         runtime: object = Depends(get_runtime_dependency),
     ) -> None:
-        repository = _repository(runtime)
-        recording = repository.get_family_recording(
+        typed = cast(RecordingRuntime, runtime)
+        deletion = RecordingDeletionService(
+            typed.database,
+            typed.storage,
+            cleanup_max_attempts=typed.settings.storage_cleanup_max_attempts,
+        ).delete_recording(
             family_id=family_id,
             recording_id=recording_id,
         )
-        if recording is None:
+        if not deletion.rows_deleted:
             raise _not_found()
-
-        deleted = repository.delete_family_recording(
-            family_id=family_id,
-            recording_id=recording_id,
-        )
-        if deleted is None:
-            raise _not_found()
-
-        storage: AudioStorage = cast(RecordingRuntime, runtime).storage
-        if deleted.storage_key:
-            try:
-                storage.delete(deleted.storage_key)
-            except Exception:
-                pass
-        elif deleted.audio_path:
-            try:
-                storage.delete(deleted.audio_path)
-            except Exception:
-                pass
 
     @app.get(
         "/v1/families/{family_id}/recordings/{recording_id}/review-items",

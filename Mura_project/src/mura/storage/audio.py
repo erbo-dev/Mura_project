@@ -326,6 +326,32 @@ class LocalAudioStorage:
         yield self._path(storage_key)
 
 
+class LegacyLocalAudioStorage:
+    """Deletion-only adapter for rows created before opaque storage keys."""
+
+    backend = "legacy_local"
+
+    def delete(self, storage_key: str) -> bool:
+        path = Path(storage_key)
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except PermissionError as exc:
+            raise StorageDeleteError(
+                code="storage_permission_denied",
+                retryable=False,
+                message="legacy audio deletion permission denied",
+            ) from exc
+        except OSError as exc:
+            raise StorageDeleteError(
+                code="storage_io_error",
+                retryable=True,
+                message="legacy audio deletion failed",
+            ) from exc
+
+
 @contextmanager
 def materialize_legacy_path(audio_path: str) -> Iterator[Path]:
     """Escape hatch for recordings created before storage keys existed."""

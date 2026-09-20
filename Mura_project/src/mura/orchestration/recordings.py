@@ -262,6 +262,16 @@ class RecordingJobWorker:
                     ),
                 )
         except ASRClientError as exc:
+            # Deletion removes both the recording and its job atomically. A
+            # provider response racing that commit is obsolete work, not a
+            # failure to requeue against a row that intentionally no longer
+            # exists.
+            if self.repository.get_recording(recording.recording_id) is None:
+                logger.info(
+                    "job_abandoned_deleted",
+                    extra={"event": "job_abandoned_deleted", "attempt": attempt},
+                )
+                return
             outcome = TraceOutcome.DEFERRED if exc.retryable else TraceOutcome.ERROR
             trace.finish(
                 "asr_transcription",
@@ -443,6 +453,16 @@ class RecordingJobWorker:
                     },
                 )
         except Exception as exc:
+            # Final archive persistence is transactional with job finalization.
+            # If deletion won the race, the job/recording row is gone and that
+            # transaction has rolled back; do not recreate state or crash the
+            # supervisor by trying to fail a deliberately deleted job.
+            if self.repository.get_recording(recording.recording_id) is None:
+                logger.info(
+                    "job_abandoned_deleted",
+                    extra={"event": "job_abandoned_deleted", "attempt": attempt},
+                )
+                return
             logger.error(
                 "job_failed",
                 exc_info=exc,

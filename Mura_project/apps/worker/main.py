@@ -36,7 +36,12 @@ from mura.orchestration.cleanup import StorageCleanupWorker
 from mura.pipeline import MuraPipeline
 from mura.sentry import flush_sentry, init_sentry
 from mura.storage.ai_usage import AIUsageLedger
-from mura.storage.audio import AudioStorageBackend, LocalAudioStorage, SupabaseAudioStorage
+from mura.storage.audio import (
+    AudioStorageBackend,
+    LegacyLocalAudioStorage,
+    LocalAudioStorage,
+    SupabaseAudioStorage,
+)
 from mura.storage.book_artifacts import (
     BookArtifactStorageBackend,
     LocalBookArtifactStorage,
@@ -200,6 +205,10 @@ def build_cleanup_worker(
         )
 
     targets: dict[tuple[str, str], Any] = {
+        (
+            StorageKind.AUDIO.value,
+            "legacy_local",
+        ): LegacyLocalAudioStorage(),
         (
             StorageKind.AUDIO.value,
             AudioStorageBackend.LOCAL.value,
