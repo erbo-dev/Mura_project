@@ -150,6 +150,31 @@ def test_signal_handlers_install_without_error() -> None:
     assert signal.getsignal(signal.SIGINT) is not None
 
 
+def test_signal_handler_requests_stop_without_undefined_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed: dict[int, Any] = {}
+
+    def capture_handler(signum: int, handler: Any) -> None:
+        installed[signum] = handler
+
+    class StopTarget:
+        stopped = False
+
+        def request_stop(self) -> None:
+            self.stopped = True
+
+    target = StopTarget()
+    monkeypatch.setattr(signal, "signal", capture_handler)
+
+    install_signal_handlers(target)
+
+    handler = installed[signal.SIGINT]
+    handler(signal.SIGINT, None)
+
+    assert target.stopped is True
+
+
 def test_worker_refuses_to_start_without_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -163,6 +188,45 @@ def test_worker_refuses_to_start_without_configuration(
 class _raising_settings:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise ValueError("CORE_API_KEY too short: leaky-secret-value")
+
+
+def test_main_runs_only_the_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings()
+    events: list[str] = []
+
+    class SubWorker:
+        def __init__(self, worker_id: str) -> None:
+            self.worker_id = worker_id
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.recording_worker = SubWorker("worker_recording")
+            self.book_worker = SubWorker("worker_book")
+
+        def request_stop(self) -> None:
+            events.append("request_stop")
+
+        def run_forever(self) -> None:
+            events.append("run")
+
+        def stop(self, timeout_seconds: float = 5.0) -> None:
+            events.append("stop")
+
+    supervisor = FakeSupervisor()
+
+    monkeypatch.setattr("apps.worker.main.CoreSettings", lambda: settings)
+    monkeypatch.setattr(
+        "apps.worker.main.build_worker",
+        lambda _settings: (_ for _ in ()).throw(AssertionError("legacy worker must not be built")),
+    )
+    monkeypatch.setattr("apps.worker.main.build_worker_supervisor", lambda _settings: supervisor)
+    monkeypatch.setattr("apps.worker.main.install_signal_handlers", lambda _target: None)
+    monkeypatch.setattr("apps.worker.main.configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr("apps.worker.main.init_sentry", lambda *args, **kwargs: None)
+    monkeypatch.setattr("apps.worker.main.flush_sentry", lambda *args, **kwargs: None)
+
+    assert main() == 0
+    assert events == ["run", "stop"]
 
 
 def test_build_book_worker_lease_and_heartbeat_settings() -> None:
