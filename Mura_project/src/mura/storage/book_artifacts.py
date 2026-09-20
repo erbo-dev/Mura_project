@@ -14,6 +14,7 @@ from typing import Any, Protocol
 import requests
 
 from mura.domain.book_models import ExportFormat
+from mura.storage.storage_errors import StorageDeleteError, storage_delete_http_error
 
 _SAFE_SEGMENT = re.compile(r"\A[A-Za-z0-9_-]{1,128}\Z")
 
@@ -118,18 +119,34 @@ class LocalBookArtifactStorage:
     def delete(self, *, storage_key: str) -> bool:
         try:
             target_path = self._key_to_path(storage_key)
-            if not target_path.exists():
-                return False
             target_path.unlink()
-            for parent in (target_path.parent, target_path.parent.parent):
-                try:
-                    if parent != self.base_dir and parent.is_relative_to(self.base_dir):
-                        parent.rmdir()
-                except OSError:
-                    break
-            return True
-        except Exception:
+        except FileNotFoundError:
             return False
+        except PermissionError as exc:
+            raise StorageDeleteError(
+                code="storage_permission_denied",
+                retryable=False,
+                message="local storage deletion permission denied",
+            ) from exc
+        except ValueError as exc:
+            raise StorageDeleteError(
+                code="storage_invalid_key",
+                retryable=False,
+                message="local storage key is invalid",
+            ) from exc
+        except OSError as exc:
+            raise StorageDeleteError(
+                code="storage_io_error",
+                retryable=True,
+                message="local storage deletion failed",
+            ) from exc
+        for parent in (target_path.parent, target_path.parent.parent):
+            try:
+                if parent != self.base_dir and parent.is_relative_to(self.base_dir):
+                    parent.rmdir()
+            except OSError:
+                break
+        return True
 
 
 class SupabaseBookArtifactStorage:
@@ -244,19 +261,38 @@ class SupabaseBookArtifactStorage:
     def delete(self, *, storage_key: str) -> bool:
         try:
             _validate_storage_key(storage_key)
-            url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
+        except ValueError as exc:
+            raise StorageDeleteError(
+                code="storage_invalid_key",
+                retryable=False,
+                message="book artifact storage key is invalid",
+            ) from exc
+
+        url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
+        try:
             response = self.session.delete(
                 url,
                 headers=self._headers(),
                 timeout=(5.0, 15.0),
             )
-            if response.status_code in {200, 204}:
-                return True
-            if response.status_code == 404:
-                return False
+        except requests.Timeout as exc:
+            raise StorageDeleteError(
+                code="storage_timeout",
+                retryable=True,
+                message="storage deletion timed out",
+            ) from exc
+        except requests.RequestException as exc:
+            raise StorageDeleteError(
+                code="storage_unavailable",
+                retryable=True,
+                message="storage deletion transport failed",
+            ) from exc
+
+        if response.status_code in {200, 204}:
+            return True
+        if response.status_code == 404:
             return False
-        except Exception:
-            return False
+        raise storage_delete_http_error(response.status_code, response.headers)
 
 
 def build_book_artifact_storage(settings: Any) -> BookArtifactStorage:

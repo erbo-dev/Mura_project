@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from mura.domain.book_models import ExportFormat
 from mura.storage.book_artifacts import (
@@ -15,6 +16,7 @@ from mura.storage.book_artifacts import (
     SupabaseBookArtifactStorage,
     build_book_artifact_storage,
 )
+from mura.storage.storage_errors import StorageDeleteError
 
 
 def test_local_book_artifact_storage_roundtrip(tmp_path: Path) -> None:
@@ -159,3 +161,62 @@ def test_book_artifact_storage_rejects_unknown_backend(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="BOOK_STORAGE_BACKEND"):
         build_book_artifact_storage(InvalidSettings())
 
+
+
+
+def test_supabase_book_delete_404_is_idempotent_success() -> None:
+    session = MagicMock()
+    response = MagicMock(status_code=404)
+    response.headers = {}
+    session.delete.return_value = response
+    storage = SupabaseBookArtifactStorage(
+        url="https://supabase.example.com",
+        service_role_key="secret",
+        session=session,
+    )
+    assert storage.delete(storage_key="families/fam/books/book/book.pdf") is False
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+def test_supabase_book_delete_transient_failure_raises_retryable(status_code: int) -> None:
+    session = MagicMock()
+    response = MagicMock(status_code=status_code)
+    response.headers = {"Retry-After": "9"} if status_code == 429 else {}
+    session.delete.return_value = response
+    storage = SupabaseBookArtifactStorage(
+        url="https://supabase.example.com",
+        service_role_key="secret",
+        session=session,
+    )
+    with pytest.raises(StorageDeleteError) as exc_info:
+        storage.delete(storage_key="families/fam/books/book/book.pdf")
+    assert exc_info.value.retryable is True
+
+
+def test_supabase_book_delete_403_is_terminal() -> None:
+    session = MagicMock()
+    response = MagicMock(status_code=403)
+    response.headers = {}
+    session.delete.return_value = response
+    storage = SupabaseBookArtifactStorage(
+        url="https://supabase.example.com",
+        service_role_key="secret",
+        session=session,
+    )
+    with pytest.raises(StorageDeleteError) as exc_info:
+        storage.delete(storage_key="families/fam/books/book/book.pdf")
+    assert exc_info.value.retryable is False
+    assert exc_info.value.code == "storage_auth_failed"
+
+
+def test_supabase_book_delete_timeout_is_retryable() -> None:
+    session = MagicMock()
+    session.delete.side_effect = requests.Timeout("timeout")
+    storage = SupabaseBookArtifactStorage(
+        url="https://supabase.example.com",
+        service_role_key="secret",
+        session=session,
+    )
+    with pytest.raises(StorageDeleteError) as exc_info:
+        storage.delete(storage_key="families/fam/books/book/book.pdf")
+    assert exc_info.value.retryable is True
