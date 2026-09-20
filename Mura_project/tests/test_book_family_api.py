@@ -22,10 +22,12 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app, get_auth_verifier, get_runtime, get_settings
 from mura.config import CoreSettings
 from mura.domain.book_models import (
+    BookSourceSnapshot,
     BookStage,
     BookStatus,
     ExportFormat,
     ExportStatus,
+    SnapshotManifest,
 )
 from mura.identity.policy import FamilyRole
 from mura.jobs import JobStatus
@@ -42,6 +44,7 @@ from mura.storage.database import (
     PipelineResultRow,
     ProcessingJobRow,
     RecordingRow,
+    utcnow,
 )
 from mura.storage.identity import IdentityRepository
 from tests.authz_factories import (
@@ -484,6 +487,33 @@ def test_download_family_book_artifact(api_env) -> None:
     assert "no-store" in res.headers["cache-control"]
 
 
+def _persist_book_source_snapshot(
+    database: Database,
+    *,
+    book_id: str,
+    family_id: str = "fam_alpha",
+    recording_ids: list[str] | None = None,
+) -> None:
+    source_ids = recording_ids or ["rec_eligible_1"]
+    snapshot = BookSourceSnapshot(
+        compiler_version="test-api",
+        family_id=family_id,
+        manifest=SnapshotManifest(
+            source_recording_ids=source_ids,
+            created_at=utcnow(),
+        ),
+    )
+    BookSourceSnapshotRepository(database).save_snapshot(
+        book_id=book_id,
+        family_id=family_id,
+        compiler_version=snapshot.compiler_version,
+        content_hash="0" * 64,
+        payload=snapshot.model_dump(mode="json"),
+        manifest=snapshot.manifest.model_dump(mode="json"),
+        source_recording_count=len(source_ids),
+    )
+
+
 def test_cancel_and_regenerate_family_book(api_env) -> None:
     client = api_env.client
     book_repo = BookRepository(api_env.database)
@@ -497,6 +527,7 @@ def test_cancel_and_regenerate_family_book(api_env) -> None:
         target_word_count=20000,
     )
     job_repo.create_job(book_id=book.book_id, family_id="fam_alpha")
+    _persist_book_source_snapshot(api_env.database, book_id=book.book_id)
 
     # Viewer cannot cancel
     res = client.post(
@@ -534,3 +565,114 @@ def test_cancel_and_regenerate_family_book(api_env) -> None:
     old_book = book_repo.get_book(family_id="fam_alpha", book_id=book.book_id)
     assert old_book is not None
     assert old_book.title == "Бастапқы нұсқа"
+
+
+
+def test_regenerate_reuses_original_source_list_and_excludes_new_archive_recordings(api_env) -> None:
+    book_repo = BookRepository(api_env.database)
+    original = book_repo.create_book(
+        family_id="fam_alpha",
+        created_by_user_id=api_env.editor.user_id,
+        title="Frozen sources",
+        output_language="ru",
+        target_word_count=20000,
+    )
+    book_repo.complete_book(original.book_id, word_count=0)
+    _persist_book_source_snapshot(api_env.database, book_id=original.book_id)
+
+    with api_env.database.session_factory.begin() as session:
+        session.add(
+            RecordingRow(
+                recording_id="rec_added_later",
+                family_id="fam_alpha",
+                speaker_id="spk_later",
+                speaker_name="Later",
+                original_filename="later.mp3",
+                content_type="audio/mp3",
+                audio_path="/tmp/later.mp3",
+            )
+        )
+        session.add(
+            ProcessingJobRow(
+                job_id="pjob_added_later",
+                recording_id="rec_added_later",
+                status=JobStatus.COMPLETED.value,
+                stage="completed",
+            )
+        )
+        session.add(
+            PipelineResultRow(
+                recording_id="rec_added_later",
+                payload={"stories": [], "extracted_entities": []},
+            )
+        )
+
+    response = api_env.client.post(
+        f"/v1/families/fam_alpha/books/{original.book_id}/regenerate",
+        headers=api_env.editor.headers,
+    )
+    assert response.status_code == 202
+    regenerated_id = response.json()["book_id"]
+    regenerated_snapshot = BookSourceSnapshotRepository(api_env.database).get_snapshot(
+        regenerated_id
+    )
+    assert regenerated_snapshot is not None
+    assert regenerated_snapshot.manifest["source_recording_ids"] == ["rec_eligible_1"]
+    assert "rec_added_later" not in regenerated_snapshot.manifest["source_recording_ids"]
+
+
+def test_regenerate_missing_snapshot_without_explicit_sources_fails_closed(api_env) -> None:
+    book_repo = BookRepository(api_env.database)
+    original = book_repo.create_book(
+        family_id="fam_alpha",
+        created_by_user_id=api_env.editor.user_id,
+        title="Missing snapshot",
+        output_language="ru",
+        target_word_count=20000,
+    )
+    book_repo.complete_book(original.book_id, word_count=0)
+
+    response = api_env.client.post(
+        f"/v1/families/fam_alpha/books/{original.book_id}/regenerate",
+        headers=api_env.editor.headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "book_source_snapshot_missing"
+
+
+def test_regenerate_missing_snapshot_allows_explicit_valid_sources(api_env) -> None:
+    book_repo = BookRepository(api_env.database)
+    original = book_repo.create_book(
+        family_id="fam_alpha",
+        created_by_user_id=api_env.editor.user_id,
+        title="Explicit recovery",
+        output_language="ru",
+        target_word_count=20000,
+    )
+    book_repo.complete_book(original.book_id, word_count=0)
+
+    response = api_env.client.post(
+        f"/v1/families/fam_alpha/books/{original.book_id}/regenerate",
+        headers=api_env.editor.headers,
+        json={"requested_recording_ids": ["rec_eligible_1"]},
+    )
+    assert response.status_code == 202
+
+
+def test_regenerate_explicit_cross_family_source_is_not_accessible(api_env) -> None:
+    book_repo = BookRepository(api_env.database)
+    original = book_repo.create_book(
+        family_id="fam_alpha",
+        created_by_user_id=api_env.editor.user_id,
+        title="Cross-family source",
+        output_language="ru",
+        target_word_count=20000,
+    )
+    book_repo.complete_book(original.book_id, word_count=0)
+
+    response = api_env.client.post(
+        f"/v1/families/fam_alpha/books/{original.book_id}/regenerate",
+        headers=api_env.editor.headers,
+        json={"requested_recording_ids": ["rec_ineligible_beta"]},
+    )
+    assert response.status_code == 400

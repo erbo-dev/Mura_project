@@ -53,6 +53,7 @@ INSUFFICIENT_FAMILY_ROLE = "insufficient_family_role"
 SOLE_OWNER_REQUIRED = "sole_owner_required"
 BOOK_GENERATION_ALREADY_ACTIVE = "book_generation_already_active"
 BOOK_DAILY_LIMIT_REACHED = "book_daily_limit_reached"
+BOOK_SOURCE_SNAPSHOT_MISSING = "book_source_snapshot_missing"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -64,6 +65,7 @@ SELECTABLE_CODES = frozenset(
         SOLE_OWNER_REQUIRED,
         BOOK_GENERATION_ALREADY_ACTIVE,
         BOOK_DAILY_LIMIT_REACHED,
+        BOOK_SOURCE_SNAPSHOT_MISSING,
     }
 )
 
@@ -90,6 +92,7 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     SOLE_OWNER_REQUIRED: "A family must always retain at least one owner.",
     BOOK_GENERATION_ALREADY_ACTIVE: "A book generation is already active for this family.",
     BOOK_DAILY_LIMIT_REACHED: "The daily limit for book generation has been reached for this family.",
+    BOOK_SOURCE_SNAPSHOT_MISSING: "The original book source snapshot is unavailable; select sources explicitly to regenerate.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,

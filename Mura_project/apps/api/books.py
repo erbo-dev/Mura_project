@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from sqlalchemy.orm import Session
 
-from apps.api.errors import FAMILY_NOT_FOUND
+from apps.api.errors import BOOK_SOURCE_SNAPSHOT_MISSING, FAMILY_NOT_FOUND
 from mura.book.snapshot import compile_source_snapshot
 from mura.quotas import BookQuotaService
 from mura.domain.book_models import (
@@ -35,6 +35,7 @@ from mura.domain.book_models import (
     BookProgressView,
     BookRegenerateRequest,
     BookSourceOptionView,
+    BookSourceSnapshot,
     BookStage,
     BookStatus,
     BookSummaryView,
@@ -529,11 +530,31 @@ def register_book_routes(
         orig_snapshot = snapshot_repo.get_snapshot(book_id)
 
         if payload and payload.requested_recording_ids is not None:
+            # Explicit source changes are intentional and may recover a legacy
+            # book whose original snapshot is unavailable.
             req_ids: list[str] | None = payload.requested_recording_ids
-        elif orig_snapshot and orig_snapshot.manifest:
-            req_ids = orig_snapshot.manifest.get("source_recording_ids")
         else:
-            req_ids = None
+            # Regeneration without an explicit source selection must preserve
+            # the original book's immutable source set. Never reinterpret a
+            # missing/corrupt snapshot as "use the current live archive".
+            if orig_snapshot is None or orig_snapshot.family_id != family_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=BOOK_SOURCE_SNAPSHOT_MISSING,
+                )
+            try:
+                frozen_source = BookSourceSnapshot.model_validate(orig_snapshot.payload)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=BOOK_SOURCE_SNAPSHOT_MISSING,
+                ) from exc
+            req_ids = list(frozen_source.manifest.source_recording_ids)
+            if frozen_source.family_id != family_id or not req_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=BOOK_SOURCE_SNAPSHOT_MISSING,
+                )
 
         with typed.database.session_factory() as session:
             resolved_ids = resolve_book_source_ids(
