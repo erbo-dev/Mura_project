@@ -585,6 +585,7 @@ class BookCreationRepository:
         compiled_snapshot: CompiledSnapshot,
         supersedes_book_id: str | None = None,
         source_snapshot_version: int = 1,
+        session: Session | None = None,
     ) -> QueuedBookResult:
         now = utcnow()
         book_id = new_book_id()
@@ -639,14 +640,22 @@ class BookCreationRepository:
             updated_at=now,
         )
 
-        with self.database.session_factory.begin() as session:
-            session.add(book)
-            session.add(snapshot)
-            session.add(job)
-            session.flush()
-            session.expunge(book)
-            session.expunge(snapshot)
-            session.expunge(job)
+        def persist(target: Session) -> None:
+            target.add(book)
+            target.add(snapshot)
+            target.add(job)
+            target.flush()
+            target.expunge(book)
+            target.expunge(snapshot)
+            target.expunge(job)
+
+        if session is None:
+            with self.database.session_factory.begin() as owned_session:
+                persist(owned_session)
+        else:
+            # The caller owns commit/rollback. This lets the family quota row
+            # lock remain held through Book + Snapshot + Job insertion.
+            persist(session)
 
         return QueuedBookResult(book=book, snapshot=snapshot, job=job)
 
