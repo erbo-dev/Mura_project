@@ -13,7 +13,6 @@ from __future__ import annotations
 import io
 import urllib.parse
 from collections.abc import Callable
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -54,7 +53,6 @@ from mura.storage.book import (
     BookSourceSnapshotRepository,
     get_eligible_recordings,
 )
-from mura.storage.book_artifacts import BookArtifactStorage, LocalBookArtifactStorage
 from mura.storage.book_artifacts import BookArtifactStorage, build_book_artifact_storage
 from mura.storage.database import Database, PipelineResultRow
 
@@ -70,8 +68,6 @@ def _not_found(detail: str = FAMILY_NOT_FOUND) -> HTTPException:
 
 def _get_artifact_storage(runtime: object) -> BookArtifactStorage:
     typed = cast(RuntimeWithDatabaseAndSettings, runtime)
-    storage_dir = getattr(typed.settings, "book_storage_dir", Path(".mura/books"))
-    return LocalBookArtifactStorage(storage_dir)
     return build_book_artifact_storage(typed.settings)
 
 
@@ -218,8 +214,7 @@ def register_book_routes(
         runtime: object = Depends(get_runtime_dependency),
     ) -> BookAccepted:
         typed = cast(RuntimeWithDatabaseAndSettings, runtime)
-        with typed.database.session_factory.begin() as session:
-            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+        with typed.database.session_factory() as session:
             resolved_ids = resolve_book_source_ids(
                 session,
                 family_id=family_id,
@@ -231,8 +226,6 @@ def register_book_routes(
                     detail="Archive has no eligible processed recordings for book generation.",
                 )
 
-        book_repo = BookRepository(typed.database)
-        job_repo = BookJobRepository(typed.database)
         compiled = compile_source_snapshot(
             typed.database,
             family_id=family_id,
@@ -240,15 +233,18 @@ def register_book_routes(
         )
 
         creation_repo = BookCreationRepository(typed.database)
-        result = creation_repo.create_queued_book(
-            family_id=family_id,
-            created_by_user_id=context.user_id,
-            title=payload.title,
-            subtitle=payload.subtitle,
-            output_language=payload.output_language.value,
-            target_word_count=payload.target_word_count,
-            compiled_snapshot=compiled,
-        )
+        with typed.database.session_factory.begin() as session:
+            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+            result = creation_repo.create_queued_book(
+                family_id=family_id,
+                created_by_user_id=context.user_id,
+                title=payload.title,
+                subtitle=payload.subtitle,
+                output_language=payload.output_language.value,
+                target_word_count=payload.target_word_count,
+                compiled_snapshot=compiled,
+                session=session,
+            )
         return BookAccepted(
             book_id=result.book.book_id,
             job_id=result.job.job_id,
@@ -539,8 +535,7 @@ def register_book_routes(
         else:
             req_ids = None
 
-        with typed.database.session_factory.begin() as session:
-            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+        with typed.database.session_factory() as session:
             resolved_ids = resolve_book_source_ids(
                 session,
                 family_id=family_id,
@@ -567,17 +562,20 @@ def register_book_routes(
         )
 
         creation_repo = BookCreationRepository(typed.database)
-        result = creation_repo.create_queued_book(
-            family_id=family_id,
-            created_by_user_id=context.user_id,
-            title=title,
-            subtitle=subtitle,
-            output_language=output_lang,
-            target_word_count=target_words,
-            compiled_snapshot=compiled,
-            supersedes_book_id=book.book_id,
-            source_snapshot_version=(book.source_snapshot_version or 1) + 1,
-        )
+        with typed.database.session_factory.begin() as session:
+            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+            result = creation_repo.create_queued_book(
+                family_id=family_id,
+                created_by_user_id=context.user_id,
+                title=title,
+                subtitle=subtitle,
+                output_language=output_lang,
+                target_word_count=target_words,
+                compiled_snapshot=compiled,
+                supersedes_book_id=book.book_id,
+                source_snapshot_version=(book.source_snapshot_version or 1) + 1,
+                session=session,
+            )
         return BookAccepted(
             book_id=result.book.book_id,
             job_id=result.job.job_id,
