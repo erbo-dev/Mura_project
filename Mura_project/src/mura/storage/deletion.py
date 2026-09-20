@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 
-from mura.observability import ProcessingTraceRow
+from mura.observability import ProcessingTraceEventRow
 from mura.storage.archive import ArchiveClaimRow
 from mura.storage.audio import AudioStorage
 from mura.storage.cleanup import (
@@ -104,7 +104,7 @@ class RecordingDeletionService:
                 delete(PipelineResultRow).where(PipelineResultRow.recording_id == recording_id)
             )
             session.execute(
-                delete(ProcessingTraceRow).where(ProcessingTraceRow.recording_id == recording_id)
+                delete(ProcessingTraceEventRow).where(ProcessingTraceEventRow.recording_id == recording_id)
             )
             session.execute(
                 delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)
