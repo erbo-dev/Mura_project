@@ -19,6 +19,11 @@ from mura.jobs import JobStatus
 from mura.storage.ai_usage import AIUsageLedger
 from mura.domain.book_models import BookJobStatus, TERMINAL_BOOK_JOB_STATUSES
 from mura.storage.book import BookJobRow
+from mura.storage.cleanup import (
+    StorageCleanupJobRow,
+    StorageCleanupStatus,
+    TERMINAL_CLEANUP_STATUSES,
+)
 from mura.storage.database import (
     Database,
     ProcessingJobRow,
@@ -54,6 +59,27 @@ class BookStuckJobItem(StrictModel):
     attempts: int
     reason: str
     age_seconds: float
+
+class StorageCleanupMetrics(StrictModel):
+    queued: int = Field(ge=0)
+    running: int = Field(ge=0)
+    retry_waiting: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    oldest_pending_seconds: float | None = None
+    expired_leases: int = Field(ge=0)
+    attempts_exhausted: int = Field(ge=0)
+
+
+class StorageCleanupStuckItem(StrictModel):
+    cleanup_job_id: str
+    resource_type: str
+    storage_kind: str
+    backend: str
+    status: str
+    attempts: int
+    reason: str
+    age_seconds: float
+
 
 class QueueMetrics(StrictModel):
     pending: int = Field(ge=0)
@@ -95,6 +121,8 @@ class MonitoringSummary(StrictModel):
     stuck_jobs: list[StuckJobItem]
     book_queue: BookQueueMetrics | None = None
     book_stuck_jobs: list[BookStuckJobItem] = Field(default_factory=list)
+    storage_cleanup: StorageCleanupMetrics | None = None
+    storage_cleanup_stuck_jobs: list[StorageCleanupStuckItem] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -107,6 +135,9 @@ class MonitoringThresholds:
     stuck_book_pending_threshold_seconds: float = 1200.0
     book_lease_grace_seconds: float = 60.0
     book_max_attempts: int = 3
+    cleanup_pending_threshold_seconds: float = 1800.0
+    cleanup_lease_grace_seconds: float = 30.0
+    cleanup_max_attempts: int = 8
 
     @classmethod
     def from_settings(
@@ -117,6 +148,9 @@ class MonitoringThresholds:
         asr_request_timeout_seconds: float = 900.0,
         book_job_lease_seconds: float = 600.0,
         book_job_heartbeat_seconds: float = 60.0,
+        storage_cleanup_lease_seconds: float = 120.0,
+        storage_cleanup_heartbeat_seconds: float = 30.0,
+        storage_cleanup_max_attempts: int = 8,
     ) -> MonitoringThresholds:
         pending_thresh = max(job_lease_seconds * 2, asr_request_timeout_seconds / 2)
         book_pending_thresh = max(book_job_lease_seconds * 2, 600.0)
@@ -127,6 +161,9 @@ class MonitoringThresholds:
             stuck_book_pending_threshold_seconds=book_pending_thresh,
             book_lease_grace_seconds=book_job_heartbeat_seconds,
             book_max_attempts=3,
+            cleanup_pending_threshold_seconds=max(storage_cleanup_lease_seconds * 4, 600.0),
+            cleanup_lease_grace_seconds=storage_cleanup_heartbeat_seconds,
+            cleanup_max_attempts=storage_cleanup_max_attempts,
         )
 
 
@@ -438,6 +475,127 @@ class QueueHealthService:
 
         return stuck_items
 
+    def get_storage_cleanup_metrics(
+        self, now: datetime | None = None
+    ) -> StorageCleanupMetrics:
+        moment = now or utcnow()
+        with self.database.session_factory() as session:
+            queued = session.scalar(
+                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                    StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
+                    StorageCleanupJobRow.next_attempt_at <= moment,
+                )
+            ) or 0
+            retry_waiting = session.scalar(
+                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                    StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
+                    StorageCleanupJobRow.next_attempt_at > moment,
+                )
+            ) or 0
+            running = session.scalar(
+                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value
+                )
+            ) or 0
+            failed = session.scalar(
+                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                    StorageCleanupJobRow.status == StorageCleanupStatus.FAILED.value
+                )
+            ) or 0
+            oldest = session.scalar(
+                select(func.min(StorageCleanupJobRow.created_at)).where(
+                    StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES)
+                )
+            )
+            expired = session.scalar(
+                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value,
+                    StorageCleanupJobRow.lease_expires_at.is_not(None),
+                    StorageCleanupJobRow.lease_expires_at <= moment,
+                )
+            ) or 0
+            exhausted = session.scalar(
+                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                    StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
+                    StorageCleanupJobRow.attempts >= StorageCleanupJobRow.max_attempts,
+                )
+            ) or 0
+            oldest_age = (
+                round((moment - _as_utc(oldest)).total_seconds(), 2)
+                if oldest is not None
+                else None
+            )
+            return StorageCleanupMetrics(
+                queued=queued,
+                running=running,
+                retry_waiting=retry_waiting,
+                failed=failed,
+                oldest_pending_seconds=oldest_age,
+                expired_leases=expired,
+                attempts_exhausted=exhausted,
+            )
+
+    def get_storage_cleanup_stuck_jobs(
+        self, now: datetime | None = None
+    ) -> list[StorageCleanupStuckItem]:
+        moment = now or utcnow()
+        pending_cutoff = moment - timedelta(
+            seconds=self.thresholds.cleanup_pending_threshold_seconds
+        )
+        lease_cutoff = moment - timedelta(
+            seconds=self.thresholds.cleanup_lease_grace_seconds
+        )
+        reasons: dict[str, str] = {}
+        with self.database.session_factory() as session:
+            for row in session.scalars(
+                select(StorageCleanupJobRow).where(
+                    StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
+                    StorageCleanupJobRow.created_at <= pending_cutoff,
+                )
+            ):
+                reasons[row.cleanup_job_id] = "pending_too_long"
+            for row in session.scalars(
+                select(StorageCleanupJobRow).where(
+                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value,
+                    StorageCleanupJobRow.lease_expires_at.is_not(None),
+                    StorageCleanupJobRow.lease_expires_at <= lease_cutoff,
+                )
+            ):
+                reasons[row.cleanup_job_id] = "lease_expired"
+            for row in session.scalars(
+                select(StorageCleanupJobRow).where(
+                    StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
+                    StorageCleanupJobRow.attempts >= StorageCleanupJobRow.max_attempts,
+                )
+            ):
+                reasons[row.cleanup_job_id] = "max_retries_exceeded"
+
+            if not reasons:
+                return []
+            rows = list(
+                session.scalars(
+                    select(StorageCleanupJobRow)
+                    .where(StorageCleanupJobRow.cleanup_job_id.in_(list(reasons)))
+                    .order_by(StorageCleanupJobRow.created_at)
+                    .limit(50)
+                ).all()
+            )
+            return [
+                StorageCleanupStuckItem(
+                    cleanup_job_id=row.cleanup_job_id,
+                    resource_type=row.resource_type,
+                    storage_kind=row.storage_kind,
+                    backend=row.storage_backend,
+                    status=row.status,
+                    attempts=row.attempts,
+                    reason=reasons[row.cleanup_job_id],
+                    age_seconds=round(
+                        (moment - _as_utc(row.created_at)).total_seconds(), 2
+                    ),
+                )
+                for row in rows
+            ]
+
     def get_summary(self, now: datetime | None = None) -> MonitoringSummary:
         moment = now or utcnow()
         queue = self.get_queue_metrics(moment)
@@ -447,6 +605,8 @@ class QueueHealthService:
         stuck = self.get_stuck_jobs(moment)
         book_queue = self.get_book_queue_metrics(moment)
         book_stuck = self.get_book_stuck_jobs(moment)
+        storage_cleanup = self.get_storage_cleanup_metrics(moment)
+        storage_cleanup_stuck = self.get_storage_cleanup_stuck_jobs(moment)
 
         return MonitoringSummary(
             timestamp=moment,
@@ -456,4 +616,6 @@ class QueueHealthService:
             stuck_jobs=stuck,
             book_queue=book_queue,
             book_stuck_jobs=book_stuck,
+            storage_cleanup=storage_cleanup,
+            storage_cleanup_stuck_jobs=storage_cleanup_stuck,
         )
