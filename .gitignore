@@ -14,3 +14,8 @@ AGENTS.md
 .env.*
 !.env.example
 
+# Large archives and temporary scratch
+*.zip
+scratch/
+**/scratch/
+

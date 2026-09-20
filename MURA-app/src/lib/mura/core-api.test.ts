@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CoreRequestError,
+  deleteFamily,
+  deleteRecording,
+  exportFamilyData,
   fetchJob,
   readApiError,
   submitRecording,
@@ -172,5 +175,46 @@ describe("job requests", () => {
     expect((spy.mock.calls[0] as unknown as [string])[0]).toBe(
       `/api/mura/v1/families/${FAMILY}/jobs/${jobId}`,
     );
+  });
+});
+
+describe("privacy lifecycle requests", () => {
+  it("requests family privacy export from the correct endpoint", async () => {
+    const spy = vi.fn(async () => jsonResponse({ family_id: FAMILY, recordings: [] }));
+    vi.stubGlobal("fetch", spy);
+
+    const result = await exportFamilyData(FAMILY);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((spy.mock.calls[0] as unknown as [string])[0]).toBe(
+      `/api/mura/v1/families/${FAMILY}/privacy/export`,
+    );
+    expect(result).toEqual({ family_id: FAMILY, recordings: [] });
+  });
+
+  it("deletes a recording via DELETE request", async () => {
+    const spy = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", spy);
+    const recId = `rec_${"c".repeat(32)}`;
+
+    await deleteRecording(FAMILY, recId);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/mura/v1/families/${FAMILY}/recordings/${recId}`);
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("deletes a family with confirmation payload", async () => {
+    const spy = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", spy);
+
+    await deleteFamily(FAMILY, FAMILY);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/mura/v1/families/${FAMILY}`);
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(init.body as string)).toEqual({ confirm_family_id: FAMILY });
   });
 });

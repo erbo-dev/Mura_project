@@ -1,14 +1,18 @@
 "use client";
 
+import { useState } from "react";
+import { Download, Loader2, Trash2 } from "lucide-react";
 import { AccountSection } from "@/components/family/account-section";
 import { AuthStrip } from "@/components/family/auth-strip";
 import { FamilySwitcher } from "@/components/family/family-gate";
 import { AppHeader } from "@/components/layout/app-header";
 import { MembersSection } from "@/components/settings/members-section";
 import { PageContainer } from "@/components/shell/page-container";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { LanguageSwitcher, useMuraI18n } from "@/lib/i18n";
 import { AUDIO_LANGUAGE_OPTIONS, useAudioLanguage } from "@/lib/mura/audio-language";
-import type { FamilyRole } from "@/lib/mura/core-api";
+import { deleteFamily, exportFamilyData, type FamilyRole } from "@/lib/mura/core-api";
 import { useMuraSession } from "@/lib/mura/session-provider";
 
 const ROLE_KEY: Record<FamilyRole, "roleOwner" | "roleEditor" | "roleViewer"> = {
@@ -161,6 +165,56 @@ function AudioLanguageSection() {
  */
 function PrivacySection() {
   const { t } = useMuraI18n();
+  const { family } = useMuraSession();
+  const selectedFamily = family.selectedFamily;
+  const isOwner = selectedFamily?.role === "owner";
+
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleExport = async () => {
+    if (!selectedFamily) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const data = await exportFamilyData(selectedFamily.family_id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safeName = (selectedFamily.name || "family").toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+      a.download = `mura-archive-${safeName}-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Failed to export data");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleDeleteArchive = async () => {
+    if (!selectedFamily) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteFamily(selectedFamily.family_id, selectedFamily.family_id);
+      setShowDeleteModal(false);
+      window.location.href = "/";
+    } catch {
+      setDeleteError(t("privacyDeleteFailed"));
+      setShowDeleteModal(false);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const entries = [
     { titleKey: "privacyWhoSeesTitle", bodyKey: "privacyWhoSeesBody" },
     { titleKey: "privacyAudioTitle", bodyKey: "privacyAudioBody" },
@@ -169,7 +223,7 @@ function PrivacySection() {
   ] as const;
 
   return (
-    <div className="flex max-w-form flex-col gap-5">
+    <div className="flex max-w-form flex-col gap-6">
       {entries.map((entry) => (
         <div key={entry.titleKey}>
           <h3 className="text-body font-semibold">{t(entry.titleKey)}</h3>
@@ -192,6 +246,79 @@ function PrivacySection() {
           )}
         </ul>
       </div>
+
+      {/* Data Export (GDPR / Archive Export) */}
+      {selectedFamily && (
+        <div className="border-t border-ink/[0.08] pt-5">
+          <h3 className="text-body font-semibold">{t("privacyDataExportTitle")}</h3>
+          <p className="mt-1 max-w-[52ch] text-meta leading-relaxed text-muted">
+            {t("privacyDataExportDesc")}
+          </p>
+          {exportError && (
+            <p className="mt-2 text-caption text-danger">{exportError}</p>
+          )}
+          <div className="mt-3.5">
+            <Button
+              type="button"
+              variant="soft"
+              size="md"
+              onClick={handleExport}
+              disabled={exporting}
+              className="gap-2 border border-ink/15 text-ink"
+            >
+              {exporting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+              <span>{exporting ? t("privacyDataExporting") : t("privacyDataExportButton")}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Danger Zone: Delete Family Archive */}
+      {selectedFamily && (
+        <div className="border-t border-danger/20 bg-danger-surface/30 -mx-4 sm:-mx-6 rounded-2xl p-4 sm:p-6 mt-2">
+          <h3 className="text-body font-semibold text-danger">{t("privacyDangerZoneTitle")}</h3>
+          <p className="mt-1 max-w-[52ch] text-meta leading-relaxed text-muted">
+            {t("privacyDeleteArchiveDesc")}
+          </p>
+          {deleteError && (
+            <p className="mt-2 text-caption font-semibold text-danger">{deleteError}</p>
+          )}
+          {!isOwner && (
+            <p className="mt-2 text-caption italic text-muted">
+              {t("privacyDeleteOnlyOwner")}
+            </p>
+          )}
+          <div className="mt-4">
+            <Button
+              type="button"
+              variant="danger"
+              size="md"
+              onClick={() => setShowDeleteModal(true)}
+              disabled={!isOwner || deleting}
+              className="gap-2"
+            >
+              <Trash2 className="size-4" />
+              <span>{t("privacyDeleteArchiveButton")}</span>
+            </Button>
+          </div>
+
+          <ConfirmDialog
+            isOpen={showDeleteModal}
+            onClose={() => setShowDeleteModal(false)}
+            onConfirm={handleDeleteArchive}
+            title={t("privacyDeleteArchiveConfirmTitle")}
+            description={t("privacyDeleteArchiveConfirmDesc", { name: selectedFamily.name })}
+            confirmLabel={t("privacyDeleteArchiveConfirmAction")}
+            cancelLabel={t("cancelButton")}
+            isDestructive
+            isLoading={deleting}
+          />
+        </div>
+      )}
     </div>
   );
 }

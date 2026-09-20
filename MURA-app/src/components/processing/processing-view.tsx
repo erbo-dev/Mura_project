@@ -342,6 +342,17 @@ export function ProcessingView() {
         )}
       </div>
 
+      {!degraded && !failed && (
+        <motion.p
+          className="mt-4 max-w-[42ch] text-center text-caption leading-relaxed text-muted"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 2, duration: 0.8 }}
+        >
+          {t("processingBackgroundSafeNotice")}
+        </motion.p>
+      )}
+
       <AnimatePresence>
         {degraded && (
           <motion.div

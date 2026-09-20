@@ -102,6 +102,24 @@ const ALLOWED: ReadonlyArray<{ method: Method; pattern: RegExp }> = [
     method: "POST",
     pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}/regenerate$`),
   },
+
+  // Phase 2.3 & 2.5 Privacy Lifecycle & Deletion
+  {
+    method: "GET",
+    pattern: new RegExp(`^v1/families/${FAMILY}/privacy/export$`),
+  },
+  {
+    method: "DELETE",
+    pattern: new RegExp(`^v1/families/${FAMILY}/recordings/${RECORDING}$`),
+  },
+  {
+    method: "DELETE",
+    pattern: new RegExp(`^v1/families/${FAMILY}/books/${BOOK}$`),
+  },
+  {
+    method: "DELETE",
+    pattern: new RegExp(`^v1/families/${FAMILY}$`),
+  },
 ];
 
 export function isAllowedCoreRoute(method: string, route: string): boolean {

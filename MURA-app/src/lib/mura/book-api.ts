@@ -247,3 +247,10 @@ export function getBookDownloadUrl(
   return `/api/mura/v1/families/${encodeURIComponent(familyId)}/books/${encodeURIComponent(bookId)}/download?format=${format}`;
 }
 
+export function deleteBook(familyId: string, bookId: string): Promise<void> {
+  return coreRequest<void>(
+    `/v1/families/${encodeURIComponent(familyId)}/books/${encodeURIComponent(bookId)}`,
+    { method: "DELETE" },
+  );
+}
+

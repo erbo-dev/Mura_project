@@ -191,7 +191,7 @@ export function BookReader({
             </div>
           ) : currentChapter ? (
             <article
-              className={`rounded-3xl bg-raised p-6 shadow-soft sm:p-10 lg:p-12 ${
+              className={`mx-auto max-w-reading rounded-3xl bg-raised p-6 shadow-soft sm:p-10 lg:p-12 ${
                 isSerif ? "font-serif" : "font-sans"
               }`}
             >
@@ -258,4 +258,3 @@ export function BookReader({
     </div>
   );
 }
-

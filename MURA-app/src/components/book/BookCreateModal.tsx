@@ -18,10 +18,7 @@ interface BookCreateModalProps {
   onCreated: (accepted: BookAccepted) => void;
 }
 
-const PRESET_WORD_COUNTS = [
-  { words: 10000, labelKey: "bookWordCountPresetShort" as const },
-  { words: 15000, labelKey: "bookWordCountPresetMedium" as const },
-  { words: 25000, labelKey: "bookWordCountPresetLong" as const },
+export const PRESET_WORD_COUNTS = [
   { words: 20000, labelKey: "bookWordCountPresetShort" as const },
   { words: 25000, labelKey: "bookWordCountPresetMedium" as const },
   { words: 30000, labelKey: "bookWordCountPresetLong" as const },
@@ -296,7 +293,7 @@ export function BookCreateModal({
           {/* Submit */}
           <div className="flex items-center justify-end gap-3 pt-3">
             <Button type="button" variant="ghost" onClick={onClose}>
-              Отмена
+              {t("cancelButton")}
             </Button>
             <Button
               type="submit"
@@ -313,4 +310,3 @@ export function BookCreateModal({
     </div>
   );
 }
-

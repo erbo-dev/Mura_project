@@ -23,6 +23,7 @@ import { useArchiveResource } from "@/lib/mura/use-archive";
 import { BookExportDownloads } from "./BookExportDownloads";
 import { BookProgressTracker } from "./BookProgressTracker";
 import { BookReader } from "./BookReader";
+import { getHumanBookError } from "@/lib/mura/book-error";
 
 interface BookDetailContentProps {
   bookId: string;
@@ -88,6 +89,7 @@ function BookDetailContent({ bookId }: BookDetailContentProps) {
         title={book?.title ?? t("booksTitle")}
         fallbackHref="/books"
         actions={headerActions}
+        ownTitle={true}
       />
 
       <ArchiveState
@@ -138,6 +140,9 @@ function BookDetailContent({ bookId }: BookDetailContentProps) {
                   {book.error_code
                     ? `Код ошибки: ${book.error_code}`
                     : "Создание книги было прервано."}
+                  {book.status === "cancelled"
+                    ? t("bookStageCancelled")
+                    : getHumanBookError(book.error_code, t)}
                 </p>
 
                 {regenError && (

@@ -23,6 +23,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { MotionConfig } from "framer-motion";
 import { ChevronsUpDown } from "lucide-react";
 import { SearchProvider } from "@/components/search/search-provider";
 import {
@@ -222,50 +223,40 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const chrome = hasAppChrome(pathname);
 
-  if (!chrome) {
-    // Landing, auth and the two focus screens.
-    //
-    // The switcher floats only before the product starts, where there is no
-    // rail and no Settings to reach: someone arriving in Kazakh has to be able
-    // to change the language before signing in. Record and processing are
-    // deliberately excluded — the user is mid-task, often sitting opposite the
-    // person whose story they are capturing, and interface language is not a
-    // decision to put in front of them at that moment.
-    return (
-      <>
-        {isPreProduct(pathname) && <LanguageSwitcher variant="floating" />}
-        <main id="mura-content" className="relative">
-          {children}
-        </main>
-      </>
-    );
-  }
-
-  // Search is mounted only inside the product chrome: the pre-product screens
-  // have no archive to search.
   return (
-    <ArchiveOverviewProvider>
-    <SearchProvider>
-      <a
-        href="#mura-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[80] focus:rounded-full focus:bg-ink focus:px-4 focus:py-2 focus:text-meta focus:font-semibold focus:text-raised"
-      >
-        {t("skipToContent")}
-      </a>
+    <MotionConfig reducedMotion="user">
+      {!chrome ? (
+        <>
+          {isPreProduct(pathname) && <LanguageSwitcher variant="floating" />}
+          <main id="mura-content" className="relative">
+            {children}
+          </main>
+        </>
+      ) : (
+        <ArchiveOverviewProvider>
+          <SearchProvider>
+            <a
+              href="#mura-content"
+              className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[80] focus:rounded-full focus:bg-ink focus:px-4 focus:py-2 focus:text-meta focus:font-semibold focus:text-raised"
+            >
+              {t("skipToContent")}
+            </a>
 
-      <DesktopRail />
+            <DesktopRail />
 
-      <main
-        id="mura-content"
-        // Left gutter matches the rail; bottom gutter clears the tab bar so no
-        // screen has to know either exists.
-        className="relative min-h-dvh pb-[calc(72px+max(env(safe-area-inset-bottom),8px))] lg:pb-0 lg:pl-[260px]"
-      >
-        {children}
-      </main>
+            <main
+              id="mura-content"
+              // Left gutter matches the rail; bottom gutter clears the tab bar so no
+              // screen has to know either exists.
+              className="relative min-h-dvh pb-[calc(72px+max(env(safe-area-inset-bottom),8px))] lg:pb-0 lg:pl-[260px]"
+            >
+              {children}
+            </main>
 
-      <MobileTabBar />
-    </SearchProvider>
-    </ArchiveOverviewProvider>
+            <MobileTabBar />
+          </SearchProvider>
+        </ArchiveOverviewProvider>
+      )}
+    </MotionConfig>
   );
 }

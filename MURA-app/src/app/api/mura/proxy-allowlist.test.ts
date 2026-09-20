@@ -76,6 +76,12 @@ describe("proxy allowlist", () => {
     expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/books/${BOOK}/download`)).toBe(true);
     expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/books/${BOOK}/cancel`)).toBe(true);
     expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/books/${BOOK}/regenerate`)).toBe(true);
+
+    // Phase 2.3 & 2.5 Privacy Lifecycle endpoints
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/privacy/export`)).toBe(true);
+    expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}/recordings/${RECORDING}`)).toBe(true);
+    expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}/books/${BOOK}`)).toBe(true);
+    expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}`)).toBe(true);
   });
 
   it("still refuses family surfaces nothing consumes", () => {
@@ -109,7 +115,9 @@ describe("proxy allowlist", () => {
     expect(isAllowedCoreRoute("POST", "v1/me")).toBe(false);
     expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/recordings`)).toBe(false);
     expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}/jobs/${JOB}`)).toBe(false);
-    expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}`)).toBe(false);
+    expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}`)).toBe(false);
+    expect(isAllowedCoreRoute("PUT", `v1/families/${FAMILY}`)).toBe(false);
+    expect(isAllowedCoreRoute("PATCH", `v1/families/${FAMILY}`)).toBe(false);
     // Adding a member needs an invitation lifecycle Core does not have.
     expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/members`)).toBe(false);
   });

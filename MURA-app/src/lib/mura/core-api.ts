@@ -370,3 +370,37 @@ export function fetchReviewItems(
     )}/review-items`,
   );
 }
+
+// ----------------------------------------------------------- privacy lifecycle
+
+export function exportFamilyData(
+  familyId: string,
+): Promise<Record<string, unknown>> {
+  return coreRequest<Record<string, unknown>>(
+    `/v1/families/${encodeURIComponent(familyId)}/privacy/export`,
+  );
+}
+
+export async function deleteRecording(
+  familyId: string,
+  recordingId: string,
+): Promise<void> {
+  await coreRequest<void>(
+    `/v1/families/${encodeURIComponent(familyId)}/recordings/${encodeURIComponent(recordingId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function deleteFamily(
+  familyId: string,
+  confirmFamilyId: string,
+): Promise<void> {
+  await coreRequest<void>(
+    `/v1/families/${encodeURIComponent(familyId)}`,
+    {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm_family_id: confirmFamilyId }),
+    },
+  );
+}

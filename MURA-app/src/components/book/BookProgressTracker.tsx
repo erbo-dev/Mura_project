@@ -3,6 +3,7 @@
 import { AlertCircle, CheckCircle2, Loader2, StopCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useMuraI18n } from "@/lib/i18n";
 import {
   cancelBook,
@@ -44,6 +45,7 @@ export function BookProgressTracker({
   );
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
 
   const completedRef = useRef(false);
 
@@ -96,21 +98,21 @@ export function BookProgressTracker({
     };
   }, [familyId, bookId, progress.stage, onCompleted, onCancelled, onFailed]);
 
-  const handleCancel = useCallback(async () => {
-    if (!window.confirm(t("bookCancelConfirm"))) return;
-
+  const handleConfirmCancel = useCallback(async () => {
     setCancelling(true);
     setCancelError(null);
     try {
       await cancelBook(familyId, bookId);
       setProgress((prev) => ({ ...prev, stage: "cancelled" }));
+      setShowCancelDialog(false);
       onCancelled?.();
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : "Failed to cancel book");
+      setShowCancelDialog(false);
     } finally {
       setCancelling(false);
     }
-  }, [familyId, bookId, t, onCancelled]);
+  }, [familyId, bookId, onCancelled]);
 
   const stageText = formatBookProgress(progress, t);
 
@@ -126,7 +128,7 @@ export function BookProgressTracker({
             type="button"
             variant="ghost"
             size="md"
-            onClick={handleCancel}
+            onClick={() => setShowCancelDialog(true)}
             disabled={cancelling}
             className="text-muted hover:text-destructive hover:bg-destructive/10"
           >
@@ -135,6 +137,18 @@ export function BookProgressTracker({
           </Button>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={showCancelDialog}
+        onClose={() => setShowCancelDialog(false)}
+        onConfirm={handleConfirmCancel}
+        title={t("bookCancelTitle")}
+        description={t("bookCancelConfirm")}
+        confirmLabel={t("bookCancelButton")}
+        cancelLabel={t("cancelButton")}
+        isDestructive
+        isLoading={cancelling}
+      />
 
       {cancelError && (
         <div className="mt-4 rounded-xl bg-destructive/10 p-3 text-caption text-destructive">
@@ -202,6 +216,12 @@ export function BookProgressTracker({
             })}
           </div>
         </div>
+      )}
+
+      {!isTerminal(progress.stage) && (
+        <p className="mt-5 rounded-2xl bg-sand/40 px-4 py-3 text-caption leading-relaxed text-muted">
+          {t("bookBackgroundSafeNotice")}
+        </p>
       )}
     </div>
   );

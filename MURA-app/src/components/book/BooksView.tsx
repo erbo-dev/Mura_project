@@ -51,10 +51,12 @@ function BooksContent() {
       variant="primary"
       size="md"
       onClick={() => setIsCreateOpen(true)}
+      aria-label={t("booksCreateButton")}
       className="gap-2"
     >
       <BookPlus className="size-4" />
       <span>{t("booksCreateButton")}</span>
+      <span className="hidden sm:inline">{t("booksCreateButton")}</span>
     </Button>
   );
 
@@ -90,18 +92,10 @@ function BooksContent() {
         }
       >
         <PageContainer>
-          <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h2 className="text-section font-bold text-ink">
-                {t("booksTitle")}
-              </h2>
-              <p className="mt-1 text-meta text-muted">
-                {t("booksSubtitle")}
-              </p>
-            </div>
-            <div className="hidden sm:block">
-              {createButton}
-            </div>
+          <div className="mb-6">
+            <p className="text-meta text-muted">
+              {t("booksSubtitle")}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
