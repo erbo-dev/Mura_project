@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -15,6 +15,10 @@ from mura.storage.cleanup import (
 )
 from mura.storage.database import Database, utcnow
 from mura.storage.storage_errors import StorageDeleteError
+
+
+def _aware(value):
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 def _db() -> Database:
@@ -73,7 +77,7 @@ def test_cleanup_worker_retries_transient_failure() -> None:
     deferred = repo.get_job(job.cleanup_job_id)
     assert deferred is not None
     assert deferred.status == StorageCleanupStatus.QUEUED.value
-    assert deferred.next_attempt_at > before
+    assert _aware(deferred.next_attempt_at) > _aware(before)
     assert deferred.error_code == "storage_unavailable"
 
 
