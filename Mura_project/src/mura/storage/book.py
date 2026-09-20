@@ -45,6 +45,7 @@ from mura.domain.book_models import (
     TERMINAL_BOOK_JOB_STATUSES,
     TERMINAL_BOOK_STATUSES,
     CompiledSnapshot,
+    ExportFormat,
 )
 from mura.domain.book_models import (
     BookJobStatus as BookJobStatusEnum,
