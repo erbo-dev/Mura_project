@@ -178,6 +178,14 @@ class BookJobWorker:
                 self._stop_event.wait(self.poll_interval_seconds)
 
     def _check_cancellation(self, job: BookJobRow, book_id: str) -> bool:
+        # Deletion removes the Book and its queue row atomically. Missing means
+        # deletion already won; detached work must stop without recreating state.
+        if self.book_repo.get_book_unscoped(book_id) is None:
+            logger.info(
+                "book_job_abandoned_deleted",
+                extra={"event": "book_job_abandoned_deleted", "book_id": book_id},
+            )
+            return True
         if self.book_repo.is_cancel_requested(book_id):
             self.job_repo.cancel_job(job.job_id, lease_owner=self.worker_id)
             self.book_repo.cancel_book(book_id)
@@ -225,6 +233,16 @@ class BookJobWorker:
                 )
                 return
             except Exception as exc:
+                if self.book_repo.get_book_unscoped(book.book_id) is None:
+                    logger.info(
+                        "book_job_abandoned_deleted",
+                        extra={
+                            "event": "book_job_abandoned_deleted",
+                            "book_id": book.book_id,
+                            "job_id": job.job_id,
+                        },
+                    )
+                    return
                 classified = classify_failure(exc)
                 capture_exception(
                     exc,
