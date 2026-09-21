@@ -18,6 +18,7 @@ from mura.domain.models import (
     ReadableSegment,
     TranscriptEnvelope,
 )
+from mura.identity.policy import FamilyRole
 from mura.jobs import JobStatus
 from mura.observability import ProcessingTrace, TraceOutcome, TraceRepository
 from mura.quotas import BookQuotaService
@@ -34,8 +35,21 @@ from mura.storage.book import (
     BookRow,
     BookSourceSnapshotRow,
 )
+from mura.storage.cleanup import (
+    StorageCleanupJobRow,
+    StorageCleanupRepository,
+    StorageCleanupResourceType,
+    StorageCleanupStatus,
+    StorageKind,
+)
 from mura.storage.database import Database, RecordingRepository, utcnow
-from mura.storage.identity import FamilyRow, UserRow
+from mura.storage.identity import (
+    FamilyMembershipRow,
+    FamilyRow,
+    IdentityRepository,
+    SoleOwnerError,
+    UserRow,
+)
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
 pytestmark = pytest.mark.skipif(
@@ -347,3 +361,313 @@ def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
         with database.session_factory.begin() as session:
             session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
             session.execute(delete(UserRow).where(UserRow.user_id == user_id))
+
+
+
+def test_postgres_cleanup_claim_skips_locked_job() -> None:
+    """A cleanup claimant must skip a row locked by another PostgreSQL transaction."""
+
+    assert POSTGRES_URL is not None
+    suffix = uuid.uuid4().hex[:12]
+    database = Database(POSTGRES_URL)
+    cleanup = StorageCleanupRepository(database)
+    first = cleanup.enqueue_cleanup(
+        resource_type=StorageCleanupResourceType.RECORDING_AUDIO.value,
+        storage_kind=StorageKind.AUDIO.value,
+        storage_backend="local",
+        storage_key=f"pg-cleanup/{suffix}/first.wav",
+    )
+    second = cleanup.enqueue_cleanup(
+        resource_type=StorageCleanupResourceType.RECORDING_AUDIO.value,
+        storage_kind=StorageKind.AUDIO.value,
+        storage_backend="local",
+        storage_key=f"pg-cleanup/{suffix}/second.wav",
+    )
+
+    locked = Event()
+    release = Event()
+    outcome: dict[str, object] = {}
+
+    def hold_first_lock() -> None:
+        try:
+            with database.session_factory.begin() as session:
+                row = session.scalar(
+                    select(StorageCleanupJobRow)
+                    .where(StorageCleanupJobRow.cleanup_job_id == first.cleanup_job_id)
+                    .with_for_update()
+                )
+                assert row is not None
+                locked.set()
+                if not release.wait(timeout=5):
+                    raise RuntimeError("test did not release cleanup row lock")
+        except BaseException as exc:
+            outcome["locker"] = exc
+            locked.set()
+            release.set()
+
+    locker = Thread(target=hold_first_lock, daemon=True)
+    try:
+        locker.start()
+        assert locked.wait(timeout=5)
+        assert "locker" not in outcome
+
+        claimed = cleanup.claim_next_job(
+            lease_owner="worker_skip_locked",
+            lease_seconds=60,
+        )
+        assert claimed is not None
+        assert claimed.cleanup_job_id == second.cleanup_job_id
+        assert claimed.status == StorageCleanupStatus.RUNNING.value
+        assert claimed.cleanup_job_id != first.cleanup_job_id
+    finally:
+        release.set()
+        locker.join(timeout=5)
+        with database.session_factory.begin() as session:
+            session.execute(
+                delete(StorageCleanupJobRow).where(
+                    StorageCleanupJobRow.storage_key.like(f"pg-cleanup/{suffix}/%")
+                )
+            )
+
+
+def test_postgres_concurrent_family_deletes_converge_to_one_result() -> None:
+    """Two overlapping family deletions serialize on FamilyRow and cannot double-delete."""
+
+    assert POSTGRES_URL is not None
+    suffix = uuid.uuid4().hex[:12]
+    family_id = f"family_delete_pg_{suffix}"
+    user_id = f"user_delete_pg_{suffix}"
+    membership_id = f"membership_delete_pg_{suffix}"
+    database = Database(POSTGRES_URL)
+    now = utcnow()
+
+    with database.session_factory.begin() as session:
+        session.add(
+            UserRow(
+                user_id=user_id,
+                auth_issuer="https://auth.mura.test",
+                auth_subject=f"delete-{suffix}",
+                email=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            FamilyRow(
+                family_id=family_id,
+                name="Concurrent delete",
+                created_by_user_id=user_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            FamilyMembershipRow(
+                membership_id=membership_id,
+                family_id=family_id,
+                user_id=user_id,
+                role=FamilyRole.OWNER.value,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    start = Event()
+    outcomes: list[object] = []
+
+    def delete_family() -> None:
+        start.wait(timeout=5)
+        try:
+            outcomes.append(
+                IdentityRepository(database).delete_family(
+                    family_id,
+                    requesting_user_id=user_id,
+                )
+            )
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    first = Thread(target=delete_family, daemon=True)
+    second = Thread(target=delete_family, daemon=True)
+    try:
+        first.start()
+        second.start()
+        start.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert len(outcomes) == 2
+        assert not any(isinstance(value, BaseException) for value in outcomes)
+        assert sum(value is None for value in outcomes) == 1
+        assert sum(isinstance(value, list) for value in outcomes) == 1
+        with database.session_factory() as session:
+            assert session.get(FamilyRow, family_id) is None
+            assert (
+                session.scalar(
+                    select(func.count(FamilyMembershipRow.membership_id)).where(
+                        FamilyMembershipRow.family_id == family_id
+                    )
+                )
+                == 0
+            )
+    finally:
+        with database.session_factory.begin() as session:
+            session.execute(
+                delete(FamilyMembershipRow).where(
+                    FamilyMembershipRow.family_id == family_id
+                )
+            )
+            session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
+            session.execute(delete(UserRow).where(UserRow.user_id == user_id))
+
+
+def test_postgres_family_delete_rechecks_owner_count_after_membership_race() -> None:
+    """A concurrent owner promotion must be visible before family deletion decides."""
+
+    assert POSTGRES_URL is not None
+    suffix = uuid.uuid4().hex[:12]
+    family_id = f"family_membership_race_{suffix}"
+    owner_id = f"user_owner_pg_{suffix}"
+    member_id = f"user_member_pg_{suffix}"
+    database = Database(POSTGRES_URL)
+    now = utcnow()
+
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                UserRow(
+                    user_id=owner_id,
+                    auth_issuer="https://auth.mura.test",
+                    auth_subject=f"owner-{suffix}",
+                    email=None,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                UserRow(
+                    user_id=member_id,
+                    auth_issuer="https://auth.mura.test",
+                    auth_subject=f"member-{suffix}",
+                    email=None,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                FamilyRow(
+                    family_id=family_id,
+                    name="Membership race",
+                    created_by_user_id=owner_id,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                FamilyMembershipRow(
+                    membership_id=f"membership_owner_{suffix}",
+                    family_id=family_id,
+                    user_id=owner_id,
+                    role=FamilyRole.OWNER.value,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                FamilyMembershipRow(
+                    membership_id=f"membership_member_{suffix}",
+                    family_id=family_id,
+                    user_id=member_id,
+                    role=FamilyRole.VIEWER.value,
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+
+    promotion_locked = Event()
+    release_promotion = Event()
+    delete_started = Event()
+    delete_done = Event()
+    outcome: dict[str, object] = {}
+
+    def promote_member() -> None:
+        try:
+            with database.session_factory.begin() as session:
+                family = session.scalar(
+                    select(FamilyRow)
+                    .where(FamilyRow.family_id == family_id)
+                    .with_for_update()
+                )
+                assert family is not None
+                membership = session.scalar(
+                    select(FamilyMembershipRow)
+                    .where(
+                        FamilyMembershipRow.family_id == family_id,
+                        FamilyMembershipRow.user_id == member_id,
+                    )
+                    .with_for_update()
+                )
+                assert membership is not None
+                membership.role = FamilyRole.OWNER.value
+                membership.updated_at = utcnow()
+                promotion_locked.set()
+                if not release_promotion.wait(timeout=5):
+                    raise RuntimeError("test did not release membership promotion")
+            outcome["promotion"] = "committed"
+        except BaseException as exc:
+            outcome["promotion"] = exc
+            promotion_locked.set()
+            release_promotion.set()
+
+    def delete_family() -> None:
+        if not promotion_locked.wait(timeout=5):
+            outcome["delete"] = RuntimeError("promotion did not acquire family lock")
+            delete_done.set()
+            return
+        delete_started.set()
+        try:
+            outcome["delete"] = IdentityRepository(database).delete_family(
+                family_id,
+                requesting_user_id=owner_id,
+            )
+        except SoleOwnerError:
+            outcome["delete"] = "sole_owner_required"
+        except BaseException as exc:
+            outcome["delete"] = exc
+        finally:
+            delete_done.set()
+
+    promoter = Thread(target=promote_member, daemon=True)
+    deleter = Thread(target=delete_family, daemon=True)
+    try:
+        promoter.start()
+        assert promotion_locked.wait(timeout=5)
+        deleter.start()
+        assert delete_started.wait(timeout=5)
+        assert delete_done.wait(timeout=0.25) is False
+
+        release_promotion.set()
+        promoter.join(timeout=5)
+        deleter.join(timeout=5)
+        assert not promoter.is_alive()
+        assert not deleter.is_alive()
+        assert outcome["promotion"] == "committed"
+        assert outcome["delete"] == "sole_owner_required"
+
+        with database.session_factory() as session:
+            assert session.get(FamilyRow, family_id) is not None
+            owners = session.scalar(
+                select(func.count(FamilyMembershipRow.membership_id)).where(
+                    FamilyMembershipRow.family_id == family_id,
+                    FamilyMembershipRow.role == FamilyRole.OWNER.value,
+                )
+            )
+            assert owners == 2
+    finally:
+        release_promotion.set()
+        promoter.join(timeout=5)
+        deleter.join(timeout=5)
+        with database.session_factory.begin() as session:
+            session.execute(
+                delete(FamilyMembershipRow).where(
+                    FamilyMembershipRow.family_id == family_id
+                )
+            )
+            session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
+            session.execute(
+                delete(UserRow).where(UserRow.user_id.in_([owner_id, member_id]))
+            )
