@@ -232,6 +232,7 @@ def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
                 updated_at=now,
             )
         )
+        session.flush()
         session.add(
             FamilyRow(
                 family_id=family_id,
@@ -452,6 +453,7 @@ def test_postgres_concurrent_family_deletes_converge_to_one_result() -> None:
                 updated_at=now,
             )
         )
+        session.flush()
         session.add(
             FamilyRow(
                 family_id=family_id,
@@ -461,6 +463,7 @@ def test_postgres_concurrent_family_deletes_converge_to_one_result() -> None:
                 updated_at=now,
             )
         )
+        session.flush()
         session.add(
             FamilyMembershipRow(
                 membership_id=membership_id,
@@ -552,13 +555,21 @@ def test_postgres_family_delete_rechecks_owner_count_after_membership_race() -> 
                     created_at=now,
                     updated_at=now,
                 ),
-                FamilyRow(
-                    family_id=family_id,
-                    name="Membership race",
-                    created_by_user_id=owner_id,
-                    created_at=now,
-                    updated_at=now,
-                ),
+            ]
+        )
+        session.flush()
+        session.add(
+            FamilyRow(
+                family_id=family_id,
+                name="Membership race",
+                created_by_user_id=owner_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
                 FamilyMembershipRow(
                     membership_id=f"membership_owner_{suffix}",
                     family_id=family_id,
