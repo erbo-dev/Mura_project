@@ -76,5 +76,5 @@ RUN groupadd -g 10001 mura && \
 USER mura
 
 # Run standalone worker process (entrypoint: apps.worker.main:main)
-CMD ["mura-worker"]
+CMD ["sh", "-c", "exec mura-worker --queue \"${MURA_WORKER_QUEUE:-all}\""]
 
