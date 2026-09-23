@@ -101,6 +101,7 @@ def review_chapter(
             "evidence_ids": claim.evidence_ids,
             "assertion_mode": claim.assertion_mode,
             "verification_status": claim.verification_status,
+            "archive_status": claim.archive_status,
             "summary": claim.summary,
         }
         for claim in snapshot.claims
