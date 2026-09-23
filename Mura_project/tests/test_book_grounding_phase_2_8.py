@@ -592,3 +592,17 @@ def test_compiler_fails_if_selected_recording_is_absent_from_bundle() -> None:
             recording_ids=["rec_a", "rec_missing"],
             created_at=NOW,
         )
+
+
+
+def test_known_person_unsupported_biographical_fact_is_blocked() -> None:
+    report = _gate("Алихан был врачом.")
+    assert GateCode.FACTUAL_ASSERTION in {issue.code for issue in report.blockers}
+
+
+def test_known_person_supported_profession_paraphrase_is_allowed() -> None:
+    snapshot = _gate_snapshot()
+    snapshot.evidence[0].text = "Алихан был врачом."
+    snapshot.claims[0].summary = "Алихан был врачом."
+    report = _gate("Алихан работал врачом.", snapshot=snapshot)
+    assert GateCode.FACTUAL_ASSERTION not in {issue.code for issue in report.blockers}
