@@ -315,8 +315,9 @@ def run_chapter_gates(
             )
         )
         if wrong.isdigit() and len(wrong) == 4:
+            normalized_prose = normalize_text(text)
             found_rejected = found_rejected or any(
-                pattern.search(text)
+                pattern.search(normalized_prose)
                 for pattern in rejected_year_patterns(int(wrong))
             )
         if found_rejected:
