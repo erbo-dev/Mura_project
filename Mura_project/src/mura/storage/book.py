@@ -137,8 +137,10 @@ class BookRow(Base):
     family_id: Mapped[str] = mapped_column(
         String(128), ForeignKey("families.family_id", ondelete="CASCADE"), index=True
     )
-    created_by_user_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.user_id", ondelete="RESTRICT")
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id", ondelete="SET NULL"),
+        nullable=True,
     )
     title: Mapped[str] = mapped_column(String(400))
     subtitle: Mapped[str | None] = mapped_column(String(400), nullable=True)
