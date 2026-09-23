@@ -158,8 +158,8 @@ def validate_snapshot_closure(
             required_keys.append("birth_date")
         if person.death_date is not None:
             required_keys.append("death_date")
-        if person.descriptions:
-            required_keys.append("descriptions")
+        for description in person.descriptions:
+            required_keys.append(f"description:{description}")
         for profession in person.professions:
             required_keys.append(f"profession:{profession}")
         for location in person.locations:
