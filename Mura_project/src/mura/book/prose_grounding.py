@@ -40,7 +40,7 @@ _PERSON_ACTION = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-_NEXT_LOWER_WORD = re.compile(r"^\s*([а-яёәғқңөұүһі-]+)", re.IGNORECASE)
+_LOWER_WORD = re.compile(r"[а-яёәғқңөұүһі-]+", re.IGNORECASE)
 _RU_ENTITY_VERB_ENDING = re.compile(
     r"(?:лся|лась|лись|ил|ила|или|ыл|ыла|ыли|ал|ала|али|ял|яла|яли|"
     r"ел|ела|ели|ул|ула|ули|нул|нула|нули|овал|овала|овали|"
@@ -56,14 +56,13 @@ _KK_ENTITY_VERB_ENDING = re.compile(
 def _sentence_start_entity_predicate(tail: str) -> bool:
     if _PERSON_ACTION.search(tail):
         return True
-    match = _NEXT_LOWER_WORD.search(tail)
-    if match is None:
-        return False
-    token = match.group(1)
-    return bool(
-        _RU_ENTITY_VERB_ENDING.search(token)
-        or _KK_ENTITY_VERB_ENDING.search(token)
-    )
+    # A short adverb ("долго", "тихо", "сразу") may sit between the
+    # subject and predicate, so inspect a bounded local window rather than one
+    # hard-coded next word.
+    for token in _LOWER_WORD.findall(tail)[:4]:
+        if _RU_ENTITY_VERB_ENDING.search(token) or _KK_ENTITY_VERB_ENDING.search(token):
+            return True
+    return False
 
 # High-signal factual predicates about a known person. These are intentionally
 # narrower than natural language in general: the goal is to close obvious
