@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 
 import pytest
 
+from mura.book.planner import build_planner_payload
 from mura.book.snapshot import (
     COMPILER_VERSION,
     compile_source_snapshot,
 )
 from mura.domain.book_models import (
     SNAPSHOT_SCHEMA_VERSION,
+    BookLanguage,
     BookSourceSnapshot,
     CompiledSnapshot,
 )
@@ -767,3 +769,12 @@ def test_database_selected_sources_exclude_c_only_person_and_relationship() -> N
     assert snapshot.relationships == []
     assert all(claim.recording_id != "rec_c" for claim in snapshot.claims)
     assert all(evidence.recording_id != "rec_c" for evidence in snapshot.evidence)
+
+    planner_payload = build_planner_payload(
+        snapshot,
+        output_language=BookLanguage.RU,
+        target_total_words=20_000,
+    )
+    planner_text = str(planner_payload)
+    assert "Мурат" not in planner_text
+    assert "cl_c_sibling" not in planner_text
