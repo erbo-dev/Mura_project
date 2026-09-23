@@ -292,7 +292,11 @@ class StorageCleanupRepository:
         cleanup_job_id: str,
         lease_owner: str | None,
     ) -> StorageCleanupJobRow:
-        job = session.get(StorageCleanupJobRow, cleanup_job_id)
+        job = session.scalar(
+            select(StorageCleanupJobRow)
+            .where(StorageCleanupJobRow.cleanup_job_id == cleanup_job_id)
+            .with_for_update()
+        )
         if job is None:
             raise LookupError(f"unknown cleanup job: {cleanup_job_id}")
         if lease_owner is not None and job.lease_owner != lease_owner:
