@@ -241,6 +241,29 @@ class CoreSettings(BaseSettings):
         ge=1,
         le=100,
     )
+    recording_max_active_per_family: int = Field(
+        default=4,
+        alias="RECORDING_MAX_ACTIVE_PER_FAMILY",
+        ge=1,
+        le=100,
+    )
+    recording_max_created_per_family_per_day: int = Field(
+        default=100,
+        alias="RECORDING_MAX_CREATED_PER_FAMILY_PER_DAY",
+        ge=1,
+        le=10_000,
+    )
+    recording_max_created_per_user_per_day: int = Field(
+        default=25,
+        alias="RECORDING_MAX_CREATED_PER_USER_PER_DAY",
+        ge=1,
+        le=10_000,
+    )
+    family_max_audio_storage_bytes: int = Field(
+        default=10 * 1024 * 1024 * 1024,
+        alias="FAMILY_MAX_AUDIO_STORAGE_BYTES",
+        ge=1,
+    )
     auth_mode: AuthMode = Field(default=AuthMode.DISABLED, alias="AUTH_MODE")
     auth_issuer: str | None = Field(default=None, alias="AUTH_ISSUER")
     auth_audience: str | None = Field(default=None, alias="AUTH_AUDIENCE")
