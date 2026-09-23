@@ -83,7 +83,7 @@ _KZ_RELATION = re.compile(
 
 _PAIR_QUOTE = re.compile(r"[«“„\"]([^»”“\n]{5,})[»”\"]")
 _DASH_QUOTE = re.compile(
-    r"(?m)(?:^|\n)\s*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)"
+    r"(?m)(?:^|\n|:\s*)[ \t]*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)"
 )
 
 _FOUR_DIGIT_YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
