@@ -27,7 +27,6 @@ from mura.domain.book_models import (
     SnapshotManifest,
     SnapshotPerson,
     SnapshotRelationship,
-    SnapshotUncertainty,
 )
 
 
