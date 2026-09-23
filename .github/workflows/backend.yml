@@ -2,19 +2,23 @@ name: Backend CI
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
+      - "fix/**"
+      - "feat/**"
+      - "ci/**"
     paths:
       - "Mura_project/**"
       - ".github/workflows/backend.yml"
   pull_request:
-    branches: [main, master]
     paths:
       - "Mura_project/**"
       - ".github/workflows/backend.yml"
 
 jobs:
   test:
-    name: Test & Verify Backend
+    name: Python 3.11 — verify backend
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql+psycopg://postgres:mura_ci@127.0.0.1:5432/mura_test
@@ -43,6 +47,71 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up production Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev,books]
+
+      - name: Ruff lint
+        run: ruff check src/mura apps tests
+
+      - name: Ruff format check
+        run: ruff format --check src/mura apps tests
+
+      - name: Mypy
+        run: mypy src/mura apps
+
+      - name: Bandit
+        run: bandit -c pyproject.toml -r src/mura apps
+
+      - name: Dependency vulnerability audit
+        run: pip-audit
+
+      - name: Apply PostgreSQL migrations
+        run: alembic upgrade head
+
+      - name: Verify single Alembic head
+        run: |
+          HEAD_COUNT="$(alembic heads | grep -c '(head)')"
+          test "$HEAD_COUNT" -eq 1
+
+      - name: Bytecode compilation check
+        run: python -m compileall -q src/mura apps tests
+
+      - name: Run PostgreSQL concurrency gate
+        run: |
+          python -m pytest -q \
+            tests/test_postgres_atomicity.py::test_postgres_concurrent_book_creation_serializes_on_family_lock \
+            tests/test_postgres_atomicity.py::test_postgres_concurrent_family_deletes_converge_to_one_result \
+            tests/test_postgres_atomicity.py::test_postgres_family_delete_rechecks_owner_count_after_membership_race \
+            tests/test_postgres_atomicity.py::test_postgres_concurrent_recording_creation_respects_family_daily_limit \
+            tests/test_identity_families.py::test_postgres_account_delete_vs_owner_promotion_never_orphans_family
+
+      - name: Run pytest with coverage measurement
+        run: |
+          python -m pytest \
+            --cov=src/mura \
+            --cov=apps \
+            --cov-report=term-missing \
+            --cov-report=xml
+
+  compatibility:
+    name: Python 3.13 — compatibility
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Mura_project
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -54,18 +123,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[dev,books]
 
-      - name: Apply PostgreSQL migrations
-        run: alembic upgrade head
-
       - name: Bytecode compilation check
         run: python -m compileall -q src/mura apps tests
 
-      - name: Run PostgreSQL concurrency gate
-        run: |
-          python -m pytest -q \
-            tests/test_postgres_atomicity.py::test_postgres_concurrent_book_creation_serializes_on_family_lock \
-            tests/test_postgres_atomicity.py::test_postgres_concurrent_family_deletes_converge_to_one_result \
-            tests/test_postgres_atomicity.py::test_postgres_family_delete_rechecks_owner_count_after_membership_race
-
-      - name: Run pytest test suite
+      - name: Run non-PostgreSQL suite
+        env:
+          TEST_POSTGRES_URL: ""
         run: python -m pytest
