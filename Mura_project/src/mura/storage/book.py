@@ -231,6 +231,7 @@ class BookChapterRow(Base):
     target_word_count: Mapped[int] = mapped_column(Integer, default=0)
     plan: Mapped[dict[str, Any]] = mapped_column(JSON_VALUE, nullable=False)
     draft_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    draft_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON_VALUE, nullable=True)
     final_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     review: Mapped[dict[str, Any] | None] = mapped_column(JSON_VALUE, nullable=True)
@@ -944,6 +945,7 @@ class BookChapterRepository:
                     target_word_count=plan_dict.get("target_word_count", 0),
                     plan=plan_dict,
                     draft_text=None,
+                    draft_payload=None,
                     final_text=None,
                     word_count=0,
                     review=None,
@@ -1003,6 +1005,7 @@ class BookChapterRepository:
         draft_text: str,
         word_count: int,
         writer_prompt_version: str,
+        draft_payload: dict[str, Any] | None = None,
         writer_model: str,
         repair_attempts: int = 0,
         job_id: str | None = None,
@@ -1024,6 +1027,7 @@ class BookChapterRepository:
             if ch is None:
                 raise LookupError(f"unknown chapter: {book_id} #{chapter_number}")
             ch.draft_text = draft_text
+            ch.draft_payload = draft_payload
             ch.word_count = word_count
             ch.writer_prompt_version = writer_prompt_version
             ch.writer_model = writer_model
