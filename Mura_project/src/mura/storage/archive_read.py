@@ -31,7 +31,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from mura.book.relationship_semantics import relationship_semantics_match
-from mura.book.truth_eligibility import is_book_truth_eligible
+from mura.book.truth_eligibility import (
+    is_book_truth_eligible,
+    is_book_uncertainty_context_eligible,
+)
 from mura.domain.models import ClaimObjectType, StrictModel
 from mura.storage.archive import (
     ArchiveClaimRow,
@@ -822,6 +825,14 @@ class ArchiveReadRepository:
                 allow_disputed=claim.claim_id in selected_conflict_claim_ids,
             )
         ]
+        uncertainty_claims = [
+            claim
+            for claim in candidate_claims
+            if is_book_uncertainty_context_eligible(
+                claim,
+                selected_recording_ids=selected_recording_ids,
+            )
+        ]
 
         resolved_tuples = resolve_mentions(
             session,
@@ -837,7 +848,7 @@ class ArchiveReadRepository:
         questions: list[dict[str, Any]] = []
         general_claims: list[dict[str, Any]] = []
 
-        for c in claims:
+        for c in [*claims, *uncertainty_claims]:
             c_dict = {
                 "claim_id": c.claim_id,
                 "family_id": c.family_id,
