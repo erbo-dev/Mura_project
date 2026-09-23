@@ -133,10 +133,11 @@ def test_cleanup_expired_lease_is_reclaimed() -> None:
     assert reclaimed is not None
     assert reclaimed.cleanup_job_id == job.cleanup_job_id
     assert reclaimed.lease_owner == "worker_recovery"
-    assert reclaimed.attempts == 2
+    # Crash reclaim resumes the same in-flight provider attempt.
+    assert reclaimed.attempts == 1
 
 
-def test_cleanup_max_attempts_prevents_reclaim() -> None:
+def test_cleanup_last_attempt_crash_is_still_reclaimable() -> None:
     db = _db()
     repo = StorageCleanupRepository(db)
     job = repo.enqueue_cleanup(
