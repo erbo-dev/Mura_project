@@ -17,6 +17,11 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from mura.book.prose_grounding import (
+    analyze_prose,
+    normalize_text,
+    rejected_year_patterns,
+)
 from mura.domain.book_models import (
     GATE_SCHEMA_VERSION,
     BookLanguage,
@@ -127,63 +132,62 @@ def run_chapter_gates(
     min_chapter_words: int = 700,
     max_chapter_words: int = 3500,
 ) -> GateReport:
-    """Run all 8 deterministic verification gates on a chapter draft."""
+    """Run deterministic verification gates over prose and frozen provenance."""
     blockers: list[GateIssue] = []
     warnings: list[GateIssue] = []
     text = draft.text
+    analysis = analyze_prose(
+        text,
+        snapshot,
+        planned_evidence_ids=chapter_plan.evidence_refs,
+    )
 
-    # Gate 1: NAMED_PERSON
-    # Build anchor set of known names, aliases, and known places
-    known_name_stems: set[str] = set()
-    for p in snapshot.people:
-        for name_str in [p.display_name, *p.aliases]:
-            for part in re.findall(r"\w+", name_str.lower()):
-                if len(part) >= 3:
-                    known_name_stems.add(part)
-    for place in snapshot.known_places:
-        for part in re.findall(r"\w+", place.lower()):
-            if len(part) >= 3:
-                known_name_stems.add(part)
-
-    # Search for capitalized tokens that are mid-sentence
-    for m in re.finditer(r"\b([A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][\w]{2,25})\b", text):
-        tok = m.group(1)
-        low = tok.lower()
-        if low in _SOFT_TERMS:
-            continue
-        if any(stem in low for stem in known_name_stems):
-            continue
-        if _is_sentence_start(text, m.start()):
-            continue
-
-        # Found unanchored proper name mid-sentence
+    # Gate 1: NAMED_PERSON — derived from prose, including sentence-start
+    # candidates when their local grammar looks person-like.
+    for surface in analysis.unknown_people:
         blockers.append(
             GateIssue(
                 code=GateCode.NAMED_PERSON,
                 severity=IssueSeverity.BLOCKER,
                 issue_type=GateCode.NAMED_PERSON.issue_type,
-                detail=f"Proper name '{tok}' at position {m.start()} is not grounded in family archive.",
-                location=f"offset {m.start()}",
-                offending=[tok],
+                detail=f"Named person '{surface}' is not present in the selected-source snapshot.",
+                offending=[surface],
             )
         )
 
-    # Gate 2: YEAR
-    found_years = [int(y) for y in _YEAR_REGEX.findall(text)]
+    # Gate 2: YEAR — includes normalized short/textual year forms when they can
+    # be resolved deterministically against the snapshot.
     allowed_years_set = set(snapshot.allowed_years)
-    ungrounded_years = [str(y) for y in found_years if y not in allowed_years_set]
-    if ungrounded_years:
+    ungrounded_years = [
+        str(year) for year in analysis.years if year not in allowed_years_set
+    ]
+    if ungrounded_years or analysis.ambiguous_short_years:
         blockers.append(
             GateIssue(
                 code=GateCode.YEAR,
                 severity=IssueSeverity.BLOCKER,
                 issue_type=GateCode.YEAR.issue_type,
-                detail=f"Chapter contains ungrounded years: {sorted(set(ungrounded_years))}.",
-                offending=sorted(set(ungrounded_years)),
+                detail="Chapter contains unsupported or ambiguous factual year expressions.",
+                offending=sorted(
+                    set(ungrounded_years) | set(analysis.ambiguous_short_years)
+                ),
             )
         )
 
-    # Gate 3: RELATIONSHIP (heuristic check on unsupported kinship frames)
+    # Gate 3: LOCATION — plausible geography is not evidence.
+    for surface in analysis.locations:
+        blockers.append(
+            GateIssue(
+                code=GateCode.LOCATION,
+                severity=IssueSeverity.BLOCKER,
+                issue_type=GateCode.LOCATION.issue_type,
+                detail=f"Location '{surface}' is not grounded in selected sources.",
+                offending=[surface],
+            )
+        )
+
+    # Gate 4: RELATIONSHIP. Writer metadata is checked below as a secondary
+    # signal, but prose-derived kinship assertions are the truth boundary.
     # Check that any referenced person_ids_used exist in snapshot
     known_pids = {p.person_id for p in snapshot.people}
     unknown_pids = [pid for pid in draft.person_ids_used if pid not in known_pids]
@@ -224,6 +228,47 @@ def run_chapter_gates(
             grounded_relationships.add((s_pid, "parent", o_pid))
             grounded_relationships.add((o_pid, "child", s_pid))
 
+    for assertion in analysis.relationships:
+        if (
+            assertion.subject_person_id is None
+            or assertion.object_person_id is None
+        ):
+            blockers.append(
+                GateIssue(
+                    code=GateCode.RELATIONSHIP,
+                    severity=IssueSeverity.BLOCKER,
+                    issue_type=GateCode.RELATIONSHIP.issue_type,
+                    detail=(
+                        "Prose contains a kinship assertion whose person endpoint "
+                        "cannot be resolved inside the selected-source snapshot."
+                    ),
+                    location=assertion.text_span,
+                    offending=list(assertion.unresolved_surfaces),
+                )
+            )
+            continue
+        if (
+            assertion.subject_person_id,
+            assertion.relation,
+            assertion.object_person_id,
+        ) not in grounded_relationships:
+            blockers.append(
+                GateIssue(
+                    code=GateCode.RELATIONSHIP,
+                    severity=IssueSeverity.BLOCKER,
+                    issue_type=GateCode.RELATIONSHIP.issue_type,
+                    detail="Prose contains an unsupported kinship/relationship assertion.",
+                    location=assertion.text_span,
+                    offending=[
+                        assertion.subject_person_id,
+                        assertion.relation,
+                        assertion.object_person_id,
+                    ],
+                )
+            )
+
+    # Writer-reported assertions may add stricter checks, but omitting them can
+    # never hide a prose assertion.
     for assertion in draft.relationship_assertions:
         s_id = assertion.subject_person_id
         o_id = assertion.object_person_id
@@ -257,10 +302,24 @@ def run_chapter_gates(
                 )
             )
 
-    # Gate 4: CORRECTION (Forbidden original value)
+    # Gate 5: CORRECTION. Exact rejected values remain forbidden; rejected
+    # years also block obvious short/textual paraphrases such as "24-м году".
     for cor in snapshot.corrections:
         wrong = cor.original_value.strip()
-        if wrong and re.search(r"(?<![\w])" + re.escape(wrong) + r"(?![\w])", text, re.IGNORECASE):
+        found_rejected = bool(
+            wrong
+            and re.search(
+                r"(?<![\w])" + re.escape(wrong) + r"(?![\w])",
+                text,
+                re.IGNORECASE,
+            )
+        )
+        if wrong.isdigit() and len(wrong) == 4:
+            found_rejected = found_rejected or any(
+                pattern.search(text)
+                for pattern in rejected_year_patterns(int(wrong))
+            )
+        if found_rejected:
             blockers.append(
                 GateIssue(
                     code=GateCode.CORRECTION,
@@ -274,33 +333,65 @@ def run_chapter_gates(
                 )
             )
 
-    # Gate 5: QUOTE (Direct quotations must be verbatim substrings of evidence)
-    evidence_blobs = [_norm(ev.text.lower()) for ev in snapshot.evidence]
-    for q_match in _QUOTE_REGEX.finditer(text):
-        quote_body = _norm(q_match.group(1).lower())
-        if len(quote_body) < 8:
+    # Gate 6: QUOTE / DIALOGUE. Paired quotes and em-dash direct speech must
+    # occur verbatim in selected evidence; narrative paraphrase should not be
+    # dressed up as remembered dialogue.
+    evidence_blobs = [normalize_text(ev.text) for ev in snapshot.evidence]
+    for direct_speech in analysis.direct_speech:
+        quote_body = normalize_text(direct_speech)
+        if len(quote_body) < 5:
             continue
-        # Check if verbatim in any evidence span
-        is_verbatim = any(quote_body in blob for blob in evidence_blobs)
-        if not is_verbatim:
-            # Check if majority of quote tokens are grounded
-            quote_tokens = quote_body.split()
-            if len(quote_tokens) >= 3:
-                blockers.append(
-                    GateIssue(
-                        code=GateCode.QUOTE,
-                        severity=IssueSeverity.BLOCKER,
-                        issue_type=GateCode.QUOTE.issue_type,
-                        detail=f"Quotation «{q_match.group(1)[:60]}...» is not a verbatim evidence quote.",
-                        location=f"offset {q_match.start()}",
-                        offending=[q_match.group(1)],
-                    )
+        if not any(quote_body in blob for blob in evidence_blobs):
+            blockers.append(
+                GateIssue(
+                    code=GateCode.QUOTE,
+                    severity=IssueSeverity.BLOCKER,
+                    issue_type=GateCode.QUOTE.issue_type,
+                    detail="Direct speech is not a verbatim selected-source evidence span.",
+                    offending=[direct_speech],
                 )
+            )
 
-    # Gate 6: EVIDENCE_COVERAGE
+    # Gate 7: CONFLICT. An unresolved selected-source conflict may be narrated,
+    # but not silently collapsed into certainty.
+    plan_claim_ids = set(chapter_plan.claim_ids)
+    relevant_open_conflicts = [
+        conflict
+        for conflict in snapshot.conflicts
+        if conflict.status not in {"resolved", "dismissed"}
+        and plan_claim_ids.intersection(conflict.claim_ids)
+    ]
+    if relevant_open_conflicts:
+        folded = normalize_text(text)
+        preserves_uncertainty = bool(
+            re.search(
+                r"\b(?:источник\w*\s+расход\w*|по\s+одной\s+версии|"
+                r"по\s+другой\s+версии|неясн\w*|неизвестн\w*|возможн\w*|"
+                r"вероятн\w*|мәлімет\w*\s+әртүрлі|анық\s+емес|болжам\w*)\b",
+                folded,
+            )
+        )
+        if not preserves_uncertainty:
+            blockers.append(
+                GateIssue(
+                    code=GateCode.CONFLICT,
+                    severity=IssueSeverity.BLOCKER,
+                    issue_type=GateCode.CONFLICT.issue_type,
+                    detail="Chapter uses unresolved conflicting source claims without preserving disagreement.",
+                    offending=[
+                        conflict.conflict_id for conflict in relevant_open_conflicts
+                    ],
+                )
+            )
+
+    # Gate 8: EVIDENCE_COVERAGE — inferred from prose, never trusted from
+    # draft.evidence_usage.
     total_planned = len(chapter_plan.evidence_refs)
     if total_planned > 0:
-        covered = sum(1 for eid in chapter_plan.evidence_refs if eid in draft.evidence_usage)
+        actual_evidence_ids = set(analysis.actual_evidence_ids)
+        covered = sum(
+            1 for eid in chapter_plan.evidence_refs if eid in actual_evidence_ids
+        )
         coverage_ratio = covered / total_planned
         if covered == 0:
             blockers.append(
@@ -325,13 +416,15 @@ def run_chapter_gates(
                         f"Evidence coverage {coverage_ratio:.2f} is below target 0.5 "
                         f"({covered}/{total_planned} planned evidence quotes used)."
                     ),
-                    offending=list(set(chapter_plan.evidence_refs) - set(draft.evidence_usage)),
+                    offending=list(
+                        set(chapter_plan.evidence_refs) - actual_evidence_ids
+                    ),
                 )
             )
     else:
         coverage_ratio = 1.0
 
-    # Gate 7: WORD_COUNT
+    # Gate 9: WORD_COUNT
     wc = _word_count(text)
     if wc < min_chapter_words or wc > max_chapter_words:
         blockers.append(
@@ -344,7 +437,7 @@ def run_chapter_gates(
             )
         )
 
-    # Gate 8: LANGUAGE
+    # Gate 10: LANGUAGE
     cyrillic_chars = len(re.findall(r"[а-яА-ЯёЁәіңғүұқөһӘІҢҒҮҰҚӨҺ]", text))
     latin_chars = len(re.findall(r"[a-zA-Z]", text))
     total_alpha = cyrillic_chars + latin_chars
