@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app, get_settings
-from apps.api.security_headers import HSTS_HEADER, SECURITY_HEADERS
+from apps.api.security_headers import HSTS_HEADER
 from mura.config import CoreSettings, Environment
 
 
