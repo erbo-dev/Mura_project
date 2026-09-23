@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from mura.domain.book_models import (
     SNAPSHOT_SCHEMA_VERSION,
     MAX_BOOK_EVIDENCE_QUOTES,
+    MAX_BOOK_SNAPSHOT_BYTES,
     MAX_BOOK_SOURCE_RECORDINGS,
     BookSourceSnapshot,
     CompiledSnapshot,
@@ -196,6 +197,7 @@ def compile_source_snapshot(
     recording_ids: list[str] | None = None,
     max_recordings: int = MAX_BOOK_SOURCE_RECORDINGS,
     max_evidence_quotes: int = MAX_BOOK_EVIDENCE_QUOTES,
+    max_snapshot_bytes: int = MAX_BOOK_SNAPSHOT_BYTES,
     created_at: datetime | None = None,
 ) -> CompiledSnapshot:
     """Compile an authorized family archive into an immutable CompiledSnapshot."""
@@ -716,5 +718,18 @@ def compile_source_snapshot(
         snapshot,
         expected_recording_ids=normalized_selected_ids,
     )
+    snapshot_size = len(
+        json.dumps(
+            snapshot.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    if max_snapshot_bytes >= 0 and snapshot_size > max_snapshot_bytes:
+        raise SnapshotSizeError(
+            f"compiled Book snapshot is {snapshot_size} bytes; "
+            f"limit is {max_snapshot_bytes}"
+        )
     content_hash = compute_content_hash(snapshot)
     return CompiledSnapshot(snapshot=snapshot, content_hash=content_hash)
