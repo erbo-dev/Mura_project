@@ -60,9 +60,10 @@ def test_classify_provider_rate_limit_with_retry_after() -> None:
     assert classified.error_code == "provider_rate_limit"
 
 
-def test_classify_provider_server_error() -> None:
-    exc = Exception("Internal Server Error 503")
-    setattr(exc, "response", _make_mock_response(503))
+@pytest.mark.parametrize("status_code", [500, 501, 502, 503, 505, 599])
+def test_classify_provider_server_error(status_code: int) -> None:
+    exc = Exception(f"Provider Server Error {status_code}")
+    setattr(exc, "response", _make_mock_response(status_code))
     classified = classify_failure(exc)
     assert classified.category == FailureCategory.PROVIDER_SERVER_ERROR
     assert classified.disposition == FailureDisposition.RETRY
