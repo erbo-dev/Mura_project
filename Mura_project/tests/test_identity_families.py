@@ -46,12 +46,19 @@ def test_role_capability_matrix() -> None:
     # Viewer reads but never mutates.
     assert Capability.READ_RECORDINGS in viewer
     assert Capability.CREATE_RECORDING not in viewer
+    assert Capability.DELETE_RECORDING not in viewer
+    assert Capability.DELETE_BOOK not in viewer
+    assert Capability.DELETE_FAMILY not in viewer
     assert Capability.RESOLVE_CONFLICTS not in viewer
     assert Capability.MANAGE_MEMBERS not in viewer
 
     # Editor adds archive mutation but never governance.
     assert viewer < editor
     assert Capability.CREATE_RECORDING in editor
+    assert Capability.DELETE_RECORDING in editor
+    assert Capability.CREATE_BOOK in editor
+    assert Capability.DELETE_BOOK in editor
+    assert Capability.DELETE_FAMILY not in editor
     assert Capability.RESOLVE_CONFLICTS in editor
     assert Capability.MANAGE_MEMBERS not in editor
     assert Capability.UPDATE_FAMILY not in editor
@@ -60,6 +67,7 @@ def test_role_capability_matrix() -> None:
     assert editor < owner
     assert Capability.MANAGE_MEMBERS in owner
     assert Capability.UPDATE_FAMILY in owner
+    assert Capability.DELETE_FAMILY in owner
 
 
 def test_role_allows_is_the_single_decision_point() -> None:
