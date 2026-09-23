@@ -376,7 +376,11 @@ def compile_source_snapshot(
             projected_sources["birth_date"] = attribute_sources("birth_date")
         if d_date:
             projected_sources["death_date"] = attribute_sources("death_date")
-        raw_aliases = p.get("verified_aliases", []) or p.get("aliases", [])
+        # Only aliases explicitly verified by entity resolution may become
+        # Book identity forms. Falling back from an empty verified_aliases list
+        # to raw aliases would promote an unverified mention variant into a
+        # truth boundary and let prose resolve an invented/ambiguous name.
+        raw_aliases = p.get("verified_aliases", [])
         if isinstance(raw_aliases, list):
             for value in raw_aliases:
                 if not isinstance(value, str) or not value.strip():
