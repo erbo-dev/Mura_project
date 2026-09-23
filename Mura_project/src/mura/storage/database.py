@@ -57,6 +57,12 @@ class RecordingRow(Base):
 
     recording_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     family_id: Mapped[str] = mapped_column(String(128), index=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     speaker_id: Mapped[str] = mapped_column(String(128), index=True)
     speaker_name: Mapped[str] = mapped_column(String(256))
     original_filename: Mapped[str] = mapped_column(String(512))
@@ -220,6 +226,7 @@ class RecordingRepository:
         recording_id: str,
         job_id: str,
         family_id: str,
+        created_by_user_id: str | None = None,
         speaker_id: str,
         speaker_name: str,
         original_filename: str,
@@ -239,6 +246,7 @@ class RecordingRepository:
                 RecordingRow(
                     recording_id=recording_id,
                     family_id=family_id,
+                    created_by_user_id=created_by_user_id,
                     speaker_id=speaker_id,
                     speaker_name=speaker_name,
                     original_filename=original_filename,
