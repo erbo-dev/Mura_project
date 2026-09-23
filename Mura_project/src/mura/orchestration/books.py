@@ -20,6 +20,7 @@ from mura.book.continuity import (
     update_continuity,
 )
 from mura.book.exporter import (
+    BookExportCancelled,
     ExportEngineUnavailable,
     ExportService,
     PDFRenderer,
@@ -187,8 +188,11 @@ class BookJobWorker:
             )
             return True
         if self.book_repo.is_cancel_requested(book_id):
-            self.job_repo.cancel_job(job.job_id, lease_owner=self.worker_id)
-            self.book_repo.cancel_book(book_id)
+            self.job_repo.cancel_book_and_job(
+                job.job_id,
+                book_id=book_id,
+                lease_owner=self.worker_id,
+            )
             logger.info(
                 "book_cancelled",
                 extra={
@@ -221,6 +225,14 @@ class BookJobWorker:
         ):
             try:
                 self._execute_job_attempt(job, book, attempt)
+            except BookExportCancelled:
+                # Export publication discovered cancellation/deletion after a
+                # potentially long render. Convert an explicit cancellation to
+                # CANCELLED; deletion is already represented by the missing
+                # Book row and must simply abandon detached work.
+                if self._check_cancellation(job, book.book_id):
+                    return
+                raise
             except LeaseOwnershipLost as lease_exc:
                 logger.warning(
                     "book_job_lease_lost",
