@@ -616,6 +616,23 @@ def compile_source_snapshot(
         years_set.update(_extract_years_from_text(cor.get("original_value")))
         years_set.update(_extract_years_from_text(cor.get("corrected_value")))
         years_set.update(_extract_years_from_text(cor.get("explanation")))
+        correction_kind = str(cor.get("kind") or "").casefold()
+        correction_subject = str(cor.get("subject") or "").casefold()
+        corrected_value = str(cor.get("corrected_value") or "").strip()
+        if corrected_value and any(
+            marker in correction_kind or marker in correction_subject
+            for marker in (
+                "city",
+                "location",
+                "place",
+                "город",
+                "мест",
+                "қала",
+                "ауыл",
+                "жер",
+            )
+        ):
+            known_places_set.add(corrected_value)
         corrections.append(
             SnapshotCorrection(
                 correction_id=cor["correction_id"],
