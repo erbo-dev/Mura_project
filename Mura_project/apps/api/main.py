@@ -54,7 +54,7 @@ from mura.capabilities import (
     CapabilitiesView,
     derive_capabilities,
 )
-from mura.config import ASRProvider, CoreSettings
+from mura.config import ASRProvider, CoreSettings, Environment
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.domain.models import PipelineRequest, PipelineResult
 from mura.identity.auth import (
@@ -637,7 +637,10 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
             request_id_ctx.reset(token)
 
-    application.add_middleware(SecurityHeadersMiddleware)
+    application.add_middleware(
+        SecurityHeadersMiddleware,
+        hsts_enabled=bool(resolved and resolved.environment is Environment.PRODUCTION),
+    )
 
     if allowed_hosts:
         application.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
