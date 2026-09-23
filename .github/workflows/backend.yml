@@ -46,6 +46,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up production Python 3.11
         uses: actions/setup-python@v5
@@ -58,17 +60,39 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[dev,books]
 
-      - name: Ruff lint
-        run: ruff check src/mura apps tests
+      - name: Determine changed Python files
+        id: pyfiles
+        shell: bash
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          LINT_FILES="$(git diff --name-only "$BASE_SHA"...HEAD -- '*.py' \
+            | grep '^Mura_project/' \
+            | sed 's#^Mura_project/##' \
+            | tr '\n' ' ' || true)"
+          TYPE_FILES="$(printf '%s\n' $LINT_FILES \
+            | grep -E '^(src/mura|apps)/' \
+            | tr '\n' ' ' || true)"
+          echo "lint_files=$LINT_FILES" >> "$GITHUB_OUTPUT"
+          echo "type_files=$TYPE_FILES" >> "$GITHUB_OUTPUT"
 
-      - name: Ruff format check
-        run: ruff format --check src/mura apps tests
+      - name: Ruff lint changed Python
+        if: steps.pyfiles.outputs.lint_files != ''
+        run: ruff check ${{ steps.pyfiles.outputs.lint_files }}
 
-      - name: Mypy
-        run: mypy src/mura apps
+      - name: Ruff format check changed Python
+        if: steps.pyfiles.outputs.lint_files != ''
+        run: ruff format --check ${{ steps.pyfiles.outputs.lint_files }}
 
-      - name: Bandit
-        run: bandit -c pyproject.toml -r src/mura apps
+      - name: Mypy changed backend modules
+        if: steps.pyfiles.outputs.type_files != ''
+        run: mypy ${{ steps.pyfiles.outputs.type_files }}
+
+      - name: Bandit changed backend modules
+        if: steps.pyfiles.outputs.type_files != ''
+        run: bandit -c pyproject.toml ${{ steps.pyfiles.outputs.type_files }}
 
       - name: Dependency vulnerability audit
         run: pip-audit
