@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,12 +11,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from mura.book.blueprint_validation import BlueprintLimits
+from mura.book.chapter_gates import run_chapter_gates
 from mura.book.exporter import BookExportCancelled
 from mura.book.snapshot import compile_source_snapshot
 from mura.deepseek.client import DeepSeekUsage
 from mura.domain.book_models import (
     BookJobStatus,
     BookLanguage,
+    BookSourceSnapshot,
+    ChapterDraft,
+    ChapterPlan,
     BookStage,
     BookStatus,
     ChapterStatus,
@@ -565,3 +570,109 @@ def test_book_worker_export_cancellation_race_stays_cancelled(
     assert cancelled_job is not None
     assert cancelled_job.status == BookJobStatus.CANCELLED.value
     assert cancelled_job.stage == BookStage.CANCELLED.value
+
+
+
+def test_crash_reclaim_resume_preserves_structured_draft_gate_semantics(
+    db: Database, family_and_user: tuple[str, str]
+) -> None:
+    fid, uid = family_and_user
+    _prepare_snapshot(db, fid)
+
+    book_repo = BookRepository(db)
+    job_repo = BookJobRepository(db)
+    chapter_repo = BookChapterRepository(db)
+    snapshot_repo = BookSourceSnapshotRepository(db)
+
+    book = book_repo.create_book(
+        book_id="book_worker_test_1",
+        family_id=fid,
+        created_by_user_id=uid,
+        title="Crash-safe semantics",
+        output_language=BookLanguage.RU.value,
+        target_word_count=1000,
+    )
+    job = job_repo.create_job(book_id=book.book_id, family_id=fid)
+    plan = ChapterPlan(
+        chapter_number=1,
+        title="One",
+        target_word_count=100,
+        source_recording_ids=["rec_1"],
+        claim_ids=["cl_1"],
+        evidence_refs=["ev_1"],
+    )
+    chapter_repo.create_chapter_stubs(
+        book_id=book.book_id,
+        chapter_plans=[plan.model_dump(mode="json")],
+    )
+
+    now = utcnow()
+    claimed = job_repo.claim_next_job(
+        lease_owner="worker_before_crash",
+        lease_seconds=5,
+        now=now,
+    )
+    assert claimed is not None
+
+    original = ChapterDraft(
+        chapter_number=1,
+        title="One",
+        text="В 1945 году старая домбра стояла у окна.",
+        evidence_usage=["ev_1"],
+        person_ids_used=[],
+        uncertainty_notes=["same semantic payload must survive reclaim"],
+        conflict_notes=[],
+    )
+    chapter_repo.update_chapter_draft(
+        book_id=book.book_id,
+        chapter_number=1,
+        draft_text=original.text,
+        draft_payload=original.model_dump(mode="json"),
+        word_count=len(original.text.split()),
+        writer_prompt_version="test",
+        writer_model="test",
+        job_id=job.job_id,
+        lease_owner="worker_before_crash",
+    )
+
+    snap_row = snapshot_repo.get_snapshot(book.book_id)
+    assert snap_row is not None
+    snapshot = BookSourceSnapshot.model_validate(snap_row.payload)
+    before = run_chapter_gates(
+        original,
+        plan,
+        snapshot,
+        BookLanguage.RU,
+        min_chapter_words=1,
+        max_chapter_words=1000,
+    )
+
+    # Simulate process death after durable draft persistence but before review.
+    with db.session_factory.begin() as session:
+        row = session.get(type(claimed), job.job_id)
+        assert row is not None
+        row.lease_expires_at = now - timedelta(seconds=1)
+
+    reclaimed = job_repo.claim_next_job(
+        lease_owner="worker_after_crash",
+        lease_seconds=5,
+        now=now + timedelta(seconds=10),
+    )
+    assert reclaimed is not None
+    assert reclaimed.lease_owner == "worker_after_crash"
+
+    saved = chapter_repo.get_chapter(book_id=book.book_id, chapter_number=1)
+    assert saved is not None
+    assert saved.draft_payload is not None
+    restored = ChapterDraft.model_validate(saved.draft_payload)
+    assert restored == original
+
+    after = run_chapter_gates(
+        restored,
+        plan,
+        snapshot,
+        BookLanguage.RU,
+        min_chapter_words=1,
+        max_chapter_words=1000,
+    )
+    assert after.model_dump(mode="json") == before.model_dump(mode="json")
