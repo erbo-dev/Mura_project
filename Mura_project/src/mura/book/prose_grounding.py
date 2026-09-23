@@ -84,6 +84,17 @@ _RU_20S_ORDINAL = {
     "девят": 29,
 }
 
+_RU_DECADE_WORDS = {
+    "двадцат": 20,
+    "тридцат": 30,
+    "сороков": 40,
+    "пятидесят": 50,
+    "шестидесят": 60,
+    "семидесят": 70,
+    "восьмидесят": 80,
+    "девяност": 90,
+}
+
 
 @dataclass(frozen=True)
 class ProseRelationship:
@@ -328,6 +339,23 @@ def extract_years(
                     years.append(2000 + short)
                 else:
                     ambiguous.append(f"двадцать {stem}...")
+
+    # Decade expressions are intentionally coarser than years. Accept one only
+    # when the frozen snapshot makes its century/decade unambiguous; otherwise
+    # fail closed rather than guessing "1940s" from "сороковых".
+    allowed_decades = {year // 10 * 10 for year in allowed_years}
+    for stem, short_decade in _RU_DECADE_WORDS.items():
+        match = re.search(
+            rf"\b(?:в\s+)?(?:начале\s+|середине\s+|конце\s+)?{stem}\w*\b",
+            folded,
+        )
+        if not match:
+            continue
+        matching_decades = sorted(
+            decade for decade in allowed_decades if decade % 100 == short_decade
+        )
+        if len(matching_decades) != 1:
+            ambiguous.append(match.group(0))
 
     return tuple(years), tuple(dict.fromkeys(ambiguous))
 
