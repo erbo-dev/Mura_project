@@ -379,7 +379,7 @@ def test_gate_relationship_assertions_grounded_and_ungrounded():
     assert GateCode.RELATIONSHIP in [b.code for b in rep_unknown.blockers]
 
 
-def test_gate_evidence_coverage_zero_is_blocker():
+def test_gate_evidence_coverage_ignores_writer_self_report_when_prose_is_grounded():
     snapshot = _sample_snapshot()
     plan = _sample_plan()
     text = _valid_text(750)
@@ -392,8 +392,9 @@ def test_gate_evidence_coverage_zero_is_blocker():
         person_ids_used=["per_kanat"],
     )
     report = run_chapter_gates(draft, plan, snapshot, BookLanguage.KK)
-    assert report.passed is False
-    assert GateCode.EVIDENCE_COVERAGE in [b.code for b in report.blockers]
+    # Phase 2.8 derives evidence usage from prose. Omitting Writer metadata is
+    # not a bypass and is not itself a grounding failure.
+    assert GateCode.EVIDENCE_COVERAGE not in [b.code for b in report.blockers]
 
 
 def test_gate_evidence_coverage_partial_is_warning():
