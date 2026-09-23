@@ -30,7 +30,7 @@ from mura.domain.models import StrictModel
 
 #: Bumped whenever the compiled snapshot's shape changes, so a stored snapshot is
 #: always interpretable by the code that produced it.
-SNAPSHOT_SCHEMA_VERSION = "book-source-snapshot-v2"
+SNAPSHOT_SCHEMA_VERSION = "book-source-snapshot-v3"
 BLUEPRINT_SCHEMA_VERSION = "book-blueprint-v1"
 CONTINUITY_SCHEMA_VERSION = "book-continuity-v1"
 REVIEW_SCHEMA_VERSION = "book-review-v1"
@@ -354,7 +354,9 @@ class SnapshotClaim(StrictModel):
     object_type: str
     predicate: str
     subject_person_id: str | None = None
+    subject_role: str | None = None
     object_person_id: str | None = None
+    object_role: str | None = None
     evidence_class: str
     assertion_mode: str | None = None
     verification_status: str = "unreviewed"
