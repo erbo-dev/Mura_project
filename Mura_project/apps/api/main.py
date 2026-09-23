@@ -359,6 +359,9 @@ require_read_members = build_capability_dependency(
 require_create_recording = build_capability_dependency(
     Capability.CREATE_RECORDING, family_context_dependency=resolve_family_context
 )
+require_delete_recording = build_capability_dependency(
+    Capability.DELETE_RECORDING, family_context_dependency=resolve_family_context
+)
 require_resolve_conflicts = build_capability_dependency(
     Capability.RESOLVE_CONFLICTS, family_context_dependency=resolve_family_context
 )
@@ -370,6 +373,12 @@ require_read_books = build_capability_dependency(
 )
 require_create_book = build_capability_dependency(
     Capability.CREATE_BOOK, family_context_dependency=resolve_family_context
+)
+require_delete_book = build_capability_dependency(
+    Capability.DELETE_BOOK, family_context_dependency=resolve_family_context
+)
+require_delete_family = build_capability_dependency(
+    Capability.DELETE_FAMILY, family_context_dependency=resolve_family_context
 )
 
 
@@ -658,6 +667,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     register_membership_admin_routes(
         application,
         manage_members_dependency=require_manage_members,
+        delete_family_dependency=require_delete_family,
         identity_repository_dependency=get_identity_repository,
         get_runtime_dependency=get_runtime,
     )
@@ -669,7 +679,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         read_review_dependency=require_read_review,
         read_jobs_dependency=require_read_jobs,
         job_view_builder=_job_view,
-        delete_recording_dependency=require_manage_members,
+        delete_recording_dependency=require_delete_recording,
     )
     register_conflict_routes(
         application,
@@ -697,7 +707,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         get_runtime_dependency=get_runtime,
         read_books_dependency=require_read_books,
         create_book_dependency=require_create_book,
-        delete_book_dependency=require_create_book,
+        delete_book_dependency=require_delete_book,
     )
     # Service-internal and operator surfaces, registered here rather than behind
     # the conflict module so the credential each one requires is visible in one
