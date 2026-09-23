@@ -89,6 +89,11 @@ def is_book_truth_eligible(
     ):
         return False
 
+    if claim.object_type == ClaimObjectType.QUESTION.value:
+        # Open questions are preserved as uncertainty context, never promoted
+        # into the factual claim set.
+        return False
+
     if claim.object_type == ClaimObjectType.PERSON_MENTION.value:
         return claim.subject_person_id is not None
 
@@ -109,3 +114,20 @@ def is_book_truth_eligible(
         )
 
     return True
+
+
+
+def is_book_uncertainty_context_eligible(
+    claim: BookClaimLike,
+    *,
+    selected_recording_ids: set[str],
+) -> bool:
+    """Allow selected open-question context without treating it as factual truth."""
+
+    return (
+        claim.object_type == ClaimObjectType.QUESTION.value
+        and claim.recording_id in selected_recording_ids
+        and claim.status in {"active", "accepted", "disputed"}
+        and claim.verification_status != VerificationStatus.REJECTED.value
+        and bool(claim.evidence_ids)
+    )
