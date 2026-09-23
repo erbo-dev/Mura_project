@@ -360,8 +360,13 @@ def compile_source_snapshot(
             else {}
         )
 
-        def attribute_sources(key: str) -> list[str]:
-            raw = raw_attribute_sources.get(key)
+        def attribute_sources(
+            key: str,
+            raw_sources: dict[str, object] = raw_attribute_sources,
+            fallback_sources: list[str] = generic_sources,
+            fallback_allowed: bool = generic_is_fully_selected,
+        ) -> list[str]:
+            raw = raw_sources.get(key)
             if isinstance(raw, list):
                 values = sorted(
                     {str(value) for value in raw if isinstance(value, str) and value}
@@ -371,7 +376,7 @@ def compile_source_snapshot(
             # that every contributing recording is selected. If an excluded
             # recording appears in the aggregate provenance, optional
             # attributes need their own explicit provenance or are omitted.
-            return generic_sources if generic_is_fully_selected else []
+            return fallback_sources if fallback_allowed else []
 
         display_sources = attribute_sources("display_name")
         display_name = str(p.get("canonical_name") or "").strip()
