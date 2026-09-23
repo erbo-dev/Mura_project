@@ -407,7 +407,8 @@ class BookJobWorker:
             )
             chapter_plans = [ch.model_dump(mode="json") for ch in blueprint.chapters]
             self.chapter_repo.create_chapter_stubs(
-                book_id=book.book_id, chapter_plans=chapter_plans
+                book_id=book.book_id,
+                chapter_plans=chapter_plans,
                 job_id=job.job_id,
                 lease_owner=self.worker_id,
             )
