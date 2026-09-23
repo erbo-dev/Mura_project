@@ -499,3 +499,70 @@ def test_postgres_family_listing_is_membership_isolated(
     listed = pg_repository.list_families_for_user(alice.user_id)
 
     assert [family.family_id for family, _ in listed] == [mine.family_id]
+
+
+@pg_only
+def test_postgres_account_delete_vs_owner_promotion_never_orphans_family(
+    pg_repository: IdentityRepository,
+) -> None:
+    alice = pg_repository.resolve_principal(ALICE)
+    bob = pg_repository.resolve_principal(BOB)
+    family = pg_repository.create_family(name="Delete Race", owner_user_id=alice.user_id)
+    with pg_repository.database.session_factory.begin() as session:
+        session.add(
+            FamilyMembershipRow(
+                membership_id="membership_bob_delete_race",
+                family_id=family.family_id,
+                user_id=bob.user_id,
+                role=FamilyRole.VIEWER.value,
+            )
+        )
+
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+
+    def promote() -> None:
+        try:
+            barrier.wait(timeout=10)
+            pg_repository.change_member_role(
+                family_id=family.family_id,
+                user_id=bob.user_id,
+                role=FamilyRole.OWNER,
+            )
+            outcomes.append("promoted")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def delete_alice() -> None:
+        try:
+            barrier.wait(timeout=10)
+            pg_repository.delete_account(user_id=alice.user_id)
+            outcomes.append("deleted")
+        except AccountDeletionBlockedError:
+            outcomes.append("blocked")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=promote), threading.Thread(target=delete_alice)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert not errors
+    assert "promoted" in outcomes
+    assert pg_repository.count_owners(family.family_id) >= 1
+
+    alice_membership = pg_repository.get_membership(
+        family_id=family.family_id,
+        user_id=alice.user_id,
+    )
+    alice_user = pg_repository.get_user(alice.user_id)
+    if "deleted" in outcomes:
+        assert alice_membership is None
+        assert alice_user is None
+    else:
+        assert outcomes == ["blocked", "promoted"] or sorted(outcomes) == ["blocked", "promoted"]
+        assert alice_membership is not None
+        assert alice_user is not None
