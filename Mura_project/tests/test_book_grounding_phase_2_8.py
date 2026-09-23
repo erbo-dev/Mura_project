@@ -612,3 +612,24 @@ def test_known_person_supported_profession_paraphrase_is_allowed() -> None:
 def test_fabricated_inline_dash_dialogue_after_colon_is_blocked() -> None:
     report = _gate("Он сказал: — Я обязательно вернусь, — и ушёл.")
     assert GateCode.QUOTE in {issue.code for issue in report.blockers}
+
+
+
+def test_snapshot_validator_requires_per_description_provenance() -> None:
+    snapshot = _gate_snapshot()
+    person = snapshot.people[0]
+    snapshot.people[0] = person.model_copy(
+        update={
+            "descriptions": ["Любил шахматы."],
+            "attribute_sources": {
+                **person.attribute_sources,
+                "descriptions": ["rec_a"],
+            },
+        }
+    )
+
+    with pytest.raises(SnapshotClosureError):
+        validate_snapshot_closure(
+            snapshot,
+            expected_recording_ids=["rec_a"],
+        )
