@@ -527,3 +527,68 @@ def test_unverified_person_alias_does_not_enter_snapshot_identity_forms() -> Non
 
     report = _gate("Мурат приехал домой.", snapshot=snapshot)
     assert GateCode.NAMED_PERSON in {issue.code for issue in report.blockers}
+
+
+
+def test_compiler_ignores_excluded_bundle_pipeline_metadata() -> None:
+    bundle = GroundingBundle(
+        family_id=FAMILY,
+        recordings=[
+            {
+                "recording_id": "rec_a",
+                "family_id": FAMILY,
+                "speaker_name": "Selected",
+                "detected_language": "ru",
+            },
+            {
+                "recording_id": "rec_c",
+                "family_id": FAMILY,
+                "speaker_name": "Excluded",
+                "detected_language": "kk",
+            },
+        ],
+        pipeline_payloads={
+            "rec_a": {
+                "extraction": {
+                    "languages": ["ru"],
+                    "evidence_spans": [
+                        {"evidence_id": "ev_a", "text": "Алихан жил в Семее."}
+                    ],
+                }
+            },
+            "rec_c": {
+                "extraction": {
+                    "languages": ["kk"],
+                    "evidence_spans": [
+                        {"evidence_id": "ev_c", "text": "Мұрат Алматыда тұрды."}
+                    ],
+                }
+            },
+        },
+    )
+
+    snapshot = compile_source_snapshot(
+        bundle,
+        recording_ids=["rec_a"],
+        created_at=NOW,
+    ).snapshot
+
+    assert snapshot.observed_languages == ["ru"]
+    assert {item.evidence_id for item in snapshot.evidence} == {"ev_a"}
+    assert all(item.recording_id == "rec_a" for item in snapshot.evidence)
+
+
+def test_compiler_fails_if_selected_recording_is_absent_from_bundle() -> None:
+    bundle = GroundingBundle(
+        family_id=FAMILY,
+        recordings=[
+            {"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}
+        ],
+    )
+
+    with pytest.raises(SnapshotClosureError):
+        compile_source_snapshot(
+            bundle,
+            recording_ids=["rec_a", "rec_missing"],
+            created_at=NOW,
+        )
