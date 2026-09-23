@@ -165,6 +165,10 @@ def validate_snapshot_closure(
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} support {claim_id} is not a relationship claim"
                 )
+            if claim.predicate != relationship.relationship_type:
+                raise SnapshotClosureError(
+                    f"relationship {relationship.edge_id} support {claim_id} has different relationship type"
+                )
             if {claim.subject_person_id, claim.object_person_id} != {
                 relationship.subject_person_id,
                 relationship.object_person_id,
