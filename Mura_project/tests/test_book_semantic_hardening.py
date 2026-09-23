@@ -6,13 +6,20 @@ from typing import Any
 
 import pytest
 
+from mura.book.chapter_gates import run_chapter_gates
+from mura.book.prose_grounding import evidence_refs_used_by_prose
 from mura.book.relationship_semantics import relationship_semantics_match
 from mura.book.snapshot_validation import SnapshotClosureError, validate_snapshot_closure
 from mura.book.truth_eligibility import is_book_truth_eligible
 from mura.domain.book_models import (
     SNAPSHOT_SCHEMA_VERSION,
+    BookLanguage,
     BookSourceSnapshot,
+    ChapterDraft,
+    ChapterPlan,
+    GateCode,
     SnapshotClaim,
+    SnapshotCorrection,
     SnapshotEvidence,
     SnapshotManifest,
     SnapshotPerson,
@@ -278,3 +285,264 @@ def test_snapshot_closure_rejects_reversed_parent_child_semantics() -> None:
     )
     with pytest.raises(SnapshotClosureError):
         validate_snapshot_closure(snapshot, expected_recording_ids=["rec_a"])
+
+
+
+def _prose_snapshot(
+    *,
+    evidence_text: str = "Алихан работал врачом.",
+    correction: SnapshotCorrection | None = None,
+    include_relationship: bool = False,
+) -> BookSourceSnapshot:
+    now = datetime(2026, 9, 23, tzinfo=UTC)
+    people = [
+        SnapshotPerson(
+            person_id="p_alikhan",
+            display_name="Алихан",
+            source_recording_ids=["rec_a"],
+            attribute_sources={"display_name": ["rec_a"]},
+        ),
+        SnapshotPerson(
+            person_id="p_aigul",
+            display_name="Айгуль",
+            aliases=["Айгүл"],
+            source_recording_ids=["rec_a"],
+            attribute_sources={
+                "display_name": ["rec_a"],
+                "alias:Айгүл": ["rec_a"],
+            },
+        ),
+        SnapshotPerson(
+            person_id="p_murat",
+            display_name="Мұрат",
+            aliases=["Мурат"],
+            source_recording_ids=["rec_a"],
+            attribute_sources={
+                "display_name": ["rec_a"],
+                "alias:Мурат": ["rec_a"],
+            },
+        ),
+    ]
+    relationships = []
+    claims = [
+        SnapshotClaim(
+            claim_id="cl_fact",
+            recording_id="rec_a",
+            object_type="description",
+            predicate="description",
+            evidence_class="A_explicit",
+            assertion_mode="explicit",
+            verification_status="unreviewed",
+            archive_status="active",
+            evidence_ids=["ev_a"],
+            summary=evidence_text,
+        )
+    ]
+    if include_relationship:
+        claims.append(
+            SnapshotClaim(
+                claim_id="cl_sibling",
+                recording_id="rec_a",
+                object_type="relationship",
+                predicate="sibling",
+                subject_person_id="p_aigul",
+                subject_role="sibling",
+                object_person_id="p_murat",
+                object_role="sibling",
+                evidence_class="A_explicit",
+                assertion_mode="explicit",
+                verification_status="unreviewed",
+                archive_status="active",
+                evidence_ids=["ev_a"],
+            )
+        )
+        relationships.append(
+            SnapshotRelationship(
+                edge_id="edge_sibling",
+                relationship_type="sibling",
+                subject_person_id="p_aigul",
+                subject_role="sibling",
+                object_person_id="p_murat",
+                object_role="sibling",
+                source_claim_ids=["cl_sibling"],
+            )
+        )
+
+    corrections = [correction] if correction is not None else []
+    return BookSourceSnapshot(
+        schema_version=SNAPSHOT_SCHEMA_VERSION,
+        compiler_version="test",
+        family_id="fam_a",
+        manifest=SnapshotManifest(
+            source_recording_ids=["rec_a"],
+            source_claim_ids=[claim.claim_id for claim in claims],
+            source_person_ids=[person.person_id for person in people],
+            source_evidence_ids=["ev_a"],
+            correction_count=len(corrections),
+            created_at=now,
+        ),
+        people=people,
+        claims=claims,
+        relationships=relationships,
+        corrections=corrections,
+        evidence=[
+            SnapshotEvidence(
+                evidence_id="ev_a",
+                recording_id="rec_a",
+                speaker_name="Narrator",
+                text=evidence_text,
+            )
+        ],
+        known_places=["Семей"],
+        allowed_years=[1945],
+    )
+
+
+def _gate_text(text: str, snapshot: BookSourceSnapshot) -> set[GateCode]:
+    report = run_chapter_gates(
+        ChapterDraft(chapter_number=1, title="One", text=text),
+        ChapterPlan(
+            chapter_number=1,
+            title="One",
+            target_word_count=100,
+            person_ids=[person.person_id for person in snapshot.people],
+            claim_ids=[claim.claim_id for claim in snapshot.claims],
+            source_recording_ids=["rec_a"],
+            evidence_refs=["ev_a"],
+        ),
+        snapshot,
+        BookLanguage.RU,
+        min_chapter_words=1,
+        max_chapter_words=1_000,
+    )
+    return {issue.code for issue in report.blockers}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Рустам улыбнулся.",
+        "Рустам открыл дверь.",
+        "Рустам посмотрел на фотографию.",
+        "Рустам воевал.",
+        "Рустам вспомнил детство.",
+        "Рустам поднял чемодан.",
+        "Рустам долго молчал.",
+    ],
+)
+def test_unknown_sentence_start_person_with_arbitrary_verb_fails(text: str) -> None:
+    snapshot = _prose_snapshot()
+    assert GateCode.NAMED_PERSON in _gate_text(text, snapshot)
+
+
+def test_aunt_is_not_authorized_by_sibling_edge_ru() -> None:
+    snapshot = _prose_snapshot(
+        evidence_text="Айгуль и Мурат были родственниками.",
+        include_relationship=True,
+    )
+    assert GateCode.RELATIONSHIP in _gate_text(
+        "Айгуль была тётей Мурата.",
+        snapshot,
+    )
+
+
+def test_aunt_is_not_authorized_by_sibling_edge_kk() -> None:
+    snapshot = _prose_snapshot(
+        evidence_text="Айгүл мен Мұрат туыс еді.",
+        include_relationship=True,
+    )
+    assert GateCode.RELATIONSHIP in _gate_text(
+        "Мұраттың тәтесі Айгүл еді.",
+        snapshot,
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence,draft",
+    [
+        ("Алихан не был врачом.", "Алихан был врачом."),
+        ("Алихан не служил в армии.", "Алихан служил в армии."),
+        ("Алихан не переехал в Семей.", "Алихан переехал в Семей."),
+        ("Алихан жил в Семее после войны.", "Алихан жил в Семее до войны."),
+    ],
+)
+def test_obvious_semantic_inversion_is_not_factual_support(
+    evidence: str,
+    draft: str,
+) -> None:
+    snapshot = _prose_snapshot(evidence_text=evidence)
+    assert GateCode.FACTUAL_ASSERTION in _gate_text(draft, snapshot)
+
+
+def test_positive_profession_paraphrase_remains_supported() -> None:
+    snapshot = _prose_snapshot(evidence_text="Алихан работал врачом.")
+    assert GateCode.FACTUAL_ASSERTION not in _gate_text(
+        "Алихан был врачом.",
+        snapshot,
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence,draft",
+    [
+        ("Алихан был старшим братом Айгуль.", "Алихан был младшим братом Айгуль."),
+        ("Алихан был отцом Айгуль.", "Алихан был сыном Айгуль."),
+    ],
+)
+def test_evidence_coverage_rejects_role_or_order_inversion(
+    evidence: str,
+    draft: str,
+) -> None:
+    snapshot = _prose_snapshot(evidence_text=evidence)
+    assert evidence_refs_used_by_prose(
+        draft,
+        snapshot,
+        candidate_ids=["ev_a"],
+    ) == ()
+
+
+def test_evidence_coverage_does_not_count_name_and_year_only() -> None:
+    snapshot = _prose_snapshot(evidence_text="Алихан родился в 1945 году.")
+    assert evidence_refs_used_by_prose(
+        "Алихан служил в 1945 году.",
+        snapshot,
+        candidate_ids=["ev_a"],
+    ) == ()
+
+
+def test_place_correction_hyphen_variant_remains_rejected() -> None:
+    snapshot = _prose_snapshot(
+        evidence_text="Семья жила в Алматы.",
+        correction=SnapshotCorrection(
+            correction_id="cor_place",
+            recording_id="rec_a",
+            kind="speaker_self_correction",
+            subject="location",
+            original_value="Алма-Ата",
+            corrected_value="Алматы",
+            confidence="high",
+        ),
+    )
+    assert GateCode.CORRECTION in _gate_text(
+        "Семья раньше жила в Алма Ата.",
+        snapshot,
+    )
+
+
+def test_small_number_correction_word_digit_variant_remains_rejected() -> None:
+    snapshot = _prose_snapshot(
+        evidence_text="Ему было шестнадцать лет.",
+        correction=SnapshotCorrection(
+            correction_id="cor_age",
+            recording_id="rec_a",
+            kind="speaker_self_correction",
+            subject="age",
+            original_value="семнадцать",
+            corrected_value="шестнадцать",
+            confidence="high",
+        ),
+    )
+    assert GateCode.CORRECTION in _gate_text(
+        "Ему тогда было 17 лет.",
+        snapshot,
+    )
