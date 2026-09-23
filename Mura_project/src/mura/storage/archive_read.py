@@ -786,7 +786,10 @@ class ArchiveReadRepository:
                 select(ArchiveClaimRow).where(
                     ArchiveClaimRow.family_id == family_id,
                     ArchiveClaimRow.recording_id.in_(rec_ids),
-                    ArchiveClaimRow.status == "active",
+                    # Open conflicts deliberately mark their competing claims
+                    # "disputed". Resolved conflicts keep only the accepted
+                    # claim; rejected claims stay outside the Book truth set.
+                    ArchiveClaimRow.status.in_(("active", "accepted", "disputed")),
                 ).order_by(ArchiveClaimRow.created_at.asc(), ArchiveClaimRow.claim_id)
             )
         )
@@ -820,6 +823,7 @@ class ArchiveReadRepository:
                 "evidence_class": c.evidence_class,
                 "assertion_mode": c.assertion_mode,
                 "verification_status": c.verification_status,
+                "archive_status": c.status,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
             }
             if c.object_type == ClaimObjectType.STORY.value:
@@ -1069,8 +1073,11 @@ class ArchiveReadRepository:
                     "detected_by": conf.detected_by,
                     "claim_ids": sorted(set(claim_ids)),
                     "preferred_claim_id": conf.preferred_claim_id,
-                    "rationale": conf.rationale,
-                    "resolution_note": conf.resolution_note,
+                    # Notes/reviewer text are family-wide decisions, not
+                    # selected-recording evidence. The Book only needs the
+                    # selected competing claim IDs and conflict state.
+                    "rationale": "selected source claims disagree",
+                    "resolution_note": None,
                 }
             )
 
