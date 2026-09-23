@@ -32,7 +32,6 @@ from mura.storage.book import (
     BookChapterRepository,
     BookChapterRow,
     BookExportRepository,
-    BookJobRepository,
     BookRepository,
 )
 from mura.storage.book_artifacts import LocalBookArtifactStorage
@@ -49,7 +48,7 @@ from mura.storage.database import (
     RecordingRepository,
     RecordingRow,
 )
-from mura.storage.identity import FamilyMembershipRow, FamilyRow, IdentityRepository, UserRow
+from mura.storage.identity import FamilyRow, IdentityRepository
 from tests.authz_factories import (
     FakePrincipalVerifier,
     TestIdentity,
@@ -274,7 +273,6 @@ def test_delete_book_success_and_artifacts_cleanup(test_setup: dict[str, object]
 
     book_repo = BookRepository(db)
     export_repo = BookExportRepository(db)
-    chapter_repo = BookChapterRepository(db)
 
     # Create book and chapter
     book = book_repo.create_book(
