@@ -222,6 +222,19 @@ def test_invented_relationship_is_blocked_even_with_empty_writer_metadata() -> N
     assert GateCode.RELATIONSHIP in {issue.code for issue in report.blockers}
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Алиханның ағасы Мұрат еді.",
+        "Его сестра Айгуль приехала домой.",
+        "Айгуль приходилась ему тётей.",
+    ],
+)
+def test_ru_kz_and_coreference_relationship_frames_fail_closed(text: str) -> None:
+    report = _gate(text)
+    assert GateCode.RELATIONSHIP in {issue.code for issue in report.blockers}
+
+
 def test_invented_person_at_sentence_start_is_blocked() -> None:
     report = _gate("Мурат приехал домой.")
     assert GateCode.NAMED_PERSON in {issue.code for issue in report.blockers}
