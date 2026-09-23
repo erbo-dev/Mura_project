@@ -710,7 +710,13 @@ class BookCreationRepository:
         )
 
         def persist(target: Session) -> None:
+            # These rows are connected by scalar FK ids rather than ORM
+            # relationships, so SQLAlchemy has no dependency graph it can use
+            # to order all three INSERTs. PostgreSQL checks the FKs immediately:
+            # make the parent durable inside the transaction before inserting
+            # the snapshot and queue row that reference it.
             target.add(book)
+            target.flush()
             target.add(snapshot)
             target.add(job)
             target.flush()
