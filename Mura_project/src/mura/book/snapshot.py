@@ -606,6 +606,7 @@ def compile_source_snapshot(
                 evidence_class=c.get("evidence_class", "D_UNSPECIFIED"),
                 assertion_mode=c.get("assertion_mode"),
                 verification_status=c.get("verification_status", "unreviewed"),
+                archive_status=c.get("archive_status", "active"),
                 evidence_ids=sorted(set(c.get("evidence_ids", []))),
                 summary=summary,
             )
