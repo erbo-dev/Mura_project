@@ -203,6 +203,15 @@ class ArchiveResourceNotFound(LookupError):
     """Absent, or belonging to another family. The caller is told neither."""
 
 
+class GroundingSourceLimitExceeded(ValueError):
+    """The requested immutable Book source set exceeds the supported limit."""
+
+    def __init__(self, *, count: int, limit: int) -> None:
+        super().__init__(f"book source selection contains {count} recordings; limit is {limit}")
+        self.count = count
+        self.limit = limit
+
+
 def clamp_limit(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_PAGE_SIZE
@@ -735,7 +744,13 @@ class ArchiveReadRepository:
                 )
 
         if max_recordings and len(eligible) > max_recordings:
-            eligible = eligible[:max_recordings]
+            # An immutable Book may never silently change "selected A..Z" into
+            # "the first N recordings". Refuse the source set before snapshot
+            # compilation so the manifest remains an exact contract.
+            raise GroundingSourceLimitExceeded(
+                count=len(eligible),
+                limit=max_recordings,
+            )
 
         rec_ids = [r.recording_id for r in eligible]
         if not rec_ids:
@@ -816,48 +831,189 @@ class ArchiveReadRepository:
             else:
                 general_claims.append(c_dict)
 
-        people_rows = list(
-            session.scalars(
-                select(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id)
-            )
-        )
-        people = [
-            {
-                "person_id": p.person_id,
-                "family_id": p.family_id,
-                "canonical_name": p.canonical_name,
-                "normalized_name": p.normalized_name,
-                "aliases": list(p.aliases or []),
-                "verified_aliases": list(p.verified_aliases or []),
-                "category": p.category,
-                "relations_to_speakers": (
-                    p.relations_to_speakers
-                    if isinstance(p.relations_to_speakers, dict)
-                    else {}
-                ),
-                "source_recording_ids": list(p.source_recording_ids or []),
-            }
-            for p in people_rows
-        ]
+        # Book people are projected from selected person-mention claims, not
+        # copied from ArchivePersonRow. ArchivePersonRow is intentionally
+        # family-wide/materialized: its aliases and relation map can aggregate
+        # knowledge from recordings the user did not select.
+        #
+        # Every field emitted here therefore carries recording-level provenance.
+        selected_person_claims: dict[str, list[ArchiveClaimRow]] = defaultdict(list)
+        for claim in claims:
+            if (
+                claim.object_type == ClaimObjectType.PERSON_MENTION.value
+                and claim.subject_person_id
+            ):
+                selected_person_claims[claim.subject_person_id].append(claim)
 
+        speaker_id_by_recording = {
+            row.recording_id: row.speaker_id for row in eligible
+        }
+        people: list[dict[str, Any]] = []
+        for person_id in sorted(selected_person_claims):
+            person_claims = sorted(
+                selected_person_claims[person_id],
+                key=lambda row: (
+                    row.created_at.isoformat() if row.created_at else "",
+                    row.recording_id,
+                    row.claim_id,
+                ),
+            )
+            names: list[tuple[str, str]] = []
+            aliases_by_recording: dict[str, set[str]] = defaultdict(set)
+            verified_aliases_by_recording: dict[str, set[str]] = defaultdict(set)
+            category_candidates: list[tuple[str, str]] = []
+            relation_candidates: list[tuple[str, str, str]] = []
+
+            for claim in person_claims:
+                payload = claim.payload if isinstance(claim.payload, dict) else {}
+                name = _clean(payload.get("name"))
+                if name:
+                    names.append((name, claim.recording_id))
+
+                raw_aliases = payload.get("aliases")
+                if isinstance(raw_aliases, list):
+                    for alias in raw_aliases:
+                        clean_alias = _clean(alias)
+                        if clean_alias:
+                            aliases_by_recording[claim.recording_id].add(clean_alias)
+
+                variants = payload.get("name_variants")
+                if isinstance(variants, list):
+                    for variant in variants:
+                        if not isinstance(variant, dict):
+                            continue
+                        surface = _clean(variant.get("surface"))
+                        if not surface:
+                            continue
+                        aliases_by_recording[claim.recording_id].add(surface)
+                        if str(variant.get("verification_status") or "") == "confirmed":
+                            verified_aliases_by_recording[claim.recording_id].add(surface)
+
+                category = _clean(payload.get("category"))
+                if category:
+                    category_candidates.append((category, claim.recording_id))
+
+                relation = _clean(payload.get("relation_to_speaker"))
+                speaker_id = speaker_id_by_recording.get(claim.recording_id)
+                if relation and speaker_id:
+                    relation_candidates.append(
+                        (speaker_id, relation, claim.recording_id)
+                    )
+
+            # A canonical id without a selected-source name is not enough to
+            # expose a person to the Book: doing so would require borrowing the
+            # family-wide canonical profile. Fail closed instead.
+            if not names:
+                continue
+
+            canonical_name, name_recording = names[0]
+            all_aliases = sorted(
+                {
+                    alias
+                    for values in aliases_by_recording.values()
+                    for alias in values
+                    if alias != canonical_name
+                }
+            )
+            verified_aliases = sorted(
+                {
+                    alias
+                    for values in verified_aliases_by_recording.values()
+                    for alias in values
+                    if alias != canonical_name
+                }
+            )
+            relations_to_speakers: dict[str, str] = {}
+            for speaker_id, relation, _recording_id in relation_candidates:
+                relations_to_speakers.setdefault(speaker_id, relation)
+
+            category = category_candidates[0][0] if category_candidates else "unknown"
+            attribute_sources: dict[str, list[str]] = {
+                "display_name": [name_recording],
+            }
+            if category_candidates:
+                attribute_sources["category"] = sorted(
+                    {recording_id for _value, recording_id in category_candidates}
+                )
+            if relation_candidates:
+                attribute_sources["relation_to_speaker"] = sorted(
+                    {recording_id for _speaker, _value, recording_id in relation_candidates}
+                )
+            for alias in all_aliases:
+                attribute_sources[f"alias:{alias}"] = sorted(
+                    recording_id
+                    for recording_id, values in aliases_by_recording.items()
+                    if alias in values
+                )
+
+            source_recording_ids = sorted(
+                {claim.recording_id for claim in person_claims}
+            )
+            people.append(
+                {
+                    "person_id": person_id,
+                    "family_id": family_id,
+                    "canonical_name": canonical_name,
+                    "normalized_name": canonical_name.casefold(),
+                    "aliases": all_aliases,
+                    "verified_aliases": verified_aliases,
+                    "category": category,
+                    "relations_to_speakers": relations_to_speakers,
+                    "source_recording_ids": source_recording_ids,
+                    "attribute_sources": attribute_sources,
+                }
+            )
+
+        selected_claim_by_id = {claim.claim_id: claim for claim in claims}
+        selected_person_ids = {person["person_id"] for person in people}
         edge_rows = list(
             session.scalars(
                 select(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == family_id)
             )
         )
-        relationships = [
-            {
-                "edge_id": e.edge_id,
-                "family_id": e.family_id,
-                "relationship_type": e.relationship_type,
-                "subject_person_id": e.subject_person_id,
-                "subject_role": e.subject_role,
-                "object_person_id": e.object_person_id,
-                "object_role": e.object_role,
-                "source_claim_ids": list(e.source_claim_ids or []),
-            }
-            for e in edge_rows
-        ]
+        relationships: list[dict[str, Any]] = []
+        for edge in edge_rows:
+            supporting_claim_ids: list[str] = []
+            for claim_id in edge.source_claim_ids or []:
+                source_claim = selected_claim_by_id.get(claim_id)
+                if (
+                    source_claim is None
+                    or source_claim.object_type != ClaimObjectType.RELATIONSHIP.value
+                ):
+                    continue
+                if {
+                    source_claim.subject_person_id,
+                    source_claim.object_person_id,
+                } != {edge.subject_person_id, edge.object_person_id}:
+                    continue
+                payload = (
+                    source_claim.payload
+                    if isinstance(source_claim.payload, dict)
+                    else {}
+                )
+                if str(payload.get("relationship_type") or "") != edge.relationship_type:
+                    continue
+                supporting_claim_ids.append(claim_id)
+
+            if (
+                not supporting_claim_ids
+                or edge.subject_person_id not in selected_person_ids
+                or edge.object_person_id not in selected_person_ids
+            ):
+                continue
+
+            relationships.append(
+                {
+                    "edge_id": edge.edge_id,
+                    "family_id": edge.family_id,
+                    "relationship_type": edge.relationship_type,
+                    "subject_person_id": edge.subject_person_id,
+                    "subject_role": edge.subject_role,
+                    "object_person_id": edge.object_person_id,
+                    "object_role": edge.object_role,
+                    "source_claim_ids": sorted(set(supporting_claim_ids)),
+                }
+            )
 
         correction_rows = list(
             session.scalars(
@@ -887,20 +1043,36 @@ class ArchiveReadRepository:
                 select(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id)
             )
         )
-        conflicts = [
-            {
-                "conflict_id": conf.conflict_id,
-                "family_id": conf.family_id,
-                "conflict_type": conf.conflict_type,
-                "status": conf.status,
-                "detected_by": conf.detected_by,
-                "claim_ids": list(conf.claim_ids or []),
-                "preferred_claim_id": conf.preferred_claim_id,
-                "rationale": conf.rationale,
-                "resolution_note": conf.resolution_note,
-            }
-            for conf in conflict_rows
-        ]
+        snapshot_claim_ids = {claim["claim_id"] for claim in general_claims}
+        conflicts: list[dict[str, Any]] = []
+        for conf in conflict_rows:
+            claim_ids = list(conf.claim_ids or [])
+            # A mixed selected/excluded conflict would reveal the existence and
+            # possibly rationale of an excluded claim. Only conflicts whose
+            # complete claim set is representable in this Book may cross the
+            # selected-source boundary.
+            if (
+                not claim_ids
+                or any(claim_id not in snapshot_claim_ids for claim_id in claim_ids)
+                or (
+                    conf.preferred_claim_id is not None
+                    and conf.preferred_claim_id not in claim_ids
+                )
+            ):
+                continue
+            conflicts.append(
+                {
+                    "conflict_id": conf.conflict_id,
+                    "family_id": conf.family_id,
+                    "conflict_type": conf.conflict_type,
+                    "status": conf.status,
+                    "detected_by": conf.detected_by,
+                    "claim_ids": sorted(set(claim_ids)),
+                    "preferred_claim_id": conf.preferred_claim_id,
+                    "rationale": conf.rationale,
+                    "resolution_note": conf.resolution_note,
+                }
+            )
 
         recordings_dict = [
             {
