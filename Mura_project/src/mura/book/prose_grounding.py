@@ -114,7 +114,12 @@ _KZ_EXTENDED_RELATION = re.compile(
     rf"(?P<subject>[A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}})"
 )
 
-_PAIR_QUOTE = re.compile(r"[«“„\"]([^»”“\n]{5,})[»”\"]")
+_PAIR_QUOTES = (
+    re.compile(r"«([^»\n]{5,})»"),
+    re.compile(r"“([^”\n]{5,})”"),
+    re.compile(r"„([^“\n]{5,})“"),
+    re.compile(r"\"([^\"\n]{5,})\""),
+)
 _DASH_QUOTE = re.compile(
     r"(?m)(?:^|\n|:\s*)[ \t]*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)"
 )
@@ -529,7 +534,7 @@ def rejected_year_patterns(year: int) -> tuple[re.Pattern[str], ...]:
 
 def extract_direct_speech(text: str) -> tuple[str, ...]:
     values: list[str] = []
-    for regex in (_PAIR_QUOTE, _DASH_QUOTE):
+    for regex in (*_PAIR_QUOTES, _DASH_QUOTE):
         for match in regex.finditer(text):
             quote = " ".join(match.group(1).split()).strip(" ,;:—–-")
             if len(quote) >= 5:
