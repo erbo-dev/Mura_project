@@ -419,6 +419,96 @@ def extract_years(
     return tuple(years), tuple(dict.fromkeys(ambiguous))
 
 
+_RU_SMALL_NUMBERS = {
+    "ноль": 0,
+    "один": 1,
+    "одна": 1,
+    "два": 2,
+    "две": 2,
+    "три": 3,
+    "четыре": 4,
+    "пять": 5,
+    "шесть": 6,
+    "семь": 7,
+    "восемь": 8,
+    "девять": 9,
+    "десять": 10,
+    "одиннадцать": 11,
+    "двенадцать": 12,
+    "тринадцать": 13,
+    "четырнадцать": 14,
+    "пятнадцать": 15,
+    "шестнадцать": 16,
+    "семнадцать": 17,
+    "восемнадцать": 18,
+    "девятнадцать": 19,
+    "двадцать": 20,
+}
+_KK_SMALL_NUMBERS = {
+    "нөл": 0,
+    "бір": 1,
+    "екі": 2,
+    "үш": 3,
+    "төрт": 4,
+    "бес": 5,
+    "алты": 6,
+    "жеті": 7,
+    "сегіз": 8,
+    "тоғыз": 9,
+    "он": 10,
+    "он бір": 11,
+    "он екі": 12,
+    "он үш": 13,
+    "он төрт": 14,
+    "он бес": 15,
+    "он алты": 16,
+    "он жеті": 17,
+    "он сегіз": 18,
+    "он тоғыз": 19,
+    "жиырма": 20,
+}
+_NUMBER_WORDS = {**_RU_SMALL_NUMBERS, **_KK_SMALL_NUMBERS}
+_NUMBER_TO_WORDS: dict[int, set[str]] = {}
+for _word, _number in _NUMBER_WORDS.items():
+    _NUMBER_TO_WORDS.setdefault(_number, set()).add(_word)
+
+
+def normalize_correction_text(value: str) -> str:
+    normalized = normalize_text(value)
+    normalized = normalized.replace("-", " ").replace("–", " ").replace("—", " ")
+    return " ".join(normalized.split())
+
+
+def correction_value_variants(value: str) -> tuple[str, ...]:
+    """Deterministic surface variants for simple names/places and small numbers."""
+
+    base = normalize_correction_text(value)
+    if not base:
+        return ()
+
+    variants: set[str] = {base}
+    compact_number = re.fullmatch(r"(\d{1,2})(?:\s+(?:лет|год(?:а|у)?|жас))?", base)
+    if compact_number is not None:
+        number = int(compact_number.group(1))
+        variants.add(str(number))
+        variants.update(_NUMBER_TO_WORDS.get(number, set()))
+
+    for word, number in _NUMBER_WORDS.items():
+        if base == word or base.startswith(f"{word} "):
+            variants.add(str(number))
+            variants.add(word)
+
+    return tuple(sorted(variants, key=lambda item: (-len(item), item)))
+
+
+def contains_rejected_correction(text: str, original_value: str) -> bool:
+    prose = f" {normalize_correction_text(text)} "
+    for variant in correction_value_variants(original_value):
+        if re.search(r"(?<![\w])" + re.escape(variant) + r"(?![\w])", prose):
+            return True
+    return False
+
+
 def rejected_year_patterns(year: int) -> tuple[re.Pattern[str], ...]:
     short = year % 100
     patterns = [
