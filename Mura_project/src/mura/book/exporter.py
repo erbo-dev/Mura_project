@@ -19,6 +19,7 @@ from mura.storage.book import (
     BookExportRow,
     BookRepository,
     BookRow,
+    _guard_worker_write,
 )
 from mura.storage.book_artifacts import BookArtifactStorage
 
@@ -86,6 +87,8 @@ class ExportService:
         family_id: str,
         book_id: str,
         export_format: ExportFormat,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> BookExportRow:
         book = self.book_repo.get_book(family_id=family_id, book_id=book_id)
         if book is None:
@@ -143,6 +146,8 @@ class ExportService:
                         if isinstance(exc, ExportEngineUnavailable)
                         else "RENDER_FAILED"
                     ),
+                    job_id=job_id,
+                    lease_owner=lease_owner,
                 )
                 raise
         elif export_format == ExportFormat.EPUB:
@@ -178,6 +183,13 @@ class ExportService:
                     "book export cancelled before artifact publication"
                 )
 
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
+
             storage_key = self.artifact_storage.store(
                 family_id=family_id,
                 book_id=book_id,
@@ -203,4 +215,6 @@ class ExportService:
                 word_count=total_words,
                 engine=engine,
                 session=session,
+                job_id=job_id,
+                lease_owner=lease_owner,
             )
