@@ -30,7 +30,7 @@ from mura.domain.models import StrictModel
 
 #: Bumped whenever the compiled snapshot's shape changes, so a stored snapshot is
 #: always interpretable by the code that produced it.
-SNAPSHOT_SCHEMA_VERSION = "book-source-snapshot-v1"
+SNAPSHOT_SCHEMA_VERSION = "book-source-snapshot-v2"
 BLUEPRINT_SCHEMA_VERSION = "book-blueprint-v1"
 CONTINUITY_SCHEMA_VERSION = "book-continuity-v1"
 REVIEW_SCHEMA_VERSION = "book-review-v1"
@@ -44,6 +44,8 @@ MAX_CHAPTERS = 15
 MIN_BOOK_WORDS = 20_000
 DEFAULT_BOOK_WORDS = 25_000
 MAX_BOOK_WORDS = 30_000
+MAX_BOOK_SOURCE_RECORDINGS = 100
+MAX_BOOK_EVIDENCE_QUOTES = 400
 
 
 class BookStatus(StrEnum):
@@ -288,6 +290,9 @@ class SnapshotPerson(StrictModel):
     locations: list[str] = Field(default_factory=list)
     descriptions: list[str] = Field(default_factory=list)
     source_recording_ids: list[str] = Field(default_factory=list)
+    # Per-attribute recording provenance. Optional attributes are omitted from
+    # the snapshot unless their specific source can be proven selected.
+    attribute_sources: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class SnapshotRelationship(StrictModel):
