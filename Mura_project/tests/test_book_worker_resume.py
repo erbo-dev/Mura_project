@@ -676,3 +676,61 @@ def test_crash_reclaim_resume_preserves_structured_draft_gate_semantics(
         max_chapter_words=1000,
     )
     assert after.model_dump(mode="json") == before.model_dump(mode="json")
+
+
+
+def test_book_worker_fails_closed_on_legacy_pre_provenance_snapshot(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
+    fid, uid = family_and_user
+    book_repo = BookRepository(db)
+    job_repo = BookJobRepository(db)
+    snapshot_repo = BookSourceSnapshotRepository(db)
+
+    book = book_repo.create_book(
+        book_id="book_legacy_snapshot",
+        family_id=fid,
+        created_by_user_id=uid,
+        title="Legacy snapshot must not run",
+        output_language=BookLanguage.RU.value,
+        target_word_count=1000,
+    )
+    legacy = BookSourceSnapshot(
+        schema_version="book-source-snapshot-v1",
+        compiler_version="legacy",
+        family_id=fid,
+        manifest={
+            "source_recording_ids": [],
+            "created_at": utcnow(),
+        },
+    )
+    snapshot_repo.save_snapshot(
+        book_id=book.book_id,
+        family_id=fid,
+        compiler_version="legacy",
+        content_hash="1" * 64,
+        payload=legacy.model_dump(mode="json"),
+        manifest=legacy.manifest.model_dump(mode="json"),
+        source_recording_count=0,
+        source_story_count=0,
+        source_claim_count=0,
+    )
+    job = job_repo.create_job(book_id=book.book_id, family_id=fid)
+    client = _build_mock_client()
+    worker = BookJobWorker(
+        db=db,
+        deepseek_client=client,
+        artifact_storage=LocalBookArtifactStorage(tmp_path / "artifacts"),
+        pdf_renderer=FakePDFRenderer(),
+    )
+
+    assert worker.process_once() is True
+
+    failed_book = book_repo.get_book_unscoped(book.book_id)
+    failed_job = job_repo.get_job(job.job_id)
+    assert failed_book is not None
+    assert failed_book.status == BookStatus.FAILED.value
+    assert failed_job is not None
+    assert failed_job.status == BookJobStatus.FAILED.value
+    assert failed_job.error_code == "book_source_snapshot_invalid"
+    assert client.request_json.call_count == 0
