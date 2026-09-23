@@ -10,7 +10,10 @@ from mura.book.chapter_gates import run_chapter_gates
 from mura.book.prose_grounding import evidence_refs_used_by_prose
 from mura.book.relationship_semantics import relationship_semantics_match
 from mura.book.snapshot_validation import SnapshotClosureError, validate_snapshot_closure
-from mura.book.truth_eligibility import is_book_truth_eligible
+from mura.book.truth_eligibility import (
+    is_book_truth_eligible,
+    is_book_uncertainty_context_eligible,
+)
 from mura.domain.book_models import (
     SNAPSHOT_SCHEMA_VERSION,
     BookLanguage,
@@ -24,6 +27,7 @@ from mura.domain.book_models import (
     SnapshotManifest,
     SnapshotPerson,
     SnapshotRelationship,
+    SnapshotUncertainty,
 )
 
 
@@ -546,3 +550,192 @@ def test_small_number_correction_word_digit_variant_remains_rejected() -> None:
         "Ему тогда было 17 лет.",
         snapshot,
     )
+
+
+
+def test_open_question_is_uncertainty_context_not_book_truth() -> None:
+    claim = _Claim(
+        object_type="question",
+        predicate="question",
+        assertion_mode="uncertain",
+        evidence_class="U_uncertain",
+    )
+    assert not is_book_truth_eligible(claim, selected_recording_ids={"rec_a"})
+    assert is_book_uncertainty_context_eligible(
+        claim,
+        selected_recording_ids={"rec_a"},
+    )
+
+
+def test_german_style_fabricated_quote_is_blocked() -> None:
+    snapshot = _prose_snapshot(evidence_text="Он обещал вернуться.")
+    assert GateCode.QUOTE in _gate_text(
+        "„Я обязательно вернусь домой“",
+        snapshot,
+    )
+
+
+def test_compiler_relationship_support_rejects_semantic_parent_reversal() -> None:
+    from mura.book.snapshot import compile_source_snapshot
+    from mura.storage.archive_read import GroundingBundle
+
+    bundle = GroundingBundle(
+        family_id="fam_a",
+        recordings=[
+            {"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}
+        ],
+        pipeline_payloads={
+            "rec_a": {
+                "extraction": {
+                    "evidence_spans": [
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}
+                    ]
+                }
+            }
+        },
+        people=[
+            {
+                "person_id": "p_a",
+                "canonical_name": "Алия",
+                "verified_aliases": [],
+                "category": "family_member",
+                "source_recording_ids": ["rec_a"],
+                "attribute_sources": {
+                    "display_name": ["rec_a"],
+                    "category": ["rec_a"],
+                },
+            },
+            {
+                "person_id": "p_b",
+                "canonical_name": "Болат",
+                "verified_aliases": [],
+                "category": "family_member",
+                "source_recording_ids": ["rec_a"],
+                "attribute_sources": {
+                    "display_name": ["rec_a"],
+                    "category": ["rec_a"],
+                },
+            },
+        ],
+        claims=[
+            {
+                "claim_id": "cl_parent",
+                "recording_id": "rec_a",
+                "object_type": "relationship",
+                "predicate": "parent_child",
+                "subject_person_id": "p_a",
+                "object_person_id": "p_b",
+                "payload": {
+                    "relationship_type": "parent_child",
+                    "subject_role": "parent",
+                    "object_role": "child",
+                },
+                "evidence_ids": ["ev_a"],
+                "evidence_class": "A_explicit",
+                "assertion_mode": "explicit",
+                "verification_status": "unreviewed",
+                "archive_status": "active",
+            }
+        ],
+        relationships=[
+            {
+                "edge_id": "edge_bad",
+                "relationship_type": "parent_child",
+                "subject_person_id": "p_b",
+                "subject_role": "parent",
+                "object_person_id": "p_a",
+                "object_role": "child",
+                "source_claim_ids": ["cl_parent"],
+            }
+        ],
+    )
+
+    snapshot = compile_source_snapshot(
+        bundle,
+        recording_ids=["rec_a"],
+        created_at=datetime(2026, 9, 23, tzinfo=UTC),
+    ).snapshot
+    assert snapshot.relationships == []
+
+
+def test_compiler_relationship_support_accepts_equivalent_parent_representation() -> None:
+    from mura.book.snapshot import compile_source_snapshot
+    from mura.storage.archive_read import GroundingBundle
+
+    bundle = GroundingBundle(
+        family_id="fam_a",
+        recordings=[
+            {"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}
+        ],
+        pipeline_payloads={
+            "rec_a": {
+                "extraction": {
+                    "evidence_spans": [
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}
+                    ]
+                }
+            }
+        },
+        people=[
+            {
+                "person_id": "p_a",
+                "canonical_name": "Алия",
+                "verified_aliases": [],
+                "category": "family_member",
+                "source_recording_ids": ["rec_a"],
+                "attribute_sources": {
+                    "display_name": ["rec_a"],
+                    "category": ["rec_a"],
+                },
+            },
+            {
+                "person_id": "p_b",
+                "canonical_name": "Болат",
+                "verified_aliases": [],
+                "category": "family_member",
+                "source_recording_ids": ["rec_a"],
+                "attribute_sources": {
+                    "display_name": ["rec_a"],
+                    "category": ["rec_a"],
+                },
+            },
+        ],
+        claims=[
+            {
+                "claim_id": "cl_parent",
+                "recording_id": "rec_a",
+                "object_type": "relationship",
+                "predicate": "parent_child",
+                "subject_person_id": "p_a",
+                "object_person_id": "p_b",
+                "payload": {
+                    "relationship_type": "parent_child",
+                    "subject_role": "parent",
+                    "object_role": "child",
+                },
+                "evidence_ids": ["ev_a"],
+                "evidence_class": "A_explicit",
+                "assertion_mode": "explicit",
+                "verification_status": "unreviewed",
+                "archive_status": "active",
+            }
+        ],
+        relationships=[
+            {
+                "edge_id": "edge_ok",
+                "relationship_type": "parent_child",
+                "subject_person_id": "p_b",
+                "subject_role": "child",
+                "object_person_id": "p_a",
+                "object_role": "parent",
+                "source_claim_ids": ["cl_parent"],
+            }
+        ],
+    )
+
+    snapshot = compile_source_snapshot(
+        bundle,
+        recording_ids=["rec_a"],
+        created_at=datetime(2026, 9, 23, tzinfo=UTC),
+    ).snapshot
+    assert [relationship.edge_id for relationship in snapshot.relationships] == ["edge_ok"]
