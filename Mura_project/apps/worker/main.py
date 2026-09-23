@@ -402,7 +402,7 @@ def _build_selected_worker(settings: CoreSettings, queue: str) -> Any:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
+    args = _parse_args([] if argv is None else argv)
     try:
         settings = CoreSettings()  # type: ignore[call-arg]
     except Exception:
@@ -449,5 +449,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def cli() -> int:
+    return main(sys.argv[1:])
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())
