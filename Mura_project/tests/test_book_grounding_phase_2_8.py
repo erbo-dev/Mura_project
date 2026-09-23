@@ -11,7 +11,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from fastapi import HTTPException
 
+from apps.api.books import resolve_book_source_ids
+from apps.api.errors import BOOK_SOURCE_LIMIT_EXCEEDED
 from mura.book.chapter_gates import run_chapter_gates
 from mura.book.snapshot import compile_source_snapshot
 from mura.book.snapshot_validation import (
@@ -34,6 +37,7 @@ from mura.domain.book_models import (
     SnapshotRelationship,
 )
 from mura.storage.archive_read import GroundingBundle
+from mura.storage.database import Database
 
 NOW = datetime(2026, 9, 23, tzinfo=UTC)
 FAMILY = "fam_phase_28"
@@ -387,3 +391,21 @@ def test_snapshot_validator_rejects_relationship_with_dangling_support() -> None
             snapshot,
             expected_recording_ids=["rec_a"],
         )
+
+
+
+def test_more_than_100_explicit_sources_fails_instead_of_truncating() -> None:
+    db = Database("sqlite+pysqlite:///:memory:")
+    db.create_schema()
+    requested = [f"rec_{idx:03d}" for idx in range(101)]
+
+    with db.session_factory() as session:
+        with pytest.raises(HTTPException) as caught:
+            resolve_book_source_ids(
+                session,
+                family_id=FAMILY,
+                requested_recording_ids=requested,
+            )
+
+    assert caught.value.status_code == 422
+    assert caught.value.detail == BOOK_SOURCE_LIMIT_EXCEEDED
