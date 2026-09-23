@@ -2,12 +2,16 @@ name: Frontend CI
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
+      - "fix/**"
+      - "feat/**"
+      - "ci/**"
     paths:
       - "MURA-app/**"
       - ".github/workflows/frontend.yml"
   pull_request:
-    branches: [main, master]
     paths:
       - "MURA-app/**"
       - ".github/workflows/frontend.yml"
@@ -34,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: ESLint
+        run: npm run lint
+
       - name: Typecheck TypeScript
         run: npx tsc --noEmit
 
@@ -42,4 +49,3 @@ jobs:
 
       - name: Production build
         run: npm run build
-
