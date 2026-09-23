@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from mura.book.exporter import BookExportCancelled, ExportService
-from mura.domain.book_models import BookLanguage, ExportFormat, ExportStatus
+from mura.domain.book_models import BookLanguage, BookStage, ExportFormat, ExportStatus
+from mura.leases import LeaseOwnershipLost
 from mura.storage.book import (
     BookChapterRepository,
     BookExportRepository,
+    BookJobRepository,
     BookRepository,
 )
 from mura.storage.book_artifacts import LocalBookArtifactStorage
@@ -176,6 +179,99 @@ def test_cancelled_book_cannot_cross_artifact_durability_boundary(tmp_path: Path
             family_id=book.family_id,
             book_id=book.book_id,
             export_format=ExportFormat.PDF,
+        )
+
+    assert list((tmp_path / "books").rglob("*.pdf")) == []
+
+
+
+def test_stale_book_worker_cannot_mutate_or_publish_after_reclaim(tmp_path: Path) -> None:
+    db, repo, book, storage = _seed(tmp_path)
+    chapters = BookChapterRepository(db)
+    chapters.create_chapter_stubs(
+        book_id=book.book_id,
+        chapter_plans=[
+            {
+                "chapter_number": 1,
+                "title": "One",
+                "target_word_count": 100,
+            }
+        ],
+    )
+    chapters.approve_chapter(
+        book_id=book.book_id,
+        chapter_number=1,
+        final_text="grounded text",
+        word_count=2,
+    )
+
+    jobs = BookJobRepository(db)
+    job = jobs.create_job(book_id=book.book_id, family_id=book.family_id)
+    first = jobs.claim_next_job(
+        lease_owner="worker_old",
+        lease_seconds=60,
+        now=utcnow(),
+    )
+    assert first is not None
+
+    # Simulate a stalled worker whose lease expires and is legitimately
+    # reclaimed by another process.
+    with db.session_factory.begin() as session:
+        row = session.get(type(first), job.job_id)
+        assert row is not None
+        row.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+    reclaimed = jobs.claim_next_job(
+        lease_owner="worker_new",
+        lease_seconds=60,
+        now=utcnow(),
+    )
+    assert reclaimed is not None
+    assert reclaimed.lease_owner == "worker_new"
+
+    before = repo.get_book_unscoped(book.book_id)
+    assert before is not None
+    with pytest.raises(LeaseOwnershipLost):
+        repo.update_stage(
+            book.book_id,
+            stage=BookStage.PLANNING.value,
+            job_id=job.job_id,
+            lease_owner="worker_old",
+        )
+    after = repo.get_book_unscoped(book.book_id)
+    assert after is not None
+    assert after.stage == before.stage
+
+    # Chapter publication is fenced by the same current job lease.
+    with pytest.raises(LeaseOwnershipLost):
+        chapters.approve_chapter(
+            book_id=book.book_id,
+            chapter_number=1,
+            final_text="stale overwrite",
+            word_count=2,
+            job_id=job.job_id,
+            lease_owner="worker_old",
+        )
+    current = chapters.get_chapter(book_id=book.book_id, chapter_number=1)
+    assert current is not None
+    assert current.final_text == "grounded text"
+
+    renderer = MagicMock()
+    renderer.render_pdf.return_value = b"pdf"
+    service = ExportService(
+        book_repo=repo,
+        chapter_repo=chapters,
+        export_repo=BookExportRepository(db),
+        artifact_storage=storage,
+        pdf_renderer=renderer,
+    )
+    with pytest.raises(LeaseOwnershipLost):
+        service.export_book(
+            family_id=book.family_id,
+            book_id=book.book_id,
+            export_format=ExportFormat.PDF,
+            job_id=job.job_id,
+            lease_owner="worker_old",
         )
 
     assert list((tmp_path / "books").rglob("*.pdf")) == []
