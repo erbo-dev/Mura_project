@@ -209,6 +209,7 @@ class GateCode(StrEnum):
     CONFLICT = "conflict"
     CORRECTION = "correction"
     QUOTE = "quote"
+    FACTUAL_ASSERTION = "factual_assertion"
     EVIDENCE_COVERAGE = "evidence_coverage"
     WORD_COUNT = "word_count"
     LANGUAGE = "language"
@@ -226,6 +227,7 @@ _GATE_ISSUE_TYPES: dict[GateCode, IssueType] = {
     GateCode.CONFLICT: IssueType.CONFLICT_RESOLVED_SILENTLY,
     GateCode.CORRECTION: IssueType.REJECTED_CORRECTION,
     GateCode.QUOTE: IssueType.UNGROUNDED_QUOTE,
+    GateCode.FACTUAL_ASSERTION: IssueType.INVENTED_SCENE_DETAIL,
     GateCode.EVIDENCE_COVERAGE: IssueType.INSUFFICIENT_EVIDENCE,
     GateCode.WORD_COUNT: IssueType.WRONG_LENGTH,
     GateCode.LANGUAGE: IssueType.WRONG_LANGUAGE,
