@@ -14,7 +14,7 @@ from mura.storage.cleanup import (
     StorageKind,
 )
 from mura.storage.database import Database, utcnow
-from mura.storage.storage_errors import StorageDeleteError
+from mura.storage.storage_errors import StorageDeleteError, storage_delete_http_error
 
 
 def _aware(value):
@@ -131,7 +131,10 @@ def test_cleanup_worker_crash_recovery_reclaims_expired_lease() -> None:
     completed = repo.get_job(job.cleanup_job_id)
     assert completed is not None
     assert completed.status == StorageCleanupStatus.COMPLETED.value
-    assert completed.attempts == 2
+    # Reclaiming a crashed RUNNING attempt does not consume another provider
+    # attempt; otherwise a crash on the final allowed attempt would strand the
+    # row forever instead of letting idempotent deletion converge.
+    assert completed.attempts == 1
 
 
 def test_cleanup_worker_fails_closed_when_recorded_backend_is_unconfigured() -> None:
@@ -148,3 +151,51 @@ def test_cleanup_worker_fails_closed_when_recorded_backend_is_unconfigured() -> 
     assert failed is not None
     assert failed.status == StorageCleanupStatus.FAILED.value
     assert failed.error_code == "storage_backend_unconfigured"
+
+
+
+@pytest.mark.parametrize("status_code", [500, 501, 502, 503, 505, 599])
+def test_all_storage_5xx_failures_are_retryable(status_code: int) -> None:
+    error = storage_delete_http_error(status_code)
+    assert error.retryable is True
+    assert error.code == "storage_unavailable"
+
+
+def test_cleanup_reclaims_crash_on_last_allowed_attempt() -> None:
+    db = _db()
+    repo = StorageCleanupRepository(db)
+    job = repo.enqueue_cleanup(
+        resource_type=StorageCleanupResourceType.RECORDING_AUDIO.value,
+        storage_kind=StorageKind.AUDIO.value,
+        storage_backend="local",
+        storage_key="family/fam/recordings/last/original.wav",
+        max_attempts=1,
+    )
+    claimed = repo.claim_next_job(
+        lease_owner="worker_dead",
+        lease_seconds=5,
+        now=utcnow(),
+    )
+    assert claimed is not None
+    assert claimed.attempts == 1
+
+    with db.session_factory.begin() as session:
+        row = session.get(type(claimed), job.cleanup_job_id)
+        assert row is not None
+        row.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+    storage = MagicMock()
+    # Models the important crash boundary: the previous worker may already
+    # have deleted the object, so the recovery sees "absent" and must complete.
+    storage.delete.return_value = False
+    worker = StorageCleanupWorker(
+        repository=repo,
+        storage_targets={(StorageKind.AUDIO.value, "local"): storage},
+        worker_id="worker_recovery",
+    )
+
+    assert worker.process_once() is True
+    completed = repo.get_job(job.cleanup_job_id)
+    assert completed is not None
+    assert completed.status == StorageCleanupStatus.COMPLETED.value
+    assert completed.attempts == 1
