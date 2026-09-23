@@ -9,6 +9,7 @@ import random
 import re
 from typing import Any
 
+from mura.book.snapshot_validation import SnapshotClosureError
 from mura.leases import LeaseOwnershipLost
 from mura.storage.storage_errors import StorageDeleteError
 
@@ -99,6 +100,16 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
             disposition=FailureDisposition.TERMINAL,
             error_code="lease_ownership_lost",
             error_detail=error_str or "Worker lease ownership was lost or expired",
+        )
+
+    # A persisted Book snapshot with broken provenance is a deterministic
+    # grounding blocker. Retrying the same immutable row cannot repair it.
+    if isinstance(exc, SnapshotClosureError):
+        return ClassifiedFailure(
+            category=FailureCategory.GROUNDING_BLOCKED,
+            disposition=FailureDisposition.TERMINAL,
+            error_code=SnapshotClosureError.code,
+            error_detail=str(exc),
         )
 
     # 2. Export engine missing
