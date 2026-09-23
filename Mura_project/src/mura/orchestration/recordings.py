@@ -162,6 +162,7 @@ class RecordingJobWorker:
                 job.job_id,
                 error_code="recording_missing",
                 error_detail=f"recording {job.recording_id} does not exist",
+                lease_owner=self.worker_id,
             )
             return
 
@@ -419,6 +420,7 @@ class RecordingJobWorker:
                 job.job_id,
                 JobStatus.RESOLVING,
                 "persisting_archive",
+                lease_owner=self.worker_id,
             )
             trace.start("archive_persistence")
             with self.repository.database.session_factory.begin() as session:
