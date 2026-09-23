@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from mura.book.relationship_semantics import relationship_semantics_match
+from mura.book.truth_eligibility import book_truth_fields_eligible
 from mura.domain.book_models import SNAPSHOT_SCHEMA_VERSION, BookSourceSnapshot
 
 
@@ -123,7 +124,29 @@ def validate_snapshot_closure(
                 f"evidence {evidence.evidence_id} has dangling people refs: {missing_people}"
             )
 
+    conflict_claim_ids = {
+        claim_id
+        for conflict in snapshot.conflicts
+        for claim_id in conflict.claim_ids
+    }
+
     for claim in snapshot.claims:
+        if not book_truth_fields_eligible(
+            recording_id=claim.recording_id,
+            selected_recording_ids=selected,
+            archive_status=claim.archive_status,
+            evidence_ids=claim.evidence_ids,
+            evidence_class=claim.evidence_class,
+            verification_status=claim.verification_status,
+            assertion_mode=claim.assertion_mode,
+            allow_disputed=(
+                claim.archive_status == "disputed"
+                and claim.claim_id in conflict_claim_ids
+            ),
+        ):
+            raise SnapshotClosureError(
+                f"claim {claim.claim_id} is not eligible for Book truth"
+            )
         if claim.recording_id not in selected:
             raise SnapshotClosureError(
                 f"claim {claim.claim_id} is outside selected recordings"
