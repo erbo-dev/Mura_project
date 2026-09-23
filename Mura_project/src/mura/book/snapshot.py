@@ -370,6 +370,10 @@ def compile_source_snapshot(
 
         aliases: list[str] = []
         projected_sources: dict[str, list[str]] = {"display_name": display_sources}
+        if b_date:
+            projected_sources["birth_date"] = attribute_sources("birth_date")
+        if d_date:
+            projected_sources["death_date"] = attribute_sources("death_date")
         raw_aliases = p.get("verified_aliases", []) or p.get("aliases", [])
         if isinstance(raw_aliases, list):
             for value in raw_aliases:
