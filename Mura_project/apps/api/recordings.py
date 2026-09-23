@@ -192,7 +192,7 @@ def register_recording_routes(
                     family_id=family_id,
                     user_id=context.user_id,
                     incoming_size_bytes=incoming_size_bytes,
-                    settings=typed.settings,
+                    settings=getattr(typed, "settings", None),
                 )
 
                 stored = storage.save(
