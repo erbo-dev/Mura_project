@@ -519,6 +519,10 @@ def test_selected_source_snapshot_does_not_import_excluded_family_graph_context(
                 "verified_aliases": [],
                 "category": "core",
                 "source_recording_ids": ["rec_a", "rec_c"],
+                "attribute_sources": {
+                    "display_name": ["rec_a"],
+                    "category": ["rec_a"],
+                },
             },
             {
                 "person_id": "per_murat",
@@ -529,6 +533,10 @@ def test_selected_source_snapshot_does_not_import_excluded_family_graph_context(
                 "verified_aliases": [],
                 "category": "core",
                 "source_recording_ids": ["rec_c"],
+                "attribute_sources": {
+                    "display_name": ["rec_c"],
+                    "category": ["rec_c"],
+                },
             },
         ],
         relationships=[
