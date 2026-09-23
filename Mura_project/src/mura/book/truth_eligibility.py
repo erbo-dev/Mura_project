@@ -29,6 +29,7 @@ _BOOK_GROUNDED_EVIDENCE_CLASSES = {
 class BookClaimLike(Protocol):
     recording_id: str
     object_type: str
+    predicate: str
     subject_person_id: str | None
     object_person_id: str | None
     evidence_ids: list[str]
@@ -78,7 +79,7 @@ def is_book_truth_eligible(
             return False
         return (
             canonical_relationship(
-                relationship_type=str(payload.get("relationship_type") or claim.payload.get("predicate") or ""),
+                relationship_type=str(payload.get("relationship_type") or claim.predicate or ""),
                 subject_person_id=claim.subject_person_id,
                 subject_role=str(payload.get("subject_role") or ""),
                 object_person_id=claim.object_person_id,
