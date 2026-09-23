@@ -40,6 +40,35 @@ class BookClaimLike(Protocol):
     payload: dict[str, Any]
 
 
+def book_truth_fields_eligible(
+    *,
+    recording_id: str,
+    selected_recording_ids: set[str],
+    archive_status: str,
+    evidence_ids: list[str],
+    evidence_class: str,
+    verification_status: str,
+    assertion_mode: str | None,
+    allow_disputed: bool = False,
+) -> bool:
+    if recording_id not in selected_recording_ids:
+        return False
+
+    allowed_statuses = {"active", "accepted"}
+    if allow_disputed:
+        allowed_statuses.add("disputed")
+    if archive_status not in allowed_statuses:
+        return False
+
+    if verification_status == VerificationStatus.REJECTED.value:
+        return False
+    if assertion_mode not in (None, AssertionMode.EXPLICIT.value):
+        return False
+    if evidence_class not in _BOOK_GROUNDED_EVIDENCE_CLASSES:
+        return False
+    return bool(evidence_ids)
+
+
 def is_book_truth_eligible(
     claim: BookClaimLike,
     *,
@@ -48,25 +77,16 @@ def is_book_truth_eligible(
 ) -> bool:
     """Return whether a persisted claim may enter the immutable Book truth set."""
 
-    if claim.recording_id not in selected_recording_ids:
-        return False
-
-    allowed_statuses = {"active", "accepted"}
-    if allow_disputed:
-        allowed_statuses.add("disputed")
-    if claim.status not in allowed_statuses:
-        return False
-
-    if claim.verification_status == VerificationStatus.REJECTED.value:
-        return False
-
-    if claim.assertion_mode not in (None, AssertionMode.EXPLICIT.value):
-        return False
-
-    if claim.evidence_class not in _BOOK_GROUNDED_EVIDENCE_CLASSES:
-        return False
-
-    if not claim.evidence_ids:
+    if not book_truth_fields_eligible(
+        recording_id=claim.recording_id,
+        selected_recording_ids=selected_recording_ids,
+        archive_status=claim.status,
+        evidence_ids=list(claim.evidence_ids or []),
+        evidence_class=claim.evidence_class,
+        verification_status=claim.verification_status,
+        assertion_mode=claim.assertion_mode,
+        allow_disputed=allow_disputed,
+    ):
         return False
 
     if claim.object_type == ClaimObjectType.PERSON_MENTION.value:
