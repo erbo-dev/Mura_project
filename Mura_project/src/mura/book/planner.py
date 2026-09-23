@@ -104,6 +104,7 @@ def build_planner_payload(
                 "object_person_id": c.object_person_id,
                 "evidence_class": c.evidence_class,
                 "assertion_mode": c.assertion_mode,
+                "archive_status": c.archive_status,
                 "summary": c.summary,
             }
             for c in snapshot.claims
