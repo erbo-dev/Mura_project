@@ -226,17 +226,39 @@ def compile_source_snapshot(
         )
     )
     selected_recording_set = set(normalized_selected_ids)
+    bundle_recording_ids = {
+        str(row.get("recording_id"))
+        for row in bundle.recordings
+        if row.get("recording_id")
+    }
+    missing_selected_recordings = sorted(selected_recording_set - bundle_recording_ids)
+    if missing_selected_recordings:
+        raise SnapshotClosureError(
+            "selected recordings are missing from the grounding bundle: "
+            f"{missing_selected_recordings}"
+        )
 
-    # 1. Harvest evidence spans from pipeline payloads
+    # 1. Harvest evidence spans from selected pipeline payloads only. The
+    # compiler is a correctness boundary in its own right: even if a caller
+    # accidentally hands it a broader GroundingBundle, excluded recording
+    # metadata must not influence the immutable Book snapshot.
     all_evidence: list[SnapshotEvidence] = []
     observed_languages_set: set[str] = set()
 
-    for rec in bundle.recordings:
+    selected_bundle_recordings = [
+        rec
+        for rec in bundle.recordings
+        if str(rec.get("recording_id") or "") in selected_recording_set
+    ]
+    for rec in selected_bundle_recordings:
         det_lang = rec.get("detected_language")
         if det_lang:
             observed_languages_set.add(det_lang)
 
-    speaker_map = {r["recording_id"]: r.get("speaker_name", "Narrator") for r in bundle.recordings}
+    speaker_map = {
+        r["recording_id"]: r.get("speaker_name", "Narrator")
+        for r in selected_bundle_recordings
+    }
 
     referenced_evidence_ids: set[str] = set()
     for st in bundle.stories:
@@ -253,6 +275,8 @@ def compile_source_snapshot(
                 referenced_evidence_ids.add(eid)
 
     for rec_id, payload in bundle.pipeline_payloads.items():
+        if rec_id not in selected_recording_set:
+            continue
         if not isinstance(payload, dict):
             continue
         extraction = payload.get("extraction", {})
