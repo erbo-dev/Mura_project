@@ -462,10 +462,7 @@ def compile_source_snapshot(
                 sources = attribute_sources(f"description:{description}")
                 if sources:
                     descriptions.append(description)
-                    projected_sources.setdefault("descriptions", [])
-                    projected_sources["descriptions"] = sorted(
-                        set(projected_sources["descriptions"]) | set(sources)
-                    )
+                    projected_sources[f"description:{description}"] = sources
 
         source_ids = sorted(
             {
