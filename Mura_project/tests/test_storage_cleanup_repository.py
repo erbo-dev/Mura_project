@@ -150,11 +150,13 @@ def test_cleanup_max_attempts_prevents_reclaim() -> None:
     assert repo.claim_next_job(
         lease_owner="worker_dead", lease_seconds=10, now=now
     ) is not None
-    assert repo.claim_next_job(
+    reclaimed = repo.claim_next_job(
         lease_owner="worker_other",
         lease_seconds=10,
         now=now + timedelta(seconds=11),
-    ) is None
+    )
+    assert reclaimed is not None
+    assert reclaimed.attempts == 1
 
 
 def test_cleanup_terminal_failure_releases_lease() -> None:
