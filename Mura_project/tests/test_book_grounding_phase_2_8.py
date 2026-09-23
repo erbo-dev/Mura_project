@@ -422,3 +422,57 @@ def test_more_than_100_explicit_sources_fails_instead_of_truncating() -> None:
 
     assert caught.value.status_code == 422
     assert caught.value.detail == BOOK_SOURCE_LIMIT_EXCEEDED
+
+
+
+def test_snapshot_manifest_counts_must_match_payload() -> None:
+    snapshot = _gate_snapshot(with_conflict=True)
+    snapshot.manifest.conflict_count = 0
+
+    with pytest.raises(SnapshotClosureError):
+        validate_snapshot_closure(
+            snapshot,
+            expected_recording_ids=["rec_a"],
+        )
+
+
+def test_snapshot_size_budget_fails_explicitly_without_truncating_truth() -> None:
+    bundle = GroundingBundle(
+        family_id=FAMILY,
+        recordings=[
+            {"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}
+        ],
+        pipeline_payloads={
+            "rec_a": {
+                "extraction": {
+                    "evidence_spans": [
+                        {
+                            "evidence_id": "ev_big",
+                            "text": "Алихан жил в Семее. " * 50,
+                        }
+                    ]
+                }
+            }
+        },
+        claims=[
+            {
+                "claim_id": "cl_big",
+                "family_id": FAMILY,
+                "recording_id": "rec_a",
+                "object_type": "description",
+                "source_object_id": "desc_big",
+                "predicate": "description",
+                "payload": {"description": "Алихан жил в Семее."},
+                "evidence_ids": ["ev_big"],
+                "evidence_class": "A_EXPLICIT",
+            }
+        ],
+    )
+
+    with pytest.raises(SnapshotSizeError):
+        compile_source_snapshot(
+            bundle,
+            recording_ids=["rec_a"],
+            max_snapshot_bytes=128,
+            created_at=NOW,
+        )
