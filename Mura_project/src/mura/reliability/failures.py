@@ -132,7 +132,7 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
 
     # Check if status_code is embedded in exception attributes or message
     if status_code is None:
-        match = re.search(r"\b(429|500|502|503|504|408|401|403|400|422)\b", error_str)
+        match = re.search(r"\b(429|5\d\d|408|401|403|400|422)\b", error_str)
         if match:
             try:
                 status_code = int(match.group(1))
@@ -149,7 +149,7 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
                 error_detail=error_str,
                 retry_after_seconds=retry_after,
             )
-        if status_code in (500, 502, 503):
+        if 500 <= status_code < 600 and status_code != 504:
             return ClassifiedFailure(
                 category=FailureCategory.PROVIDER_SERVER_ERROR,
                 disposition=FailureDisposition.RETRY,
