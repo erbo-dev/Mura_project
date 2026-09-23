@@ -30,7 +30,7 @@ from mura.domain.models import StrictModel
 
 #: Bumped whenever the compiled snapshot's shape changes, so a stored snapshot is
 #: always interpretable by the code that produced it.
-SNAPSHOT_SCHEMA_VERSION = "book-source-snapshot-v1"
+SNAPSHOT_SCHEMA_VERSION = "book-source-snapshot-v2"
 BLUEPRINT_SCHEMA_VERSION = "book-blueprint-v1"
 CONTINUITY_SCHEMA_VERSION = "book-continuity-v1"
 REVIEW_SCHEMA_VERSION = "book-review-v1"
@@ -44,6 +44,9 @@ MAX_CHAPTERS = 15
 MIN_BOOK_WORDS = 20_000
 DEFAULT_BOOK_WORDS = 25_000
 MAX_BOOK_WORDS = 30_000
+MAX_BOOK_SOURCE_RECORDINGS = 100
+MAX_BOOK_EVIDENCE_QUOTES = 400
+MAX_BOOK_SNAPSHOT_BYTES = 1_000_000
 
 
 class BookStatus(StrEnum):
@@ -181,6 +184,7 @@ class IssueSeverity(StrEnum):
 class IssueType(StrEnum):
     UNGROUNDED_PERSON = "ungrounded_person"
     UNGROUNDED_YEAR = "ungrounded_year"
+    UNGROUNDED_LOCATION = "ungrounded_location"
     UNSUPPORTED_RELATIONSHIP = "unsupported_relationship"
     REJECTED_CORRECTION = "rejected_correction"
     UNGROUNDED_QUOTE = "ungrounded_quote"
@@ -200,9 +204,12 @@ class GateCode(StrEnum):
 
     NAMED_PERSON = "named_person"
     YEAR = "year"
+    LOCATION = "location"
     RELATIONSHIP = "relationship"
+    CONFLICT = "conflict"
     CORRECTION = "correction"
     QUOTE = "quote"
+    FACTUAL_ASSERTION = "factual_assertion"
     EVIDENCE_COVERAGE = "evidence_coverage"
     WORD_COUNT = "word_count"
     LANGUAGE = "language"
@@ -215,9 +222,12 @@ class GateCode(StrEnum):
 _GATE_ISSUE_TYPES: dict[GateCode, IssueType] = {
     GateCode.NAMED_PERSON: IssueType.UNGROUNDED_PERSON,
     GateCode.YEAR: IssueType.UNGROUNDED_YEAR,
+    GateCode.LOCATION: IssueType.UNGROUNDED_LOCATION,
     GateCode.RELATIONSHIP: IssueType.UNSUPPORTED_RELATIONSHIP,
+    GateCode.CONFLICT: IssueType.CONFLICT_RESOLVED_SILENTLY,
     GateCode.CORRECTION: IssueType.REJECTED_CORRECTION,
     GateCode.QUOTE: IssueType.UNGROUNDED_QUOTE,
+    GateCode.FACTUAL_ASSERTION: IssueType.INVENTED_SCENE_DETAIL,
     GateCode.EVIDENCE_COVERAGE: IssueType.INSUFFICIENT_EVIDENCE,
     GateCode.WORD_COUNT: IssueType.WRONG_LENGTH,
     GateCode.LANGUAGE: IssueType.WRONG_LANGUAGE,
@@ -288,6 +298,9 @@ class SnapshotPerson(StrictModel):
     locations: list[str] = Field(default_factory=list)
     descriptions: list[str] = Field(default_factory=list)
     source_recording_ids: list[str] = Field(default_factory=list)
+    # Per-attribute recording provenance. Optional attributes are omitted from
+    # the snapshot unless their specific source can be proven selected.
+    attribute_sources: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class SnapshotRelationship(StrictModel):
@@ -345,6 +358,7 @@ class SnapshotClaim(StrictModel):
     evidence_class: str
     assertion_mode: str | None = None
     verification_status: str = "unreviewed"
+    archive_status: str = "active"
     evidence_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
 
@@ -636,8 +650,8 @@ class ChapterDraft(StrictModel):
     chapter_number: int = Field(ge=1, le=MAX_CHAPTERS)
     title: str = Field(min_length=1, max_length=400)
     text: str = Field(min_length=1)
-    #: Which planned evidence the chapter actually used. Checked against the plan
-    #: by the evidence-coverage gate, so "I grounded it" is not taken on trust.
+    #: Writer self-report only. Deterministic gates independently inspect prose
+    #: and never treat this list as proof that an assertion is grounded.
     evidence_usage: list[str] = Field(default_factory=list)
     person_ids_used: list[str] = Field(default_factory=list)
     relationship_assertions: list[ChapterRelationshipAssertion] = Field(default_factory=list)

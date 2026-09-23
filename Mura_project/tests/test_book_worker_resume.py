@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,12 +11,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from mura.book.blueprint_validation import BlueprintLimits
+from mura.book.chapter_gates import run_chapter_gates
 from mura.book.exporter import BookExportCancelled
 from mura.book.snapshot import compile_source_snapshot
 from mura.deepseek.client import DeepSeekUsage
 from mura.domain.book_models import (
     BookJobStatus,
     BookLanguage,
+    BookSourceSnapshot,
+    ChapterDraft,
+    ChapterPlan,
     BookStage,
     BookStatus,
     ChapterStatus,
@@ -565,3 +570,167 @@ def test_book_worker_export_cancellation_race_stays_cancelled(
     assert cancelled_job is not None
     assert cancelled_job.status == BookJobStatus.CANCELLED.value
     assert cancelled_job.stage == BookStage.CANCELLED.value
+
+
+
+def test_crash_reclaim_resume_preserves_structured_draft_gate_semantics(
+    db: Database, family_and_user: tuple[str, str]
+) -> None:
+    fid, uid = family_and_user
+    _prepare_snapshot(db, fid)
+
+    book_repo = BookRepository(db)
+    job_repo = BookJobRepository(db)
+    chapter_repo = BookChapterRepository(db)
+    snapshot_repo = BookSourceSnapshotRepository(db)
+
+    book = book_repo.create_book(
+        book_id="book_worker_test_1",
+        family_id=fid,
+        created_by_user_id=uid,
+        title="Crash-safe semantics",
+        output_language=BookLanguage.RU.value,
+        target_word_count=1000,
+    )
+    job = job_repo.create_job(book_id=book.book_id, family_id=fid)
+    plan = ChapterPlan(
+        chapter_number=1,
+        title="One",
+        target_word_count=100,
+        source_recording_ids=["rec_1"],
+        claim_ids=["cl_1"],
+        evidence_refs=["ev_1"],
+    )
+    chapter_repo.create_chapter_stubs(
+        book_id=book.book_id,
+        chapter_plans=[plan.model_dump(mode="json")],
+    )
+
+    now = utcnow()
+    claimed = job_repo.claim_next_job(
+        lease_owner="worker_before_crash",
+        lease_seconds=5,
+        now=now,
+    )
+    assert claimed is not None
+
+    original = ChapterDraft(
+        chapter_number=1,
+        title="One",
+        text="В 1945 году старая домбра стояла у окна.",
+        evidence_usage=["ev_1"],
+        person_ids_used=[],
+        uncertainty_notes=["same semantic payload must survive reclaim"],
+        conflict_notes=[],
+    )
+    chapter_repo.update_chapter_draft(
+        book_id=book.book_id,
+        chapter_number=1,
+        draft_text=original.text,
+        draft_payload=original.model_dump(mode="json"),
+        word_count=len(original.text.split()),
+        writer_prompt_version="test",
+        writer_model="test",
+        job_id=job.job_id,
+        lease_owner="worker_before_crash",
+    )
+
+    snap_row = snapshot_repo.get_snapshot(book.book_id)
+    assert snap_row is not None
+    snapshot = BookSourceSnapshot.model_validate(snap_row.payload)
+    before = run_chapter_gates(
+        original,
+        plan,
+        snapshot,
+        BookLanguage.RU,
+        min_chapter_words=1,
+        max_chapter_words=1000,
+    )
+
+    # Simulate process death after durable draft persistence but before review.
+    with db.session_factory.begin() as session:
+        row = session.get(type(claimed), job.job_id)
+        assert row is not None
+        row.lease_expires_at = now - timedelta(seconds=1)
+
+    reclaimed = job_repo.claim_next_job(
+        lease_owner="worker_after_crash",
+        lease_seconds=5,
+        now=now + timedelta(seconds=10),
+    )
+    assert reclaimed is not None
+    assert reclaimed.lease_owner == "worker_after_crash"
+
+    saved = chapter_repo.get_chapter(book_id=book.book_id, chapter_number=1)
+    assert saved is not None
+    assert saved.draft_payload is not None
+    restored = ChapterDraft.model_validate(saved.draft_payload)
+    assert restored == original
+
+    after = run_chapter_gates(
+        restored,
+        plan,
+        snapshot,
+        BookLanguage.RU,
+        min_chapter_words=1,
+        max_chapter_words=1000,
+    )
+    assert after.model_dump(mode="json") == before.model_dump(mode="json")
+
+
+
+def test_book_worker_fails_closed_on_legacy_pre_provenance_snapshot(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
+    fid, uid = family_and_user
+    book_repo = BookRepository(db)
+    job_repo = BookJobRepository(db)
+    snapshot_repo = BookSourceSnapshotRepository(db)
+
+    book = book_repo.create_book(
+        book_id="book_legacy_snapshot",
+        family_id=fid,
+        created_by_user_id=uid,
+        title="Legacy snapshot must not run",
+        output_language=BookLanguage.RU.value,
+        target_word_count=1000,
+    )
+    legacy = BookSourceSnapshot(
+        schema_version="book-source-snapshot-v1",
+        compiler_version="legacy",
+        family_id=fid,
+        manifest={
+            "source_recording_ids": [],
+            "created_at": utcnow(),
+        },
+    )
+    snapshot_repo.save_snapshot(
+        book_id=book.book_id,
+        family_id=fid,
+        compiler_version="legacy",
+        content_hash="1" * 64,
+        payload=legacy.model_dump(mode="json"),
+        manifest=legacy.manifest.model_dump(mode="json"),
+        source_recording_count=0,
+        source_story_count=0,
+        source_claim_count=0,
+    )
+    job = job_repo.create_job(book_id=book.book_id, family_id=fid)
+    client = _build_mock_client()
+    worker = BookJobWorker(
+        db=db,
+        deepseek_client=client,
+        artifact_storage=LocalBookArtifactStorage(tmp_path / "artifacts"),
+        pdf_renderer=FakePDFRenderer(),
+    )
+
+    assert worker.process_once() is True
+
+    failed_book = book_repo.get_book_unscoped(book.book_id)
+    failed_job = job_repo.get_job(job.job_id)
+    assert failed_book is not None
+    assert failed_book.status == BookStatus.FAILED.value
+    assert failed_job is not None
+    assert failed_job.status == BookJobStatus.FAILED.value
+    assert failed_job.error_code == "book_source_snapshot_invalid"
+    assert client.request_json.call_count == 0

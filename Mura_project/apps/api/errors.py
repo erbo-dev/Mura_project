@@ -54,6 +54,9 @@ SOLE_OWNER_REQUIRED = "sole_owner_required"
 BOOK_GENERATION_ALREADY_ACTIVE = "book_generation_already_active"
 BOOK_DAILY_LIMIT_REACHED = "book_daily_limit_reached"
 BOOK_SOURCE_SNAPSHOT_MISSING = "book_source_snapshot_missing"
+BOOK_SOURCE_LIMIT_EXCEEDED = "book_source_limit_exceeded"
+BOOK_SOURCE_SNAPSHOT_TOO_LARGE = "book_source_snapshot_too_large"
+BOOK_SOURCE_SNAPSHOT_INVALID = "book_source_snapshot_invalid"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -66,6 +69,9 @@ SELECTABLE_CODES = frozenset(
         BOOK_GENERATION_ALREADY_ACTIVE,
         BOOK_DAILY_LIMIT_REACHED,
         BOOK_SOURCE_SNAPSHOT_MISSING,
+        BOOK_SOURCE_LIMIT_EXCEEDED,
+        BOOK_SOURCE_SNAPSHOT_TOO_LARGE,
+        BOOK_SOURCE_SNAPSHOT_INVALID,
     }
 )
 
@@ -93,6 +99,9 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     BOOK_GENERATION_ALREADY_ACTIVE: "A book generation is already active for this family.",
     BOOK_DAILY_LIMIT_REACHED: "The daily limit for book generation has been reached for this family.",
     BOOK_SOURCE_SNAPSHOT_MISSING: "The original book source snapshot is unavailable; select sources explicitly to regenerate.",
+    BOOK_SOURCE_LIMIT_EXCEEDED: "Too many source recordings were selected for one book.",
+    BOOK_SOURCE_SNAPSHOT_TOO_LARGE: "The selected source material is too large for supported book generation.",
+    BOOK_SOURCE_SNAPSHOT_INVALID: "The selected source material has incomplete provenance and cannot be used safely.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,

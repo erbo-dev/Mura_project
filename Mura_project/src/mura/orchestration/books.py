@@ -30,6 +30,7 @@ from mura.book.prompts import (
     BOOK_PLANNER_PROMPT_VERSION,
 )
 from mura.book.reviewer import review_chapter
+from mura.book.snapshot_validation import validate_snapshot_closure
 from mura.book.writer import repair_chapter, write_chapter
 from mura.domain.book_models import (
     BookBlueprint,
@@ -360,6 +361,12 @@ class BookJobWorker:
         snapshot = BookSourceSnapshot.model_validate(snapshot_row.payload)
         if snapshot.family_id != book.family_id:
             raise RuntimeError(f"source snapshot payload family mismatch for book {book.book_id}")
+        # Defense in depth for queued books created before Phase 2.8 or rows
+        # corrupted after persistence. Reclaiming work never weakens closure.
+        validate_snapshot_closure(
+            snapshot,
+            expected_recording_ids=snapshot.manifest.source_recording_ids,
+        )
 
         if self._check_cancellation(job, book.book_id):
             return
@@ -509,6 +516,7 @@ class BookJobWorker:
                         book_id=book.book_id,
                         chapter_number=chapter.chapter_number,
                         draft_text=draft.text,
+                        draft_payload=draft.model_dump(mode="json"),
                         word_count=len(draft.text.split()),
                         writer_prompt_version=write_telemetry.get("prompt_version", "v1"),
                         writer_model=write_telemetry.get("model", "deepseek-chat"),
@@ -517,11 +525,22 @@ class BookJobWorker:
                         lease_owner=self.worker_id,
                     )
                 else:
-                    draft = ChapterDraft(
-                        chapter_number=chapter.chapter_number,
-                        title=chapter.title or chapter_plan.title,
-                        text=chapter.draft_text,
-                    )
+                    if chapter.draft_payload:
+                        draft = ChapterDraft.model_validate(chapter.draft_payload)
+                        if draft.text != chapter.draft_text:
+                            raise RuntimeError(
+                                f"stored draft payload/text mismatch for book {book.book_id} "
+                                f"chapter {chapter.chapter_number}"
+                            )
+                    else:
+                        # Legacy pre-Phase-2.8 row. Truth-critical gates now
+                        # derive assertions from prose, so missing writer
+                        # self-report metadata cannot weaken verification.
+                        draft = ChapterDraft(
+                            chapter_number=chapter.chapter_number,
+                            title=chapter.title or chapter_plan.title,
+                            text=chapter.draft_text,
+                        )
 
                 if self._check_cancellation(job, book.book_id):
                     return
@@ -605,6 +624,7 @@ class BookJobWorker:
                         book_id=book.book_id,
                         chapter_number=chapter.chapter_number,
                         draft_text=draft.text,
+                        draft_payload=draft.model_dump(mode="json"),
                         word_count=len(draft.text.split()),
                         writer_prompt_version=rep_telemetry.get("prompt_version"),
                         writer_model=rep_telemetry.get("model"),
