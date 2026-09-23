@@ -54,7 +54,7 @@ def storage_delete_http_error(status_code: int, headers: Any = None) -> StorageD
             status_code=status_code,
             message="storage deletion timed out",
         )
-    if status_code in {500, 502, 503}:
+    if 500 <= status_code < 600:
         return StorageDeleteError(
             code="storage_unavailable",
             retryable=True,
