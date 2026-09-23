@@ -488,3 +488,42 @@ def test_snapshot_size_budget_fails_explicitly_without_truncating_truth() -> Non
             max_snapshot_bytes=128,
             created_at=NOW,
         )
+
+
+
+def test_unverified_person_alias_does_not_enter_snapshot_identity_forms() -> None:
+    bundle = GroundingBundle(
+        family_id=FAMILY,
+        recordings=[
+            {"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}
+        ],
+        people=[
+            {
+                "person_id": "per_alikhan",
+                "family_id": FAMILY,
+                "canonical_name": "Алихан",
+                "normalized_name": "алихан",
+                "aliases": ["Мурат"],
+                "verified_aliases": [],
+                "category": "core",
+                "source_recording_ids": ["rec_a"],
+                "attribute_sources": {
+                    "display_name": ["rec_a"],
+                    "category": ["rec_a"],
+                    "alias:Мурат": ["rec_a"],
+                },
+            }
+        ],
+    )
+
+    snapshot = compile_source_snapshot(
+        bundle,
+        recording_ids=["rec_a"],
+        created_at=NOW,
+    ).snapshot
+
+    assert snapshot.people[0].display_name == "Алихан"
+    assert snapshot.people[0].aliases == []
+
+    report = _gate("Мурат приехал домой.", snapshot=snapshot)
+    assert GateCode.NAMED_PERSON in {issue.code for issue in report.blockers}
