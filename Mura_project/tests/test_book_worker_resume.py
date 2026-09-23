@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mura.book.blueprint_validation import BlueprintLimits
+from mura.book.exporter import BookExportCancelled
 from mura.book.snapshot import compile_source_snapshot
 from mura.deepseek.client import DeepSeekUsage
 from mura.domain.book_models import (
@@ -512,3 +513,55 @@ def test_book_worker_cancellation(
 
     # LLM should never have been called
     assert client.request_json.call_count == 0
+
+
+
+def test_book_worker_export_cancellation_race_stays_cancelled(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
+    fid, uid = family_and_user
+    _prepare_snapshot(db, fid)
+
+    book_repo = BookRepository(db)
+    job_repo = BookJobRepository(db)
+    book = book_repo.create_book(
+        book_id="book_worker_test_1",
+        family_id=fid,
+        created_by_user_id=uid,
+        title="Хроника семьи",
+        output_language=BookLanguage.RU.value,
+        target_word_count=1000,
+    )
+    job = job_repo.create_job(book_id=book.book_id, family_id=fid)
+
+    worker = BookJobWorker(
+        db=db,
+        deepseek_client=_build_mock_client(),
+        artifact_storage=LocalBookArtifactStorage(tmp_path / "artifacts"),
+        pdf_renderer=FakePDFRenderer(),
+        blueprint_limits=BlueprintLimits(
+            min_chapters=1,
+            max_chapters=15,
+            min_total_words=10,
+            max_total_words=60000,
+            min_chapter_words=5,
+            max_chapter_words=10000,
+        ),
+    )
+
+    def cancel_at_publication(**_: Any) -> Any:
+        assert book_repo.request_cancel(family_id=fid, book_id=book.book_id) is True
+        raise BookExportCancelled("cancelled at artifact durability boundary")
+
+    worker.export_service.export_book = cancel_at_publication  # type: ignore[method-assign]
+
+    assert worker.process_once() is True
+
+    cancelled_book = book_repo.get_book_unscoped(book.book_id)
+    cancelled_job = job_repo.get_job(job.job_id)
+    assert cancelled_book is not None
+    assert cancelled_book.status == BookStatus.CANCELLED.value
+    assert cancelled_book.stage == BookStage.CANCELLED.value
+    assert cancelled_job is not None
+    assert cancelled_job.status == BookJobStatus.CANCELLED.value
+    assert cancelled_job.stage == BookStage.CANCELLED.value
