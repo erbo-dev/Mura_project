@@ -243,11 +243,15 @@ def _prepare_snapshot(db: Database, family_id: str) -> None:
                 "claim_id": "cl_1",
                 "family_id": family_id,
                 "recording_id": "rec_1",
-                "object_type": "relationship",
-                "source_object_id": "rel_1",
-                "predicate": "grandfather",
+                "object_type": "description",
+                "source_object_id": "desc_1",
+                "predicate": "description",
+                "payload": {"description": "В 1945 году старая домбра стояла у окна."},
                 "evidence_ids": ["ev_1"],
                 "evidence_class": "A_EXPLICIT",
+                "assertion_mode": "explicit",
+                "verification_status": "unreviewed",
+                "archive_status": "active",
             }
         ],
     )
