@@ -253,6 +253,18 @@ def test_rejected_correction_year_paraphrases_are_blocked(text: str) -> None:
     assert GateCode.CORRECTION in {issue.code for issue in report.blockers}
 
 
+def test_unambiguous_selected_decade_expression_is_allowed() -> None:
+    snapshot = _gate_snapshot()
+    snapshot.allowed_years.append(1941)
+    report = _gate("В начале сороковых семья жила спокойно.", snapshot=snapshot)
+    assert GateCode.YEAR not in {issue.code for issue in report.blockers}
+
+
+def test_unsupported_decade_expression_fails_closed() -> None:
+    report = _gate("В начале сороковых семья жила спокойно.")
+    assert GateCode.YEAR in {issue.code for issue in report.blockers}
+
+
 def test_fabricated_dash_dialogue_is_blocked() -> None:
     report = _gate("— Я обязательно вернусь, — сказал он.")
     assert GateCode.QUOTE in {issue.code for issue in report.blockers}
