@@ -336,8 +336,37 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                 for row in relationships
             ],
             "claims": claims_payload,
-            "stories": [row for row in claims_payload if row["object_type"] == "story"],
-            "events": [row for row in claims_payload if row["object_type"] == "event"],
+            "stories": [
+                {
+                    **row,
+                    "story_id": row["claim_id"],
+                    "title": (
+                        row["payload"].get("title")
+                        if isinstance(row["payload"], dict)
+                        else None
+                    ),
+                    "summary": (
+                        row["payload"].get("summary")
+                        if isinstance(row["payload"], dict)
+                        else None
+                    ),
+                }
+                for row in claims_payload
+                if row["object_type"] == "story"
+            ],
+            "events": [
+                {
+                    **row,
+                    "event_id": row["source_object_id"] or row["claim_id"],
+                    "title": (
+                        row["payload"].get("title")
+                        if isinstance(row["payload"], dict)
+                        else None
+                    ),
+                }
+                for row in claims_payload
+                if row["object_type"] == "event"
+            ],
             "corrections": [
                 {
                     "correction_id": row.correction_id,
