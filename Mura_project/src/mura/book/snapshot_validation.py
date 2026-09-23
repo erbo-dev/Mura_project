@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from mura.domain.book_models import BookSourceSnapshot
+from mura.domain.book_models import SNAPSHOT_SCHEMA_VERSION, BookSourceSnapshot
 
 
 class SnapshotClosureError(ValueError):
@@ -48,6 +48,11 @@ def validate_snapshot_closure(
     expected_recording_ids: Iterable[str] | None = None,
 ) -> None:
     """Fail closed unless every factual reference is provenance-closed."""
+
+    if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION:
+        raise SnapshotClosureError(
+            f"snapshot schema {snapshot.schema_version!r} predates strict provenance closure"
+        )
 
     manifest = snapshot.manifest
     selected_ids = _exact_ids(manifest.source_recording_ids)
