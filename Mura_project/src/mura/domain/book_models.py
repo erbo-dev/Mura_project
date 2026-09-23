@@ -183,6 +183,7 @@ class IssueSeverity(StrEnum):
 class IssueType(StrEnum):
     UNGROUNDED_PERSON = "ungrounded_person"
     UNGROUNDED_YEAR = "ungrounded_year"
+    UNGROUNDED_LOCATION = "ungrounded_location"
     UNSUPPORTED_RELATIONSHIP = "unsupported_relationship"
     REJECTED_CORRECTION = "rejected_correction"
     UNGROUNDED_QUOTE = "ungrounded_quote"
@@ -202,7 +203,9 @@ class GateCode(StrEnum):
 
     NAMED_PERSON = "named_person"
     YEAR = "year"
+    LOCATION = "location"
     RELATIONSHIP = "relationship"
+    CONFLICT = "conflict"
     CORRECTION = "correction"
     QUOTE = "quote"
     EVIDENCE_COVERAGE = "evidence_coverage"
@@ -217,7 +220,9 @@ class GateCode(StrEnum):
 _GATE_ISSUE_TYPES: dict[GateCode, IssueType] = {
     GateCode.NAMED_PERSON: IssueType.UNGROUNDED_PERSON,
     GateCode.YEAR: IssueType.UNGROUNDED_YEAR,
+    GateCode.LOCATION: IssueType.UNGROUNDED_LOCATION,
     GateCode.RELATIONSHIP: IssueType.UNSUPPORTED_RELATIONSHIP,
+    GateCode.CONFLICT: IssueType.CONFLICT_RESOLVED_SILENTLY,
     GateCode.CORRECTION: IssueType.REJECTED_CORRECTION,
     GateCode.QUOTE: IssueType.UNGROUNDED_QUOTE,
     GateCode.EVIDENCE_COVERAGE: IssueType.INSUFFICIENT_EVIDENCE,
@@ -641,8 +646,8 @@ class ChapterDraft(StrictModel):
     chapter_number: int = Field(ge=1, le=MAX_CHAPTERS)
     title: str = Field(min_length=1, max_length=400)
     text: str = Field(min_length=1)
-    #: Which planned evidence the chapter actually used. Checked against the plan
-    #: by the evidence-coverage gate, so "I grounded it" is not taken on trust.
+    #: Writer self-report only. Deterministic gates independently inspect prose
+    #: and never treat this list as proof that an assertion is grounded.
     evidence_usage: list[str] = Field(default_factory=list)
     person_ids_used: list[str] = Field(default_factory=list)
     relationship_assertions: list[ChapterRelationshipAssertion] = Field(default_factory=list)
