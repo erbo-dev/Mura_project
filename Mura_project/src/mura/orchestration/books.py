@@ -359,6 +359,8 @@ class BookJobWorker:
                 book.book_id,
                 stage=BookStage.PLANNING.value,
                 status=BookStatus.PLANNING.value,
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
             self.job_repo.update_job_stage(
                 job.job_id,
@@ -400,15 +402,21 @@ class BookJobWorker:
                     and isinstance(self.deepseek_client.model, str)
                     else "deepseek-chat"
                 ),
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
             chapter_plans = [ch.model_dump(mode="json") for ch in blueprint.chapters]
             self.chapter_repo.create_chapter_stubs(
                 book_id=book.book_id, chapter_plans=chapter_plans
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
             self.book_repo.update_stage(
                 book.book_id,
                 stage=BookStage.PLANNING.value,
                 chapters_total=len(blueprint.chapters),
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
         else:
             blueprint = BookBlueprint.model_validate(plan_row.blueprint)
@@ -441,6 +449,8 @@ class BookJobWorker:
                             state=continuity.model_dump(mode="json"),
                             prompt_version="initial",
                             model="rule_based",
+                            job_id=job.job_id,
+                            lease_owner=self.worker_id,
                         )
                     else:
                         continuity = ContinuityState.model_validate(continuity_row.state)
@@ -465,6 +475,8 @@ class BookJobWorker:
                     stage=BookStage.WRITING_CHAPTER.value,
                     status=BookStatus.WRITING.value,
                     current_chapter_number=chapter.chapter_number,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
                 self.job_repo.update_job_stage(
                     job.job_id,
@@ -488,6 +500,8 @@ class BookJobWorker:
                         writer_prompt_version=write_telemetry.get("prompt_version", "v1"),
                         writer_model=write_telemetry.get("model", "deepseek-chat"),
                         repair_attempts=0,
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
                 else:
                     draft = ChapterDraft(
@@ -504,6 +518,8 @@ class BookJobWorker:
                     book.book_id,
                     stage=BookStage.REVIEWING_CHAPTER.value,
                     current_chapter_number=chapter.chapter_number,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
                 self.job_repo.update_job_stage(
                     job.job_id,
@@ -529,6 +545,8 @@ class BookJobWorker:
                     gate_report=gate_report.model_dump(mode="json"),
                     reviewer_prompt_version=review_telemetry.get("prompt_version"),
                     reviewer_model=review_telemetry.get("model"),
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
                 # Repairing if needed
@@ -544,6 +562,8 @@ class BookJobWorker:
                         book.book_id,
                         stage=BookStage.REPAIRING_CHAPTER.value,
                         current_chapter_number=chapter.chapter_number,
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
                     self.job_repo.update_job_stage(
                         job.job_id,
@@ -576,6 +596,8 @@ class BookJobWorker:
                         writer_prompt_version=rep_telemetry.get("prompt_version"),
                         writer_model=rep_telemetry.get("model"),
                         repair_attempts=repair_count,
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
 
                     # Re-review
@@ -596,6 +618,8 @@ class BookJobWorker:
                         gate_report=gate_report.model_dump(mode="json"),
                         reviewer_prompt_version=review_telemetry.get("prompt_version"),
                         reviewer_model=review_telemetry.get("model"),
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
 
                 if not gate_report.passed:
@@ -605,6 +629,8 @@ class BookJobWorker:
                         error_code="GATE_FAILED",
                         gate_report=gate_report.model_dump(mode="json"),
                         review=review_result.model_dump(mode="json"),
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
                     raise RuntimeError(
                         f"Chapter {chapter.chapter_number} failed validation "
@@ -619,6 +645,8 @@ class BookJobWorker:
                     word_count=len(draft.text.split()),
                     review=review_result.model_dump(mode="json"),
                     gate_report=gate_report.model_dump(mode="json"),
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
                 # Update continuity
@@ -626,6 +654,8 @@ class BookJobWorker:
                     book.book_id,
                     stage=BookStage.UPDATING_CONTINUITY.value,
                     current_chapter_number=chapter.chapter_number,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
                 self.job_repo.update_job_stage(
                     job.job_id,
@@ -645,6 +675,8 @@ class BookJobWorker:
                     state=new_continuity.model_dump(mode="json"),
                     prompt_version=cont_telemetry.get("prompt_version", "v1"),
                     model=cont_telemetry.get("model", "deepseek-chat"),
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
                 # Update book approved chapters and words
@@ -658,6 +690,8 @@ class BookJobWorker:
                     stage=BookStage.WRITING_CHAPTER.value,
                     chapters_approved=len(approved_chs),
                     word_count=total_words,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
         if self._check_cancellation(job, book.book_id):
@@ -668,6 +702,8 @@ class BookJobWorker:
             book.book_id,
             stage=BookStage.EXPORTING_PDF.value,
             status=BookStatus.EXPORTING.value,
+            job_id=job.job_id,
+            lease_owner=self.worker_id,
         )
         self.job_repo.update_job_stage(
             job.job_id,
@@ -679,6 +715,8 @@ class BookJobWorker:
                 family_id=book.family_id,
                 book_id=book.book_id,
                 export_format=ExportFormat.PDF,
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
         except ExportEngineUnavailable as exc:
             logger.warning("PDF renderer unavailable, skipping PDF export: %s", exc)
@@ -691,6 +729,8 @@ class BookJobWorker:
             book.book_id,
             stage=BookStage.EXPORTING_EPUB.value,
             status=BookStatus.EXPORTING.value,
+            job_id=job.job_id,
+            lease_owner=self.worker_id,
         )
         self.job_repo.update_job_stage(
             job.job_id,
@@ -701,6 +741,8 @@ class BookJobWorker:
             family_id=book.family_id,
             book_id=book.book_id,
             export_format=ExportFormat.EPUB,
+            job_id=job.job_id,
+            lease_owner=self.worker_id,
         )
 
         if self._check_cancellation(job, book.book_id):
@@ -727,8 +769,12 @@ class BookJobWorker:
         ]
         final_words = sum(ch.word_count for ch in approved_chs)
 
-        self.job_repo.complete_job(job.job_id, lease_owner=self.worker_id)
-        self.book_repo.complete_book(book.book_id, word_count=final_words)
+        self.job_repo.complete_book_and_job(
+            job.job_id,
+            book_id=book.book_id,
+            word_count=final_words,
+            lease_owner=self.worker_id,
+        )
 
         logger.info(
             "book_completed",
