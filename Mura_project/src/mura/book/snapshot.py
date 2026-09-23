@@ -486,6 +486,8 @@ def compile_source_snapshot(
                 continue
             if claim.get("object_type") != "relationship":
                 continue
+            if str(claim.get("predicate") or "") != str(r.get("relationship_type") or ""):
+                continue
             if {claim.get("subject_person_id"), claim.get("object_person_id")} != {
                 sub_id,
                 obj_id,
