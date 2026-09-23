@@ -52,16 +52,95 @@ def review_chapter(
         max_chapter_words=max_chapter_words,
     )
 
-    # 2. LLM-assisted nuance review
+    # 2. LLM-assisted nuance review. The reviewer receives the same frozen
+    # selected-source truth relevant to this chapter, not Writer self-report as
+    # its only context. Deterministic gates above remain authoritative.
+    evidence_by_id = {item.evidence_id: item for item in snapshot.evidence}
+    relevant_evidence_ids = list(dict.fromkeys(chapter_plan.evidence_refs))[:24]
+    relevant_evidence = [
+        {
+            "evidence_id": evidence_id,
+            "recording_id": evidence_by_id[evidence_id].recording_id,
+            "text": evidence_by_id[evidence_id].text,
+        }
+        for evidence_id in relevant_evidence_ids
+        if evidence_id in evidence_by_id
+    ]
+
+    plan_claim_ids = set(chapter_plan.claim_ids)
+    relevant_relationships = [
+        {
+            "relationship_type": relationship.relationship_type,
+            "subject_person_id": relationship.subject_person_id,
+            "subject_role": relationship.subject_role,
+            "object_person_id": relationship.object_person_id,
+            "object_role": relationship.object_role,
+            "source_claim_ids": relationship.source_claim_ids,
+        }
+        for relationship in snapshot.relationships
+        if plan_claim_ids.intersection(relationship.source_claim_ids)
+        or (
+            relationship.subject_person_id in chapter_plan.person_ids
+            and relationship.object_person_id in chapter_plan.person_ids
+        )
+    ][:24]
+    relationship_claim_ids = {
+        claim_id
+        for relationship in relevant_relationships
+        for claim_id in relationship["source_claim_ids"]
+    }
+    relevant_claim_ids = plan_claim_ids | relationship_claim_ids
+    relevant_claims = [
+        {
+            "claim_id": claim.claim_id,
+            "recording_id": claim.recording_id,
+            "object_type": claim.object_type,
+            "predicate": claim.predicate,
+            "subject_person_id": claim.subject_person_id,
+            "object_person_id": claim.object_person_id,
+            "evidence_ids": claim.evidence_ids,
+            "assertion_mode": claim.assertion_mode,
+            "verification_status": claim.verification_status,
+            "summary": claim.summary,
+        }
+        for claim in snapshot.claims
+        if claim.claim_id in relevant_claim_ids
+    ][:40]
+    relevant_conflicts = [
+        conflict.model_dump(mode="json")
+        for conflict in snapshot.conflicts
+        if set(conflict.claim_ids).intersection(relevant_claim_ids)
+    ][:12]
+
     payload = {
         "chapter_number": draft.chapter_number,
         "title": draft.title,
         "chapter_plan_synopsis": chapter_plan.synopsis,
         "chapter_text": draft.text,
-        "evidence_usage": draft.evidence_usage,
-        "person_ids_used": draft.person_ids_used,
+        "writer_evidence_usage_hint": draft.evidence_usage,
+        "writer_person_ids_hint": draft.person_ids_used,
         "allowed_years": snapshot.allowed_years,
-        "known_people": [p.display_name for p in snapshot.people],
+        "known_people": [
+            {
+                "person_id": p.person_id,
+                "display_name": p.display_name,
+                "aliases": p.aliases,
+            }
+            for p in snapshot.people
+            if p.person_id in chapter_plan.person_ids
+        ],
+        "known_places": [
+            place for place in snapshot.known_places if place in chapter_plan.place_names
+        ],
+        "selected_evidence": relevant_evidence,
+        "allowed_relationships": relevant_relationships,
+        "selected_claims": relevant_claims,
+        "corrections": [
+            correction.model_dump(mode="json")
+            for correction in snapshot.corrections
+        ][:24],
+        "conflicts": relevant_conflicts,
+        "required_uncertainties": chapter_plan.uncertainties,
         "output_language": output_language.value,
         "deterministic_blockers": [b.detail for b in gate_report.blockers],
         "deterministic_warnings": [w.detail for w in gate_report.warnings],
