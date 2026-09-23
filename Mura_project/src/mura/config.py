@@ -263,6 +263,7 @@ class CoreSettings(BaseSettings):
         alias="ALLOWED_HOSTS",
     )
     expose_api_docs: bool | None = Field(default=None, alias="EXPOSE_API_DOCS")
+    forwarded_allow_ips: str = Field(default="127.0.0.1", alias="FORWARDED_ALLOW_IPS")
 
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE", ge=1, le=50)
     db_max_overflow: int = Field(default=5, alias="DB_MAX_OVERFLOW", ge=0, le=50)
@@ -436,6 +437,10 @@ class CoreSettings(BaseSettings):
         if production_like and not self.cors_allowed_origins:
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must list at least one origin in staging and production"
+            )
+        if production_like and self.forwarded_allow_ips.strip() in {"", "*"}:
+            raise ValueError(
+                "FORWARDED_ALLOW_IPS must name trusted reverse-proxy addresses in staging and production"
             )
 
         for origin in self.cors_allowed_origins:
