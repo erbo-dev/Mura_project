@@ -787,7 +787,7 @@ def evidence_refs_used_by_prose(
                 continue
             sentence_stems = _high_signal_stems(sentence, ignored=ignored)
             overlap = len(evidence_stems & sentence_stems)
-            required = max(2, min(5, (len(evidence_stems) + 1) // 2))
+            required = max(2, min(4, max(2, len(evidence_stems) // 3)))
             if overlap >= required:
                 used.append(evidence_id)
                 break
