@@ -332,6 +332,45 @@ class BookJobRow(Base):
     )
 
 
+def _guard_worker_write(
+    session: Session,
+    *,
+    book_id: str,
+    job_id: str | None,
+    lease_owner: str | None,
+) -> None:
+    """Fence a Book worker mutation against lease loss and deletion.
+
+    Lock ordering is always BookRow -> BookJobRow, matching Book deletion's
+    BookRow-first durability boundary. Administrative/non-worker callers omit
+    both job_id and lease_owner; worker callers must provide both.
+    """
+
+    if job_id is None and lease_owner is None:
+        return
+    if job_id is None or lease_owner is None:
+        raise ValueError("job_id and lease_owner must be provided together")
+
+    book = session.scalar(
+        select(BookRow).where(BookRow.book_id == book_id).with_for_update()
+    )
+    if book is None:
+        raise LookupError(f"unknown book: {book_id}")
+
+    job = session.scalar(
+        select(BookJobRow)
+        .where(
+            BookJobRow.job_id == job_id,
+            BookJobRow.book_id == book_id,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise LookupError(f"unknown book job: {job_id}")
+    if job.lease_owner != lease_owner:
+        raise LeaseOwnershipLost(job_id)
+
+
 # =====================================================================
 # Source Eligibility Query Helper
 # =====================================================================
@@ -551,9 +590,17 @@ class BookRepository:
         chapters_total: int | None = None,
         chapters_approved: int | None = None,
         word_count: int | None = None,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> None:
         now = utcnow()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             book = session.get(BookRow, book_id)
             if book is None:
                 raise LookupError(f"unknown book: {book_id}")
@@ -799,10 +846,18 @@ class BookPlanRepository:
         planner_prompt_version: str,
         planner_model: str,
         plan_version: int = 1,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> BookPlanRow:
         now = utcnow()
         pid = plan_id or new_plan_id()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             existing = session.scalar(
                 select(BookPlanRow).where(BookPlanRow.book_id == book_id)
             )
@@ -856,10 +911,18 @@ class BookChapterRepository:
         *,
         book_id: str,
         chapter_plans: list[dict[str, Any]],
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> list[BookChapterRow]:
         now = utcnow()
         rows: list[BookChapterRow] = []
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             for plan_dict in chapter_plans:
                 ch_num = plan_dict.get("chapter_number", 1)
                 existing = session.scalar(
@@ -942,9 +1005,17 @@ class BookChapterRepository:
         writer_prompt_version: str,
         writer_model: str,
         repair_attempts: int = 0,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> None:
         now = utcnow()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             stmt = select(BookChapterRow).where(
                 BookChapterRow.book_id == book_id,
                 BookChapterRow.chapter_number == chapter_number,
@@ -970,9 +1041,17 @@ class BookChapterRepository:
         gate_report: dict[str, Any] | None,
         reviewer_prompt_version: str | None = None,
         reviewer_model: str | None = None,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> None:
         now = utcnow()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             stmt = select(BookChapterRow).where(
                 BookChapterRow.book_id == book_id,
                 BookChapterRow.chapter_number == chapter_number,
@@ -998,9 +1077,17 @@ class BookChapterRepository:
         word_count: int,
         review: dict[str, Any] | None = None,
         gate_report: dict[str, Any] | None = None,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> None:
         now = utcnow()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             stmt = select(BookChapterRow).where(
                 BookChapterRow.book_id == book_id,
                 BookChapterRow.chapter_number == chapter_number,
@@ -1026,9 +1113,17 @@ class BookChapterRepository:
         error_code: str,
         gate_report: dict[str, Any] | None = None,
         review: dict[str, Any] | None = None,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> None:
         now = utcnow()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             stmt = select(BookChapterRow).where(
                 BookChapterRow.book_id == book_id,
                 BookChapterRow.chapter_number == chapter_number,
@@ -1058,10 +1153,18 @@ class BookContinuityRepository:
         state: dict[str, Any],
         prompt_version: str,
         model: str,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> BookContinuityStateRow:
         now = utcnow()
         cid = continuity_id or new_continuity_id()
         with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             existing = session.scalar(
                 select(BookContinuityStateRow).where(
                     BookContinuityStateRow.book_id == book_id,
@@ -1132,11 +1235,19 @@ class BookExportRepository:
         engine: str | None = None,
         error_code: str | None = None,
         session: Session | None = None,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
     ) -> BookExportRow:
         now = utcnow()
         eid = export_id or new_export_id()
 
         def persist(target: Session) -> BookExportRow:
+            _guard_worker_write(
+                target,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
             existing = target.scalar(
                 select(BookExportRow).where(
                     BookExportRow.book_id == book_id,
@@ -1346,7 +1457,11 @@ class BookJobRepository:
         job_id: str,
         lease_owner: str | None,
     ) -> BookJobRow:
-        job = session.get(BookJobRow, job_id)
+        job = session.scalar(
+            select(BookJobRow)
+            .where(BookJobRow.job_id == job_id)
+            .with_for_update()
+        )
         if job is None:
             raise LookupError(f"unknown book job: {job_id}")
         if lease_owner is not None and job.lease_owner != lease_owner:
@@ -1415,6 +1530,46 @@ class BookJobRepository:
             job.error_code = error_code
             job.error_detail = error_detail
             job.lease_owner = None
+            job.lease_expires_at = None
+            job.last_heartbeat_at = None
+            job.updated_at = now
+
+    def complete_book_and_job(
+        self,
+        job_id: str,
+        *,
+        book_id: str,
+        word_count: int,
+        lease_owner: str,
+    ) -> None:
+        """Atomically publish terminal Book and BookJob state under the lease."""
+
+        now = utcnow()
+        with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
+            book = session.get(BookRow, book_id)
+            job = session.get(BookJobRow, job_id)
+            if book is None or job is None:
+                raise LookupError(f"unknown book/job: {book_id}/{job_id}")
+
+            book.status = BookStatusEnum.COMPLETED.value
+            book.stage = BookStageEnum.COMPLETED.value
+            book.word_count = word_count
+            book.completed_at = now
+            book.updated_at = now
+
+            job.status = BookJobStatusEnum.COMPLETED.value
+            job.stage = BookStageEnum.COMPLETED.value
+            job.error_code = None
+            job.error_detail = None
+            job.completed_at = now
+            job.lease_owner = None
+            job.claimed_at = None
             job.lease_expires_at = None
             job.last_heartbeat_at = None
             job.updated_at = now
