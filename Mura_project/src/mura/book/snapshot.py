@@ -702,7 +702,7 @@ def compile_source_snapshot(
 
     # 12. Build manifest
     manifest = SnapshotManifest(
-        source_recording_ids=sorted([r["recording_id"] for r in bundle.recordings]),
+        source_recording_ids=normalized_selected_ids,
         source_story_ids=sorted([s.story_id for s in stories]),
         source_claim_ids=sorted([c.claim_id for c in claims]),
         source_event_ids=sorted([e.event_id for e in events]),
