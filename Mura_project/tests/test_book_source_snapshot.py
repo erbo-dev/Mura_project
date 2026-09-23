@@ -19,7 +19,12 @@ from mura.domain.book_models import (
     CompiledSnapshot,
 )
 from mura.jobs import JobStatus
-from mura.storage.archive import ArchiveClaimRow, ArchivePersonRow, FamilyGraphEdgeRow
+from mura.storage.archive import (
+    ArchiveClaimRow,
+    ArchiveConflictRow,
+    ArchivePersonRow,
+    FamilyGraphEdgeRow,
+)
 from mura.storage.archive_read import (
     ArchiveResourceNotFound,
     GroundingBundle,
@@ -778,3 +783,141 @@ def test_database_selected_sources_exclude_c_only_person_and_relationship() -> N
     planner_text = str(planner_payload)
     assert "Мурат" not in planner_text
     assert "cl_c_sibling" not in planner_text
+
+
+
+def test_database_selected_open_conflict_preserves_disputed_claims() -> None:
+    db = Database("sqlite+pysqlite:///:memory:")
+    db.create_schema()
+    now = datetime(2026, 9, 23, tzinfo=UTC)
+
+    with db.session_factory.begin() as session:
+        session.add(
+            UserRow(
+                user_id="usr_conflict_book",
+                email=None,
+                display_name="Owner",
+                auth_issuer="test",
+                auth_subject="conflict-book",
+            )
+        )
+        session.flush()
+        session.add(
+            FamilyRow(
+                family_id="fam_conflict_book",
+                name="Conflict family",
+                created_by_user_id="usr_conflict_book",
+            )
+        )
+        session.flush()
+
+        for rec_id, evidence_id, text in (
+            ("rec_conf_a", "ev_conf_a", "Это было в 1925 году."),
+            ("rec_conf_b", "ev_conf_b", "Это было в 1926 году."),
+        ):
+            session.add(
+                RecordingRow(
+                    recording_id=rec_id,
+                    family_id="fam_conflict_book",
+                    speaker_name="Narrator",
+                    speaker_id=f"spk_{rec_id}",
+                    original_filename=f"{rec_id}.m4a",
+                    content_type="audio/mp4",
+                    audio_path=f"/tmp/{rec_id}.m4a",
+                )
+            )
+            session.flush()
+            session.add(
+                ProcessingJobRow(
+                    job_id=f"job_{rec_id}",
+                    recording_id=rec_id,
+                    status=JobStatus.COMPLETED.value,
+                    stage="completed",
+                )
+            )
+            session.add(
+                PipelineResultRow(
+                    recording_id=rec_id,
+                    payload={
+                        "extraction": {
+                            "evidence_spans": [
+                                {"evidence_id": evidence_id, "text": text}
+                            ]
+                        }
+                    },
+                )
+            )
+
+        session.add_all(
+            [
+                ArchiveClaimRow(
+                    claim_id="cl_conf_a",
+                    family_id="fam_conflict_book",
+                    recording_id="rec_conf_a",
+                    object_type="description",
+                    source_object_id="desc_a",
+                    predicate="year",
+                    subject_person_id=None,
+                    object_person_id=None,
+                    payload={"description": "1925"},
+                    evidence_ids=["ev_conf_a"],
+                    evidence_class="A_explicit",
+                    verification_status="unreviewed",
+                    assertion_mode="explicit",
+                    status="disputed",
+                    derived_from_claim_ids=[],
+                    created_at=now,
+                ),
+                ArchiveClaimRow(
+                    claim_id="cl_conf_b",
+                    family_id="fam_conflict_book",
+                    recording_id="rec_conf_b",
+                    object_type="description",
+                    source_object_id="desc_b",
+                    predicate="year",
+                    subject_person_id=None,
+                    object_person_id=None,
+                    payload={"description": "1926"},
+                    evidence_ids=["ev_conf_b"],
+                    evidence_class="A_explicit",
+                    verification_status="unreviewed",
+                    assertion_mode="explicit",
+                    status="disputed",
+                    derived_from_claim_ids=[],
+                    created_at=now,
+                ),
+            ]
+        )
+        session.add(
+            ArchiveConflictRow(
+                conflict_id="conf_selected",
+                family_id="fam_conflict_book",
+                conflict_type="attribute",
+                status="open",
+                detected_by="deterministic",
+                claim_ids=["cl_conf_a", "cl_conf_b"],
+                preferred_claim_id=None,
+                rationale="reviewer note that must not become Book evidence",
+                resolution_note="private family review note",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    snapshot = compile_source_snapshot(
+        db,
+        family_id="fam_conflict_book",
+        recording_ids=["rec_conf_a", "rec_conf_b"],
+        created_at=now,
+    ).snapshot
+
+    assert {claim.claim_id for claim in snapshot.claims} == {
+        "cl_conf_a",
+        "cl_conf_b",
+    }
+    assert {claim.archive_status for claim in snapshot.claims} == {"disputed"}
+    assert len(snapshot.conflicts) == 1
+    conflict = snapshot.conflicts[0]
+    assert conflict.claim_ids == ["cl_conf_a", "cl_conf_b"]
+    assert conflict.rationale == "selected source claims disagree"
+    assert conflict.resolution_note is None
