@@ -57,6 +57,7 @@ BOOK_SOURCE_SNAPSHOT_MISSING = "book_source_snapshot_missing"
 BOOK_SOURCE_LIMIT_EXCEEDED = "book_source_limit_exceeded"
 BOOK_SOURCE_SNAPSHOT_TOO_LARGE = "book_source_snapshot_too_large"
 BOOK_SOURCE_SNAPSHOT_INVALID = "book_source_snapshot_invalid"
+ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER = "account_deletion_requires_owner_transfer"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -72,6 +73,7 @@ SELECTABLE_CODES = frozenset(
         BOOK_SOURCE_LIMIT_EXCEEDED,
         BOOK_SOURCE_SNAPSHOT_TOO_LARGE,
         BOOK_SOURCE_SNAPSHOT_INVALID,
+        ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER,
     }
 )
 
@@ -102,6 +104,7 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     BOOK_SOURCE_LIMIT_EXCEEDED: "Too many source recordings were selected for one book.",
     BOOK_SOURCE_SNAPSHOT_TOO_LARGE: "The selected source material is too large for supported book generation.",
     BOOK_SOURCE_SNAPSHOT_INVALID: "The selected source material has incomplete provenance and cannot be used safely.",
+    ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER: "Transfer ownership or delete sole-owned families before deleting this account.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,
