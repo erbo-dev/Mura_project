@@ -19,6 +19,7 @@ from sqlalchemy import (
     delete,
     func,
     select,
+    update,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
@@ -43,6 +44,14 @@ class MembershipNotFoundError(LookupError):
 
 class FamilyDeleteAuthorizationError(PermissionError):
     pass
+
+
+class AccountDeletionBlockedError(RuntimeError):
+    """Account deletion would orphan at least one family with no owner."""
+
+    def __init__(self, family_ids: list[str]) -> None:
+        super().__init__("account deletion requires ownership transfer")
+        self.family_ids = sorted(set(family_ids))
 
 
 def new_user_id() -> str:
@@ -165,6 +174,93 @@ class IdentityRepository:
     def get_user(self, user_id: str) -> UserRow | None:
         with self.database.session_factory() as session:
             return session.get(UserRow, user_id)
+
+    def delete_account(self, *, user_id: str) -> bool:
+        """Delete one MURA account without orphaning any family archive.
+
+        All family rows are locked in deterministic order before ownership is
+        evaluated. Membership mutation and account removal therefore serialize
+        with role changes and family deletion, which use the same FamilyRow
+        lock. If this user is the sole owner of even one family, nothing is
+        changed: the caller must first transfer ownership or explicitly delete
+        that family through the separate destructive family lifecycle.
+        """
+
+        from mura.storage.book import BookRow
+
+        with self.database.session_factory.begin() as session:
+            user = session.scalar(
+                select(UserRow)
+                .where(UserRow.user_id == user_id)
+                .with_for_update()
+            )
+            if user is None:
+                return False
+
+            memberships = list(
+                session.scalars(
+                    select(FamilyMembershipRow)
+                    .where(FamilyMembershipRow.user_id == user_id)
+                    .order_by(FamilyMembershipRow.family_id)
+                ).all()
+            )
+            family_ids = sorted({membership.family_id for membership in memberships})
+
+            # This is the global lock order for account deletion. Membership
+            # mutation/family deletion lock one FamilyRow first; taking many in
+            # lexical order avoids deadlocks between simultaneous account deletes.
+            if family_ids:
+                locked_family_ids = list(
+                    session.scalars(
+                        select(FamilyRow.family_id)
+                        .where(FamilyRow.family_id.in_(family_ids))
+                        .order_by(FamilyRow.family_id)
+                        .with_for_update()
+                    ).all()
+                )
+                if set(locked_family_ids) != set(family_ids):
+                    raise MembershipNotFoundError("family membership changed during account deletion")
+
+                # Re-read and lock the account's memberships after FamilyRow
+                # locks so a concurrent owner mutation cannot change the answer.
+                memberships = list(
+                    session.scalars(
+                        select(FamilyMembershipRow)
+                        .where(FamilyMembershipRow.user_id == user_id)
+                        .order_by(FamilyMembershipRow.family_id)
+                        .with_for_update()
+                    ).all()
+                )
+
+            blocked: list[str] = []
+            for membership in memberships:
+                if membership.role != FamilyRole.OWNER.value:
+                    continue
+                owners = self._lock_owners(session, membership.family_id)
+                if owners <= 1:
+                    blocked.append(membership.family_id)
+
+            if blocked:
+                raise AccountDeletionBlockedError(blocked)
+
+            # Books and families are shared archive objects. Creator attribution
+            # is historical metadata, not ownership, so account deletion clears
+            # it instead of cascading into family data.
+            session.execute(
+                update(FamilyRow)
+                .where(FamilyRow.created_by_user_id == user_id)
+                .values(created_by_user_id=None, updated_at=utcnow())
+            )
+            session.execute(
+                update(BookRow)
+                .where(BookRow.created_by_user_id == user_id)
+                .values(created_by_user_id=None)
+            )
+            session.execute(
+                delete(FamilyMembershipRow).where(FamilyMembershipRow.user_id == user_id)
+            )
+            session.delete(user)
+            return True
 
     # --------------------------------------------------------------- families
 
