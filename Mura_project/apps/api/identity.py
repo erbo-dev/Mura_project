@@ -160,6 +160,7 @@ def register_membership_admin_routes(
     app: FastAPI,
     *,
     manage_members_dependency: Callable[..., object],
+    delete_family_dependency: Callable[..., object],
     identity_repository_dependency: Callable[..., object],
     get_runtime_dependency: Callable[..., object] | None = None,
 ) -> None:
@@ -218,7 +219,7 @@ def register_membership_admin_routes(
     def delete_family(
         family_id: str,
         request: DeleteFamilyRequest,
-        context: object = Depends(manage_members_dependency),
+        context: object = Depends(delete_family_dependency),
         repository: object = Depends(identity_repository_dependency),
         runtime: object = Depends(get_runtime_dependency) if get_runtime_dependency else None,
     ) -> None:
