@@ -18,10 +18,18 @@ from typing import Annotated, Any, Protocol, cast
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from apps.api.errors import BOOK_SOURCE_SNAPSHOT_MISSING, FAMILY_NOT_FOUND
+from apps.api.errors import (
+    BOOK_SOURCE_LIMIT_EXCEEDED,
+    BOOK_SOURCE_SNAPSHOT_INVALID,
+    BOOK_SOURCE_SNAPSHOT_MISSING,
+    BOOK_SOURCE_SNAPSHOT_TOO_LARGE,
+    FAMILY_NOT_FOUND,
+)
 from mura.book.snapshot import compile_source_snapshot
+from mura.book.snapshot_validation import SnapshotClosureError, SnapshotSizeError
 from mura.quotas import BookQuotaService
 from mura.domain.book_models import (
     TERMINAL_BOOK_JOB_STATUSES,
@@ -33,6 +41,7 @@ from mura.domain.book_models import (
     BookDetailView,
     BookListPageView,
     BookProgressView,
+    MAX_BOOK_SOURCE_RECORDINGS,
     BookRegenerateRequest,
     BookSourceOptionView,
     BookSourceSnapshot,
@@ -55,7 +64,7 @@ from mura.storage.book import (
     get_eligible_recordings,
 )
 from mura.storage.book_artifacts import BookArtifactStorage, build_book_artifact_storage
-from mura.storage.database import Database, PipelineResultRow
+from mura.storage.database import Database, PipelineResultRow, RecordingRow
 
 
 class RuntimeWithDatabaseAndSettings(Protocol):
@@ -90,6 +99,15 @@ def resolve_book_source_ids(
             detail="At least one recording must be selected for book generation.",
         )
 
+    if (
+        requested_recording_ids is not None
+        and len(set(requested_recording_ids)) > MAX_BOOK_SOURCE_RECORDINGS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=BOOK_SOURCE_LIMIT_EXCEEDED,
+        )
+
     eligible_recordings = get_eligible_recordings(session, family_id=family_id)
     if not eligible_recordings:
         raise HTTPException(
@@ -100,7 +118,13 @@ def resolve_book_source_ids(
     eligible_id_set = {rec.recording_id for rec in eligible_recordings}
 
     if requested_recording_ids is None:
-        return [rec.recording_id for rec in eligible_recordings]
+        resolved = [rec.recording_id for rec in eligible_recordings]
+        if len(resolved) > MAX_BOOK_SOURCE_RECORDINGS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=BOOK_SOURCE_LIMIT_EXCEEDED,
+            )
+        return resolved
 
     for rec_id in requested_recording_ids:
         if rec_id not in eligible_id_set:
@@ -116,6 +140,64 @@ def resolve_book_source_ids(
             seen.add(rid)
             deduped.append(rid)
     return deduped
+
+
+def _lock_book_source_rows(
+    session: Session,
+    *,
+    family_id: str,
+    recording_ids: list[str],
+) -> None:
+    """Pin selected recordings while the immutable snapshot is compiled.
+
+    Family quota locking happens first, preserving the Phase 2.7 lock order:
+    FamilyRow -> selected RecordingRow -> Book creation rows.
+    """
+
+    locked_ids = set(
+        session.scalars(
+            select(RecordingRow.recording_id)
+            .where(
+                RecordingRow.family_id == family_id,
+                RecordingRow.recording_id.in_(recording_ids),
+            )
+            .with_for_update()
+        ).all()
+    )
+    if locked_ids != set(recording_ids):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=BOOK_SOURCE_SNAPSHOT_INVALID,
+        )
+
+
+def _compile_book_snapshot(
+    session: Session,
+    *,
+    family_id: str,
+    recording_ids: list[str],
+):
+    _lock_book_source_rows(
+        session,
+        family_id=family_id,
+        recording_ids=recording_ids,
+    )
+    try:
+        return compile_source_snapshot(
+            session,
+            family_id=family_id,
+            recording_ids=recording_ids,
+        )
+    except SnapshotSizeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=BOOK_SOURCE_SNAPSHOT_TOO_LARGE,
+        ) from exc
+    except SnapshotClosureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=BOOK_SOURCE_SNAPSHOT_INVALID,
+        ) from exc
 
 
 def _build_progress_view(book: Any, chapter_repo: BookChapterRepository) -> BookProgressView:
@@ -215,27 +297,21 @@ def register_book_routes(
         runtime: object = Depends(get_runtime_dependency),
     ) -> BookAccepted:
         typed = cast(RuntimeWithDatabaseAndSettings, runtime)
-        with typed.database.session_factory() as session:
+        creation_repo = BookCreationRepository(typed.database)
+        with typed.database.session_factory.begin() as session:
+            # Keep the Phase 2.7 family lock first, then pin selected recordings
+            # while all snapshot reads and Book+Snapshot+Job persistence occur.
+            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
             resolved_ids = resolve_book_source_ids(
                 session,
                 family_id=family_id,
                 requested_recording_ids=payload.requested_recording_ids,
             )
-            if not resolved_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Archive has no eligible processed recordings for book generation.",
-                )
-
-        compiled = compile_source_snapshot(
-            typed.database,
-            family_id=family_id,
-            recording_ids=resolved_ids,
-        )
-
-        creation_repo = BookCreationRepository(typed.database)
-        with typed.database.session_factory.begin() as session:
-            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+            compiled = _compile_book_snapshot(
+                session,
+                family_id=family_id,
+                recording_ids=resolved_ids,
+            )
             result = creation_repo.create_queued_book(
                 family_id=family_id,
                 created_by_user_id=context.user_id,
@@ -556,19 +632,6 @@ def register_book_routes(
                     detail=BOOK_SOURCE_SNAPSHOT_MISSING,
                 )
 
-        with typed.database.session_factory() as session:
-            resolved_ids = resolve_book_source_ids(
-                session,
-                family_id=family_id,
-                requested_recording_ids=req_ids,
-            )
-
-        compiled = compile_source_snapshot(
-            typed.database,
-            family_id=family_id,
-            recording_ids=resolved_ids,
-        )
-
         title = payload.title if payload and payload.title else book.title
         subtitle = payload.subtitle if payload and payload.subtitle is not None else book.subtitle
         output_lang = (
@@ -585,6 +648,16 @@ def register_book_routes(
         creation_repo = BookCreationRepository(typed.database)
         with typed.database.session_factory.begin() as session:
             BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+            resolved_ids = resolve_book_source_ids(
+                session,
+                family_id=family_id,
+                requested_recording_ids=req_ids,
+            )
+            compiled = _compile_book_snapshot(
+                session,
+                family_id=family_id,
+                recording_ids=resolved_ids,
+            )
             result = creation_repo.create_queued_book(
                 family_id=family_id,
                 created_by_user_id=context.user_id,
