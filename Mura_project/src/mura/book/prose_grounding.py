@@ -23,7 +23,12 @@ _CAPITALIZED_TOKEN = re.compile(
 _NON_PERSON_WORDS = {
     "это", "этот", "эта", "тогда", "потом", "когда", "однажды", "сначала",
     "после", "перед", "домой", "семья", "война", "победа", "госпиталь",
+    "дом", "город", "деревня", "село", "улица", "фотография", "фото",
+    "письмо", "день", "вечер", "утро", "ночь", "год", "жизнь", "работа",
+    "школа", "история", "источники", "источник",
     "үйде", "ауылдағы", "сол", "осы", "бұл", "кейін", "соғыс", "жеңіс",
+    "үй", "қала", "ауыл", "көше", "сурет", "хат", "күн", "кеш", "таң",
+    "түн", "жыл", "өмір", "жұмыс", "мектеп",
     "атамыз", "әжеміз", "дедушка", "бабушка", "мама", "папа",
 }
 
@@ -35,6 +40,30 @@ _PERSON_ACTION = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_NEXT_LOWER_WORD = re.compile(r"^\s*([а-яёәғқңөұүһі-]+)", re.IGNORECASE)
+_RU_ENTITY_VERB_ENDING = re.compile(
+    r"(?:лся|лась|лись|ил|ила|или|ыл|ыла|ыли|ал|ала|али|ял|яла|яли|"
+    r"ел|ела|ели|ул|ула|ули|нул|нула|нули|овал|овала|овали|"
+    r"ивал|ивала|ивали)$",
+    re.IGNORECASE,
+)
+_KK_ENTITY_VERB_ENDING = re.compile(
+    r"(?:ды|ді|ты|ті|ған|ген|қан|кен|ды|ді|атын|етін|йтын|йтін)$",
+    re.IGNORECASE,
+)
+
+
+def _sentence_start_entity_predicate(tail: str) -> bool:
+    if _PERSON_ACTION.search(tail):
+        return True
+    match = _NEXT_LOWER_WORD.search(tail)
+    if match is None:
+        return False
+    token = match.group(1)
+    return bool(
+        _RU_ENTITY_VERB_ENDING.search(token)
+        or _KK_ENTITY_VERB_ENDING.search(token)
+    )
 
 # High-signal factual predicates about a known person. These are intentionally
 # narrower than natural language in general: the goal is to close obvious
@@ -78,6 +107,11 @@ _RU_REVERSE_PRONOUN = re.compile(
 _KZ_RELATION = re.compile(
     rf"\b(?P<object>[A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}}?)(?:ның|нің|дың|дің|тың|тің)\s+"
     rf"(?P<relation>(?i:ағасы|інісі|әпкесі|сіңлісі|қарындасы|әкесі|анасы|шешесі|ұлы|қызы))\s+"
+    rf"(?P<subject>[A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}})"
+)
+_KZ_EXTENDED_RELATION = re.compile(
+    rf"\b(?P<object>[A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}}?)(?:ның|нің|дың|дің|тың|тің)\s+"
+    rf"(?P<relation>(?i:тәтесі|нағашы\s+апасы|нағашы\s+ағасы))\s+"
     rf"(?P<subject>[A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}})"
 )
 
@@ -233,10 +267,12 @@ def extract_unknown_people(
             continue
 
         if _sentence_start(text, match.start()):
-            tail = text[match.end() : match.end() + 40]
-            if not _PERSON_ACTION.search(tail):
-                # Sentence-initial capitalization alone is not enough to call
-                # an arbitrary literary word a person.
+            tail = text[match.end() : match.end() + 48]
+            if not _sentence_start_entity_predicate(tail):
+                # Capitalization alone is not enough. But an unknown
+                # sentence-initial token acting as the grammatical subject of
+                # a finite narrative verb is treated as a possible person and
+                # fails closed, independent of a tiny verb allowlist.
                 continue
         unknown.append(surface)
     return tuple(dict.fromkeys(unknown))
@@ -244,7 +280,13 @@ def extract_unknown_people(
 
 def _relation_kind(surface: str) -> str:
     value = normalize_text(surface)
-    if value.startswith(("брат", "сестр", "тет", "тёт", "дяд", "аға", "іні", "әпке", "сіңлі", "қарында")):
+    if value.startswith(("тет", "тёт", "дяд", "тәте", "нағашы")):
+        # Aunt/uncle is not a direct sibling relation to the niece/nephew.
+        # The current canonical graph has no aunt/uncle edge type, so prose
+        # using it must fail closed unless a future deterministic path prover
+        # explicitly establishes that derived kinship.
+        return "aunt_uncle"
+    if value.startswith(("брат", "сестр", "аға", "іні", "әпке", "сіңлі", "қарында")):
         return "sibling"
     if value.startswith(("отц", "мат", "әк", "ан", "шеш")):
         return "parent"
@@ -284,7 +326,7 @@ def extract_relationships(
             )
         )
 
-    for match in _KZ_RELATION.finditer(text):
+    for match in list(_KZ_RELATION.finditer(text)) + list(_KZ_EXTENDED_RELATION.finditer(text)):
         subject_surface = match.group("subject")
         object_surface = match.group("object")
         subject = resolve_person_surface(subject_surface, snapshot)
@@ -411,6 +453,14 @@ _EVIDENCE_STOPWORDS = {
     "мы", "я", "the", "a", "an", "and", "to", "of", "бұл", "сол", "ол", "мен",
 }
 
+_NEGATION_MARKERS = (" не ", " никогда ", " емес ", " ешқашан ", " never ", " not ")
+_BEFORE_MARKERS = (" до ", " перед ", " раньше ", " дейін ", " бұрын ", " before ", " earlier ")
+_AFTER_MARKERS = (" после ", " позже ", " кейін ", " соң ", " after ", " later ")
+_OLDER_MARKERS = (" старш", " аға", " әпке", " older ")
+_YOUNGER_MARKERS = (" младш", " іні", " сіңлі", " қарында", " younger ")
+_PARENT_MARKERS = (" отец", " мать", " пап", " мам", " әке", " ана", " шеше", " father", " mother")
+_CHILD_MARKERS = (" сын", " дочь", " ұл", " қыз", " son", " daughter")
+
 
 def _content_stems(text: str) -> set[str]:
     tokens = re.findall(r"[\w-]+", normalize_text(text), flags=re.UNICODE)
@@ -419,6 +469,99 @@ def _content_stems(text: str) -> set[str]:
         for token in tokens
         if len(token) >= 3 and token not in _EVIDENCE_STOPWORDS
     }
+
+
+def _contains_marker(normalized: str, markers: tuple[str, ...]) -> bool:
+    padded = f" {normalized} "
+    return any(marker in padded for marker in markers)
+
+
+def _semantic_signature(text: str) -> dict[str, str | bool | None]:
+    normalized = normalize_text(text)
+    negated = _contains_marker(normalized, _NEGATION_MARKERS)
+
+    temporal: str | None = None
+    if _contains_marker(normalized, _BEFORE_MARKERS):
+        temporal = "before"
+    if _contains_marker(normalized, _AFTER_MARKERS):
+        temporal = "after" if temporal is None else "conflicting"
+
+    sibling_order: str | None = None
+    if _contains_marker(normalized, _OLDER_MARKERS):
+        sibling_order = "older"
+    if _contains_marker(normalized, _YOUNGER_MARKERS):
+        sibling_order = "younger" if sibling_order is None else "conflicting"
+
+    kinship_role: str | None = None
+    if _contains_marker(normalized, _PARENT_MARKERS):
+        kinship_role = "parent"
+    if _contains_marker(normalized, _CHILD_MARKERS):
+        kinship_role = "child" if kinship_role is None else "conflicting"
+
+    return {
+        "negated": negated,
+        "temporal": temporal,
+        "sibling_order": sibling_order,
+        "kinship_role": kinship_role,
+    }
+
+
+def _semantically_compatible(assertion: str, support: str) -> bool:
+    """Reject obvious polarity/order/kinship inversions before lexical matching."""
+
+    left = _semantic_signature(assertion)
+    right = _semantic_signature(support)
+
+    if left["negated"] != right["negated"]:
+        return False
+
+    for key in ("temporal", "sibling_order", "kinship_role"):
+        assertion_value = left[key]
+        support_value = right[key]
+        if assertion_value == "conflicting" or support_value == "conflicting":
+            return False
+        # Adding a modifier not present in the source is unsupported
+        # specificity; a source may safely be more specific than the prose.
+        if assertion_value is not None and assertion_value != support_value:
+            return False
+    return True
+
+
+def _person_anchor_stems(snapshot: BookSourceSnapshot) -> set[str]:
+    anchors: set[str] = set()
+    for forms in _person_forms(snapshot).values():
+        for form in forms:
+            anchors.update(
+                _stem_token(part)
+                for part in form.split()
+                if len(part) >= 3
+            )
+    return anchors
+
+
+def _high_signal_stems(text: str, *, ignored: set[str]) -> set[str]:
+    result: set[str] = set()
+    for token in re.findall(r"[\w-]+", normalize_text(text), flags=re.UNICODE):
+        if len(token) < 3 or token in _EVIDENCE_STOPWORDS or token.isdigit():
+            continue
+        stem = _stem_token(token)
+        if stem not in ignored:
+            result.add(stem)
+    return result
+
+
+_PROFESSION_FRAME = re.compile(
+    r"\b(?:был(?:а)?|работал(?:а)?|стал(?:а)?|жұмыс\s+істеді|болды|еді)\s+([\w-]{4,})",
+    re.IGNORECASE,
+)
+
+
+def _matching_profession_complement(left: str, right: str) -> bool:
+    left_match = _PROFESSION_FRAME.search(normalize_text(left))
+    right_match = _PROFESSION_FRAME.search(normalize_text(right))
+    if left_match is None or right_match is None:
+        return False
+    return _stem_token(left_match.group(1)) == _stem_token(right_match.group(1))
 
 
 def _known_person_ids_in_sentence(
@@ -456,28 +599,32 @@ def _factual_support_blobs(snapshot: BookSourceSnapshot) -> tuple[str, ...]:
 def _clause_supported_by_selected_sources(
     clause: str,
     support_blobs: tuple[str, ...],
+    snapshot: BookSourceSnapshot,
 ) -> bool:
     normalized_clause = normalize_text(clause)
     if not normalized_clause:
         return True
 
-    clause_stems = _content_stems(clause)
+    ignored = _person_anchor_stems(snapshot)
+    clause_stems = _high_signal_stems(clause, ignored=ignored)
     if not clause_stems:
         return True
 
     for blob in support_blobs:
+        if not _semantically_compatible(clause, blob):
+            continue
         normalized_blob = normalize_text(blob)
         if normalized_clause in normalized_blob or normalized_blob in normalized_clause:
             return True
-        blob_stems = _content_stems(blob)
+        if _matching_profession_complement(clause, blob):
+            return True
+        blob_stems = _high_signal_stems(blob, ignored=ignored)
         if not blob_stems:
             continue
         overlap = len(clause_stems & blob_stems)
-        # Require at least two independent content stems and roughly half of a
-        # short factual clause. This accepts harmless inflection/paraphrase such
-        # as "был врачом" vs "работал врачом" but rejects unrelated biography.
-        required = max(2, min(4, (len(clause_stems) + 1) // 2))
-        if overlap >= required:
+        # Names and bare years are removed above; two shared substantive stems
+        # are required for generic lexical support.
+        if overlap >= 2:
             return True
     return False
 
@@ -502,7 +649,11 @@ def extract_unsupported_factual_clauses(
             continue
         if not _known_person_ids_in_sentence(sentence, snapshot):
             continue
-        if not _clause_supported_by_selected_sources(sentence, support_blobs):
+        if not _clause_supported_by_selected_sources(
+            sentence,
+            support_blobs,
+            snapshot,
+        ):
             unsupported.append(sentence)
     return tuple(dict.fromkeys(unsupported))
 
@@ -513,8 +664,13 @@ def evidence_refs_used_by_prose(
     *,
     candidate_ids: list[str],
 ) -> tuple[str, ...]:
-    text_stems = _content_stems(text)
     normalized_text = normalize_text(text)
+    ignored = _person_anchor_stems(snapshot)
+    sentences = [
+        " ".join(match.group(0).split()).strip()
+        for match in _SENTENCE.finditer(text)
+        if match.group(0).strip()
+    ]
     used: list[str] = []
     by_id = {item.evidence_id: item for item in snapshot.evidence}
     for evidence_id in candidate_ids:
@@ -525,13 +681,22 @@ def evidence_refs_used_by_prose(
         if normalized_evidence and normalized_evidence in normalized_text:
             used.append(evidence_id)
             continue
-        stems = _content_stems(evidence.text)
-        if not stems:
+
+        evidence_stems = _high_signal_stems(evidence.text, ignored=ignored)
+        if len(evidence_stems) < 2:
+            # A family name, year, or one generic content word is not proof
+            # that this evidence was actually incorporated.
             continue
-        overlap = len(stems & text_stems)
-        required = min(5, max(3, len(stems) // 3))
-        if overlap >= required:
-            used.append(evidence_id)
+
+        for sentence in sentences:
+            if not _semantically_compatible(sentence, evidence.text):
+                continue
+            sentence_stems = _high_signal_stems(sentence, ignored=ignored)
+            overlap = len(evidence_stems & sentence_stems)
+            required = max(2, min(5, (len(evidence_stems) + 1) // 2))
+            if overlap >= required:
+                used.append(evidence_id)
+                break
     return tuple(used)
 
 
