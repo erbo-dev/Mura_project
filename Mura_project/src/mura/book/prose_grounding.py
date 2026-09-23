@@ -36,6 +36,23 @@ _PERSON_ACTION = re.compile(
     re.IGNORECASE,
 )
 
+# High-signal factual predicates about a known person. These are intentionally
+# narrower than natural language in general: the goal is to close obvious
+# invented biographical/scene facts deterministically without pretending to be
+# a full semantic theorem prover.
+_FACTUAL_PERSON_VERB = re.compile(
+    r"\b(?:"
+    r"был(?:а|и)?|стал(?:а|и)?|жил(?:а|и)?|работал(?:а|и)?|"
+    r"родил(?:ся|ась)|учил(?:ся|ась)|служил(?:а)?|любил(?:а)?|"
+    r"переехал(?:а)?|приехал(?:а)?|уехал(?:а)?|окончил(?:а)?|"
+    r"тұрды|жұмыс\s+істеді|туды|оқыды|қызмет\s+етті|жақсы\s+көрді|"
+    r"көшті|келді|кетті|болды|еді"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_SENTENCE = re.compile(r"[^.!?…\n]+(?:[.!?…]+|$)", re.UNICODE)
+
 _LOCATION_PREP = re.compile(
     rf"\b(?i:в|во|из|из\s+города|в\s+городе|в\s+селе|в\s+ауле|"
     rf"қаласында|ауылында)\s+"
@@ -114,6 +131,7 @@ class ProseGroundingAnalysis:
     ambiguous_short_years: tuple[str, ...]
     direct_speech: tuple[str, ...]
     actual_evidence_ids: tuple[str, ...]
+    unsupported_factual_clauses: tuple[str, ...]
 
 
 def normalize_text(value: str) -> str:
@@ -403,6 +421,92 @@ def _content_stems(text: str) -> set[str]:
     }
 
 
+def _known_person_ids_in_sentence(
+    sentence: str,
+    snapshot: BookSourceSnapshot,
+) -> set[str]:
+    found: set[str] = set()
+    for match in _CAPITALIZED_TOKEN.finditer(sentence):
+        person_id = resolve_person_surface(match.group(1), snapshot)
+        if person_id is not None:
+            found.add(person_id)
+    return found
+
+
+def _factual_support_blobs(snapshot: BookSourceSnapshot) -> tuple[str, ...]:
+    values: list[str] = [item.text for item in snapshot.evidence if item.text.strip()]
+    values.extend(
+        claim.summary
+        for claim in snapshot.claims
+        if isinstance(claim.summary, str) and claim.summary.strip()
+    )
+    values.extend(
+        story.summary
+        for story in snapshot.stories
+        if isinstance(story.summary, str) and story.summary.strip()
+    )
+    values.extend(
+        event.description
+        for event in snapshot.events
+        if isinstance(event.description, str) and event.description.strip()
+    )
+    return tuple(dict.fromkeys(values))
+
+
+def _clause_supported_by_selected_sources(
+    clause: str,
+    support_blobs: tuple[str, ...],
+) -> bool:
+    normalized_clause = normalize_text(clause)
+    if not normalized_clause:
+        return True
+
+    clause_stems = _content_stems(clause)
+    if not clause_stems:
+        return True
+
+    for blob in support_blobs:
+        normalized_blob = normalize_text(blob)
+        if normalized_clause in normalized_blob or normalized_blob in normalized_clause:
+            return True
+        blob_stems = _content_stems(blob)
+        if not blob_stems:
+            continue
+        overlap = len(clause_stems & blob_stems)
+        # Require at least two independent content stems and roughly half of a
+        # short factual clause. This accepts harmless inflection/paraphrase such
+        # as "был врачом" vs "работал врачом" but rejects unrelated biography.
+        required = max(2, min(4, (len(clause_stems) + 1) // 2))
+        if overlap >= required:
+            return True
+    return False
+
+
+def extract_unsupported_factual_clauses(
+    text: str,
+    snapshot: BookSourceSnapshot,
+) -> tuple[str, ...]:
+    """Find obvious known-person factual clauses with no selected-source support.
+
+    This is deliberately conservative and high-signal. It does not claim to
+    extract every proposition from literary prose; it blocks common biographical
+    assertions that would otherwise bypass the structured gates simply because
+    the person name itself is known.
+    """
+
+    support_blobs = _factual_support_blobs(snapshot)
+    unsupported: list[str] = []
+    for match in _SENTENCE.finditer(text):
+        sentence = " ".join(match.group(0).split()).strip()
+        if not sentence or not _FACTUAL_PERSON_VERB.search(sentence):
+            continue
+        if not _known_person_ids_in_sentence(sentence, snapshot):
+            continue
+        if not _clause_supported_by_selected_sources(sentence, support_blobs):
+            unsupported.append(sentence)
+    return tuple(dict.fromkeys(unsupported))
+
+
 def evidence_refs_used_by_prose(
     text: str,
     snapshot: BookSourceSnapshot,
@@ -455,5 +559,9 @@ def analyze_prose(
             text,
             snapshot,
             candidate_ids=planned_evidence_ids,
+        ),
+        unsupported_factual_clauses=extract_unsupported_factual_clauses(
+            text,
+            snapshot,
         ),
     )
