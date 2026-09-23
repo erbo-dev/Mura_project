@@ -17,6 +17,7 @@ from mura.domain.book_models import (
     CompiledSnapshot,
 )
 from mura.jobs import JobStatus
+from mura.storage.archive import ArchiveClaimRow, ArchivePersonRow, FamilyGraphEdgeRow
 from mura.storage.archive_read import (
     ArchiveResourceNotFound,
     GroundingBundle,
@@ -569,3 +570,200 @@ def test_selected_source_snapshot_does_not_import_excluded_family_graph_context(
     assert snapshot.manifest.source_recording_ids == ["rec_a", "rec_b"]
     assert {person.display_name for person in snapshot.people} == {"Алихан"}
     assert snapshot.relationships == []
+
+
+
+def test_database_selected_sources_exclude_c_only_person_and_relationship() -> None:
+    db = Database("sqlite+pysqlite:///:memory:")
+    db.create_schema()
+    now = datetime(2026, 9, 23, tzinfo=UTC)
+
+    with db.session_factory.begin() as session:
+        session.add(
+            UserRow(
+                user_id="usr_phase28",
+                email=None,
+                display_name="Owner",
+                auth_issuer="test",
+                auth_subject="phase28",
+            )
+        )
+        session.flush()
+        session.add(
+            FamilyRow(
+                family_id="fam_phase28_db",
+                name="Phase 2.8",
+                created_by_user_id="usr_phase28",
+            )
+        )
+        session.flush()
+
+        for rec_id, text in (
+            ("rec_a", "Алихан — мой дед."),
+            ("rec_b", "Мы жили в Семее."),
+            ("rec_c", "У Алихана был брат Мурат."),
+        ):
+            session.add(
+                RecordingRow(
+                    recording_id=rec_id,
+                    family_id="fam_phase28_db",
+                    speaker_name="Narrator",
+                    speaker_id="spk_1",
+                    original_filename=f"{rec_id}.m4a",
+                    content_type="audio/mp4",
+                    audio_path=f"/tmp/{rec_id}.m4a",
+                )
+            )
+            session.flush()
+            session.add(
+                ProcessingJobRow(
+                    job_id=f"job_{rec_id}",
+                    recording_id=rec_id,
+                    status=JobStatus.COMPLETED.value,
+                    stage="completed",
+                )
+            )
+            session.add(
+                PipelineResultRow(
+                    recording_id=rec_id,
+                    payload={
+                        "extraction": {
+                            "evidence_spans": [
+                                {"evidence_id": f"ev_{rec_id}", "text": text}
+                            ]
+                        }
+                    },
+                )
+            )
+
+        session.add_all(
+            [
+                ArchivePersonRow(
+                    person_id="per_alikhan",
+                    family_id="fam_phase28_db",
+                    canonical_name="Алихан",
+                    normalized_name="алихан",
+                    aliases=[],
+                    verified_aliases=[],
+                    category="family_member",
+                    relations_to_speakers={},
+                    source_recording_ids=["rec_a", "rec_c"],
+                    created_at=now,
+                    updated_at=now,
+                ),
+                ArchivePersonRow(
+                    person_id="per_murat",
+                    family_id="fam_phase28_db",
+                    canonical_name="Мурат",
+                    normalized_name="мурат",
+                    aliases=[],
+                    verified_aliases=[],
+                    category="family_member",
+                    relations_to_speakers={},
+                    source_recording_ids=["rec_c"],
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                ArchiveClaimRow(
+                    claim_id="cl_a_person",
+                    family_id="fam_phase28_db",
+                    recording_id="rec_a",
+                    object_type="person_mention",
+                    source_object_id="mention_alikhan",
+                    predicate="person_mention",
+                    subject_person_id="per_alikhan",
+                    object_person_id=None,
+                    payload={
+                        "name": "Алихан",
+                        "aliases": [],
+                        "name_variants": [],
+                        "category": "family_member",
+                        "relation_to_speaker": "дед",
+                    },
+                    evidence_ids=["ev_rec_a"],
+                    evidence_class="A_explicit",
+                    verification_status="unreviewed",
+                    assertion_mode="explicit",
+                    status="active",
+                    derived_from_claim_ids=[],
+                    created_at=now,
+                ),
+                ArchiveClaimRow(
+                    claim_id="cl_c_person",
+                    family_id="fam_phase28_db",
+                    recording_id="rec_c",
+                    object_type="person_mention",
+                    source_object_id="mention_murat",
+                    predicate="person_mention",
+                    subject_person_id="per_murat",
+                    object_person_id=None,
+                    payload={
+                        "name": "Мурат",
+                        "aliases": [],
+                        "name_variants": [],
+                        "category": "family_member",
+                    },
+                    evidence_ids=["ev_rec_c"],
+                    evidence_class="A_explicit",
+                    verification_status="unreviewed",
+                    assertion_mode="explicit",
+                    status="active",
+                    derived_from_claim_ids=[],
+                    created_at=now,
+                ),
+                ArchiveClaimRow(
+                    claim_id="cl_c_sibling",
+                    family_id="fam_phase28_db",
+                    recording_id="rec_c",
+                    object_type="relationship",
+                    source_object_id="rel_c",
+                    predicate="sibling",
+                    subject_person_id="per_alikhan",
+                    object_person_id="per_murat",
+                    payload={
+                        "relationship_type": "sibling",
+                        "subject_role": "sibling",
+                        "object_role": "sibling",
+                    },
+                    evidence_ids=["ev_rec_c"],
+                    evidence_class="A_explicit",
+                    verification_status="unreviewed",
+                    assertion_mode="explicit",
+                    status="active",
+                    derived_from_claim_ids=[],
+                    created_at=now,
+                ),
+            ]
+        )
+        session.add(
+            FamilyGraphEdgeRow(
+                edge_id="edge_c_sibling",
+                family_id="fam_phase28_db",
+                relationship_type="sibling",
+                subject_person_id="per_alikhan",
+                subject_role="sibling",
+                object_person_id="per_murat",
+                object_role="sibling",
+                source_claim_ids=["cl_c_sibling"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    snapshot = compile_source_snapshot(
+        db,
+        family_id="fam_phase28_db",
+        recording_ids=["rec_a", "rec_b"],
+        created_at=now,
+    ).snapshot
+
+    assert snapshot.manifest.source_recording_ids == ["rec_a", "rec_b"]
+    assert {person.display_name for person in snapshot.people} == {"Алихан"}
+    assert all(person.display_name != "Мурат" for person in snapshot.people)
+    assert snapshot.relationships == []
+    assert all(claim.recording_id != "rec_c" for claim in snapshot.claims)
+    assert all(evidence.recording_id != "rec_c" for evidence in snapshot.evidence)
