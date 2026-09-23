@@ -18,8 +18,9 @@ from pathlib import PurePath
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
 
+from mura.identity.context import AuthorizedFamilyContext
+from mura.quotas import RecordingQuotaService
 from mura.domain.models import (
     AudioLanguage,
     OutputLanguage,
@@ -50,7 +51,6 @@ from mura.storage.cleanup import (
 )
 from mura.storage.database import Database, ProcessingJobRow, RecordingRow
 from mura.storage.deletion import RecordingDeletionService
-from mura.storage.identity import FamilyRow
 
 
 class RecordingRepositoryProtocol(Protocol):
@@ -153,7 +153,6 @@ def register_recording_routes(
         "/v1/families/{family_id}/recordings",
         response_model=RecordingAccepted,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=[Depends(create_recording_dependency)],
     )
     def create_family_recording(
         family_id: str,
@@ -162,6 +161,7 @@ def register_recording_routes(
         audio_language: Annotated[AudioLanguage, Form()] = AudioLanguage.AUTO,
         output_language: Annotated[OutputLanguage, Form()] = OutputLanguage.SAME_AS_TRANSCRIPT,
         speaker_person_id: Annotated[str | None, Form()] = None,
+        context: AuthorizedFamilyContext = Depends(create_recording_dependency),
         runtime: object = Depends(get_runtime_dependency),
     ) -> RecordingAccepted:
         repository = _repository(runtime)
@@ -179,19 +179,22 @@ def register_recording_routes(
         storage: AudioStorage = typed.storage
         stored = None
         try:
-            # Family deletion and recording publication share this lock. The
-            # storage upload is intentionally inside the creation transaction:
-            # family DELETE cannot commit and then be followed by a new row.
+            # Quota verification acquires the same FamilyRow lock used by
+            # family deletion and Book creation. The lock is held through object
+            # upload + row publication, so simultaneous POSTs cannot both pass
+            # count/storage checks and publish beyond the configured limits.
             with typed.database.session_factory.begin() as session:
-                locked_family_id = session.scalar(
-                    select(FamilyRow.family_id)
-                    .where(FamilyRow.family_id == family_id)
-                    .with_for_update()
-                )
-                if locked_family_id is None:
-                    raise _not_found()
-
+                file.file.seek(0, 2)
+                incoming_size_bytes = int(file.file.tell())
                 file.file.seek(0)
+                RecordingQuotaService.check_creation_allowed(
+                    session,
+                    family_id=family_id,
+                    user_id=context.user_id,
+                    incoming_size_bytes=incoming_size_bytes,
+                    settings=typed.settings,
+                )
+
                 stored = storage.save(
                     family_id=family_id,
                     recording_id=recording_id,
@@ -203,6 +206,7 @@ def register_recording_routes(
                     recording_id=recording_id,
                     job_id=job_id,
                     family_id=family_id,
+                    created_by_user_id=context.user_id,
                     speaker_id=speaker_reference,
                     speaker_name=speaker_name,
                     original_filename=original_filename,
