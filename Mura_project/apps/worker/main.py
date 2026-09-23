@@ -19,6 +19,7 @@ failed just because the process is stopping.
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
 import logging
 import signal
@@ -362,7 +363,46 @@ def install_signal_handlers(
                 logger.debug("signal %s unavailable in this environment", name)
 
 
-def main() -> int:
+WORKER_QUEUE_CHOICES = ("all", "recording", "books", "cleanup")
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="MURA durable queue worker")
+    parser.add_argument(
+        "--queue",
+        choices=WORKER_QUEUE_CHOICES,
+        default="all",
+        help="Run one durable queue independently, or all queues in one process.",
+    )
+    return parser.parse_args(argv)
+
+
+def _build_selected_worker(settings: CoreSettings, queue: str) -> Any:
+    if queue == "all":
+        return build_worker_supervisor(settings)
+    database = Database(
+        settings.database_url,
+        runtime=DatabaseRuntimeSettings(
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_recycle_seconds=settings.db_pool_recycle_seconds,
+            connect_timeout_seconds=settings.db_connect_timeout_seconds,
+            statement_timeout_seconds=settings.db_statement_timeout_seconds,
+        ),
+    )
+    if queue == "recording":
+        ledger = AIUsageLedger(database)
+        return build_recording_worker(settings, database=database, ai_ledger=ledger)
+    if queue == "books":
+        ledger = AIUsageLedger(database)
+        return build_book_worker(settings, database=database, ai_ledger=ledger)
+    if queue == "cleanup":
+        return build_cleanup_worker(settings, database=database)
+    raise ValueError(f"unsupported worker queue: {queue}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
     try:
         settings = CoreSettings()  # type: ignore[call-arg]
     except Exception:
@@ -383,15 +423,13 @@ def main() -> int:
         traces_sample_rate=settings.sentry_traces_sample_rate,
     )
 
-    supervisor = build_worker_supervisor(settings)
-    install_signal_handlers(supervisor)
+    target = _build_selected_worker(settings, args.queue)
+    install_signal_handlers(target)
     logger.info(
         "worker_started",
         extra={
             "event": "worker_started",
-            "recording_worker_id": supervisor.recording_worker.worker_id,
-            "book_worker_id": supervisor.book_worker.worker_id,
-            "cleanup_worker_id": supervisor.cleanup_worker.worker_id,
+            "queue": args.queue,
             "recording_lease_seconds": settings.job_lease_seconds,
             "book_lease_seconds": settings.book_job_lease_seconds,
             "recording_heartbeat_seconds": settings.job_heartbeat_seconds,
@@ -401,11 +439,11 @@ def main() -> int:
         },
     )
     try:
-        supervisor.run_forever()
+        target.run_forever()
     except KeyboardInterrupt:
         logger.info("worker interrupted")
     finally:
-        supervisor.stop()
+        target.stop()
         flush_sentry()
     logger.info("worker stopped")
     return 0
