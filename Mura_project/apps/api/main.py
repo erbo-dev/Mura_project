@@ -13,8 +13,6 @@ from typing import Annotated, Any
 from mura.logging import configure_logging, request_id_ctx
 from mura.sentry import init_sentry
 
-logger = logging.getLogger("mura.api")
-
 from fastapi import (
     APIRouter,
     Depends,
@@ -84,6 +82,8 @@ from mura.storage.database import (
     postgres_connect_args,
 )
 from mura.storage.identity import IdentityRepository
+
+logger = logging.getLogger("mura.api")
 
 API_TITLE = "Mura Core API"
 API_VERSION = "0.2.0"
