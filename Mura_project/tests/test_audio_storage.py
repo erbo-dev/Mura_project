@@ -229,7 +229,7 @@ def test_canonical_recording_resolves_through_storage(storage: LocalAudioStorage
 # ---------------------------------------------------------------- deletion
 
 
-def test_deletion_removes_rows_and_audio_and_is_idempotent(
+def test_deletion_removes_rows_and_queues_audio_cleanup_idempotently(
     storage: LocalAudioStorage,
 ) -> None:
     database = _database()
@@ -252,9 +252,10 @@ def test_deletion_removes_rows_and_audio_and_is_idempotent(
     second = service.delete_recording(family_id=FAMILY, recording_id=RECORDING)
 
     assert first.rows_deleted is True
-    assert first.audio_deleted is True
-    assert storage.exists(stored.storage_key) is False
-    # Repeating the lifecycle job must be safe.
+    assert first.cleanup_enqueued is True
+    # DELETE no longer depends on the storage provider; physical erasure is a
+    # durable worker responsibility.
+    assert storage.exists(stored.storage_key) is True
     assert second.rows_deleted is False
 
 

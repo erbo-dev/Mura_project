@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, BinaryIO, Protocol
 
 import requests
 
+from mura.storage.storage_errors import StorageDeleteError, storage_delete_http_error
+
 if TYPE_CHECKING:
     from mura.config import CoreSettings
 
@@ -281,18 +283,26 @@ class LocalAudioStorage:
         return self._path(storage_key).is_file()
 
     def delete(self, storage_key: str) -> bool:
-        """Idempotent: an already-absent object is not an error.
+        """Delete idempotently while preserving real failure semantics."""
 
-        A permission or provider failure still raises, so a genuine problem is
-        never mistaken for "already deleted".
-        """
-
-        path = self._path(storage_key)
         try:
+            path = self._path(storage_key)
             path.unlink()
         except FileNotFoundError:
             return False
-        # Prune now-empty recording/family directories, best effort.
+        except PermissionError as exc:
+            raise StorageDeleteError(
+                code="storage_permission_denied",
+                retryable=False,
+                message="local storage deletion permission denied",
+            ) from exc
+        except OSError as exc:
+            raise StorageDeleteError(
+                code="storage_io_error",
+                retryable=True,
+                message="local storage deletion failed",
+            ) from exc
+        # Directory pruning is cosmetic; object deletion already succeeded.
         for parent in (path.parent, path.parent.parent):
             try:
                 parent.rmdir()
@@ -314,6 +324,32 @@ class LocalAudioStorage:
         """
 
         yield self._path(storage_key)
+
+
+class LegacyLocalAudioStorage:
+    """Deletion-only adapter for rows created before opaque storage keys."""
+
+    backend = "legacy_local"
+
+    def delete(self, storage_key: str) -> bool:
+        path = Path(storage_key)
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except PermissionError as exc:
+            raise StorageDeleteError(
+                code="storage_permission_denied",
+                retryable=False,
+                message="legacy audio deletion permission denied",
+            ) from exc
+        except OSError as exc:
+            raise StorageDeleteError(
+                code="storage_io_error",
+                retryable=True,
+                message="legacy audio deletion failed",
+            ) from exc
 
 
 @contextmanager
@@ -459,14 +495,24 @@ class SupabaseAudioStorage:
                 headers=self._headers(),
                 timeout=(5.0, 15.0),
             )
-        except Exception as exc:
-            raise AudioStorageError(f"failed to delete audio from Supabase Storage: {exc}") from exc
+        except requests.Timeout as exc:
+            raise StorageDeleteError(
+                code="storage_timeout",
+                retryable=True,
+                message="storage deletion timed out",
+            ) from exc
+        except requests.RequestException as exc:
+            raise StorageDeleteError(
+                code="storage_unavailable",
+                retryable=True,
+                message="storage deletion transport failed",
+            ) from exc
 
         if response.status_code in {200, 204}:
             return True
         if response.status_code == 404:
             return False
-        return False
+        raise storage_delete_http_error(response.status_code, response.headers)
 
     def open(self, storage_key: str) -> BinaryIO:
         url = f"{self.url}/storage/v1/object/authenticated/{self.bucket}/{storage_key}"

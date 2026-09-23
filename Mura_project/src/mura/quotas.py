@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from apps.api.errors import (
     BOOK_DAILY_LIMIT_REACHED,
     BOOK_GENERATION_ALREADY_ACTIVE,
+    FAMILY_NOT_FOUND,
 )
 from mura.domain.book_models import TERMINAL_BOOK_STATUSES
 from mura.storage.book import BookRow
@@ -31,11 +32,16 @@ class BookQuotaService:
         Locks the family row using `FOR UPDATE` to serialize concurrent creation requests.
         """
         # 1. Exclusive row lock on the family row
-        session.execute(
+        locked_family_id = session.scalar(
             select(FamilyRow.family_id)
             .where(FamilyRow.family_id == family_id)
             .with_for_update()
         )
+        if locked_family_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=FAMILY_NOT_FOUND,
+            )
 
         max_active = getattr(settings, "book_max_active_per_family", 1)
         max_daily = getattr(settings, "book_max_created_per_family_per_day", 3)

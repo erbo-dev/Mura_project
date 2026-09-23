@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from mura.leases import LeaseOwnershipLost
+from mura.storage.storage_errors import StorageDeleteError
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ class FailureCategory(StrEnum):
     PROVIDER_INVALID_REQUEST = "provider_invalid_request"
     STORAGE_TIMEOUT = "storage_timeout"
     STORAGE_UNAVAILABLE = "storage_unavailable"
+    STORAGE_AUTH_ERROR = "storage_auth_error"
+    STORAGE_INVALID_REQUEST = "storage_invalid_request"
     GROUNDING_BLOCKED = "grounding_blocked"
     LEASE_LOST = "lease_lost"
     CANCELED = "canceled"
@@ -67,6 +70,27 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
     """Classify any exception encountered during job execution into retry or terminal."""
     error_str = str(exc)
     exc_type_name = type(exc).__name__
+
+    # Physical cleanup exposes explicit retryability instead of relying on
+    # provider error text.
+    if isinstance(exc, StorageDeleteError):
+        if exc.code == "storage_timeout":
+            category = FailureCategory.STORAGE_TIMEOUT
+        elif exc.code in {"storage_auth_failed", "storage_permission_denied"}:
+            category = FailureCategory.STORAGE_AUTH_ERROR
+        elif exc.retryable:
+            category = FailureCategory.STORAGE_UNAVAILABLE
+        else:
+            category = FailureCategory.STORAGE_INVALID_REQUEST
+        return ClassifiedFailure(
+            category=category,
+            disposition=(
+                FailureDisposition.RETRY if exc.retryable else FailureDisposition.TERMINAL
+            ),
+            error_code=exc.code,
+            error_detail=str(exc),
+            retry_after_seconds=exc.retry_after_seconds,
+        )
 
     # 1. Lease ownership lost -> Must NOT be deferred or retried by current worker
     if isinstance(exc, LeaseOwnershipLost) or "leaseownershiplost" in exc_type_name.lower():
@@ -108,7 +132,7 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
 
     # Check if status_code is embedded in exception attributes or message
     if status_code is None:
-        match = re.search(r"\b(429|500|502|503|504|408|401|403|400|422)\b", error_str)
+        match = re.search(r"\b(429|5\d\d|408|401|403|400|422)\b", error_str)
         if match:
             try:
                 status_code = int(match.group(1))
@@ -125,7 +149,7 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
                 error_detail=error_str,
                 retry_after_seconds=retry_after,
             )
-        if status_code in (500, 502, 503):
+        if 500 <= status_code < 600 and status_code != 504:
             return ClassifiedFailure(
                 category=FailureCategory.PROVIDER_SERVER_ERROR,
                 disposition=FailureDisposition.RETRY,

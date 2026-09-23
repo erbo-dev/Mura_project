@@ -21,6 +21,7 @@ from mura.identity.auth import Principal
 from mura.identity.context import AuthorizedFamilyContext
 from mura.identity.policy import Capability, FamilyRole, capabilities_for
 from mura.storage.identity import (
+    FamilyDeleteAuthorizationError,
     IdentityRepository,
     MembershipNotFoundError,
     SoleOwnerError,
@@ -235,35 +236,37 @@ def register_membership_admin_routes(
             )
 
         identity = cast(IdentityRepository, repository)
-        if identity.count_owners(family_id) > 1:
-            raise sole_owner_error()
-
-        result = identity.delete_family(family_id)
+        settings = getattr(runtime, "settings", None)
+        audio_backend = getattr(
+            getattr(settings, "audio_storage_backend", "local"),
+            "value",
+            getattr(settings, "audio_storage_backend", "local"),
+        )
+        book_backend = getattr(
+            getattr(settings, "book_storage_backend", "local"),
+            "value",
+            getattr(settings, "book_storage_backend", "local"),
+        )
+        max_attempts = getattr(settings, "storage_cleanup_max_attempts", 8)
+        try:
+            result = identity.delete_family(
+                family_id,
+                requesting_user_id=authorized.user_id,
+                default_audio_backend=str(audio_backend),
+                default_book_backend=str(book_backend),
+                cleanup_max_attempts=max_attempts,
+            )
+        except MembershipNotFoundError as exc:
+            raise _not_found() from exc
+        except FamilyDeleteAuthorizationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="insufficient_family_role",
+            ) from exc
+        except SoleOwnerError as exc:
+            raise sole_owner_error() from exc
         if result is None:
             raise _not_found()
-
-        audio_keys, book_keys = result
-        if runtime is not None:
-            storage = getattr(runtime, "storage", None)
-            if storage is not None:
-                for a_key in audio_keys:
-                    try:
-                        storage.delete(a_key)
-                    except Exception:
-                        pass
-            settings = getattr(runtime, "settings", None)
-            if settings is not None:
-                try:
-                    from mura.storage.book_artifacts import build_book_artifact_storage
-
-                    artifact_storage = build_book_artifact_storage(settings)
-                    for b_key in book_keys:
-                        try:
-                            artifact_storage.delete(storage_key=b_key)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
 
 
 def sole_owner_error() -> HTTPException:

@@ -232,9 +232,10 @@ class RecordingRepository:
         audio_sha256: str | None = None,
         audio_size_bytes: int | None = None,
         audio_mime_type: str | None = None,
+        session: Session | None = None,
     ) -> None:
-        with self.database.session_factory.begin() as session:
-            session.add(
+        def persist(target: Session) -> None:
+            target.add(
                 RecordingRow(
                     recording_id=recording_id,
                     family_id=family_id,
@@ -252,8 +253,8 @@ class RecordingRepository:
                     output_language=output_language,
                 )
             )
-            session.flush()
-            session.add(
+            target.flush()
+            target.add(
                 ProcessingJobRow(
                     job_id=job_id,
                     recording_id=recording_id,
@@ -261,6 +262,12 @@ class RecordingRepository:
                     stage="queued",
                 )
             )
+
+        if session is not None:
+            persist(session)
+            return
+        with self.database.session_factory.begin() as owned:
+            persist(owned)
 
     def get_recording(self, recording_id: str) -> RecordingRow | None:
         with self.database.session_factory() as session:
@@ -508,7 +515,11 @@ class RecordingRepository:
         job_id: str,
         lease_owner: str | None,
     ) -> ProcessingJobRow:
-        job = session.get(ProcessingJobRow, job_id)
+        job = session.scalar(
+            select(ProcessingJobRow)
+            .where(ProcessingJobRow.job_id == job_id)
+            .with_for_update()
+        )
         if job is None:
             raise LookupError(f"unknown job: {job_id}")
         # None means an unowned administrative write; a worker always passes its

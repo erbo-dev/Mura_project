@@ -18,6 +18,7 @@ from pathlib import PurePath
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import select
 
 from mura.domain.models import (
     AudioLanguage,
@@ -42,7 +43,14 @@ from mura.speaker import (
     validate_speaker_person_id,
 )
 from mura.storage.audio import AudioStorage, AudioStorageError, AudioTooLargeError
-from mura.storage.database import ProcessingJobRow, RecordingRow
+from mura.storage.cleanup import (
+    StorageCleanupRepository,
+    StorageCleanupResourceType,
+    StorageKind,
+)
+from mura.storage.database import Database, ProcessingJobRow, RecordingRow
+from mura.storage.deletion import RecordingDeletionService
+from mura.storage.identity import FamilyRow
 
 
 class RecordingRepositoryProtocol(Protocol):
@@ -72,8 +80,10 @@ class RecordingRepositoryProtocol(Protocol):
 class RecordingRuntime(Protocol):
     """Structural view of the pieces of CoreRuntime these routes need."""
 
+    database: Database
     repository: RecordingRepositoryProtocol
     storage: AudioStorage
+    settings: Any
 
 
 def _repository(runtime: object) -> RecordingRepositoryProtocol:
@@ -165,42 +175,69 @@ def register_recording_routes(
         )
         original_filename = PurePath(file.filename or "audio.bin").name
 
-        storage: AudioStorage = cast(RecordingRuntime, runtime).storage
+        typed = cast(RecordingRuntime, runtime)
+        storage: AudioStorage = typed.storage
+        stored = None
         try:
-            file.file.seek(0)
-            stored = storage.save(
-                family_id=family_id,
-                recording_id=recording_id,
-                original_filename=original_filename,
-                content_type=file.content_type,
-                source=file.file,
-            )
+            # Family deletion and recording publication share this lock. The
+            # storage upload is intentionally inside the creation transaction:
+            # family DELETE cannot commit and then be followed by a new row.
+            with typed.database.session_factory.begin() as session:
+                locked_family_id = session.scalar(
+                    select(FamilyRow.family_id)
+                    .where(FamilyRow.family_id == family_id)
+                    .with_for_update()
+                )
+                if locked_family_id is None:
+                    raise _not_found()
+
+                file.file.seek(0)
+                stored = storage.save(
+                    family_id=family_id,
+                    recording_id=recording_id,
+                    original_filename=original_filename,
+                    content_type=file.content_type,
+                    source=file.file,
+                )
+                repository.create_recording_and_job(
+                    recording_id=recording_id,
+                    job_id=job_id,
+                    family_id=family_id,
+                    speaker_id=speaker_reference,
+                    speaker_name=speaker_name,
+                    original_filename=original_filename,
+                    content_type=stored.content_type,
+                    audio_path=stored.storage_key,
+                    storage_key=stored.storage_key,
+                    storage_backend=stored.backend.value,
+                    audio_sha256=stored.sha256,
+                    audio_size_bytes=stored.size_bytes,
+                    audio_mime_type=stored.content_type,
+                    audio_language=audio_language.value,
+                    output_language=output_language.value,
+                    session=session,
+                )
         except AudioTooLargeError as exc:
             raise HTTPException(status_code=413, detail="upload rejected") from exc
         except AudioStorageError as exc:
             raise HTTPException(status_code=415, detail="upload rejected") from exc
-
-        try:
-            repository.create_recording_and_job(
-                recording_id=recording_id,
-                job_id=job_id,
-                family_id=family_id,
-                speaker_id=speaker_reference,
-                speaker_name=speaker_name,
-                original_filename=original_filename,
-                content_type=stored.content_type,
-                audio_path=stored.storage_key,
-                storage_key=stored.storage_key,
-                storage_backend=stored.backend.value,
-                audio_sha256=stored.sha256,
-                audio_size_bytes=stored.size_bytes,
-                audio_mime_type=stored.content_type,
-                audio_language=audio_language.value,
-                output_language=output_language.value,
-            )
+        except HTTPException:
+            raise
         except Exception:
-            # The object is durable but the recording is not; drop the orphan.
-            storage.delete(stored.storage_key)
+            # DB publication failed after the object was written. Attempt the
+            # cheap compensation; if storage is unavailable, persist a cleanup
+            # row outside the rolled-back creation transaction.
+            if stored is not None:
+                try:
+                    storage.delete(stored.storage_key)
+                except Exception:
+                    StorageCleanupRepository(typed.database).enqueue_cleanup(
+                        resource_type=StorageCleanupResourceType.RECORDING_AUDIO.value,
+                        storage_kind=StorageKind.AUDIO.value,
+                        storage_backend=stored.backend.value,
+                        storage_key=stored.storage_key,
+                        max_attempts=typed.settings.storage_cleanup_max_attempts,
+                    )
             raise
 
         return RecordingAccepted(recording_id=recording_id, job_id=job_id)
@@ -261,32 +298,17 @@ def register_recording_routes(
         recording_id: str,
         runtime: object = Depends(get_runtime_dependency),
     ) -> None:
-        repository = _repository(runtime)
-        recording = repository.get_family_recording(
+        typed = cast(RecordingRuntime, runtime)
+        deletion = RecordingDeletionService(
+            typed.database,
+            typed.storage,
+            cleanup_max_attempts=typed.settings.storage_cleanup_max_attempts,
+        ).delete_recording(
             family_id=family_id,
             recording_id=recording_id,
         )
-        if recording is None:
+        if not deletion.rows_deleted:
             raise _not_found()
-
-        deleted = repository.delete_family_recording(
-            family_id=family_id,
-            recording_id=recording_id,
-        )
-        if deleted is None:
-            raise _not_found()
-
-        storage: AudioStorage = cast(RecordingRuntime, runtime).storage
-        if deleted.storage_key:
-            try:
-                storage.delete(deleted.storage_key)
-            except Exception:
-                pass
-        elif deleted.audio_path:
-            try:
-                storage.delete(deleted.audio_path)
-            except Exception:
-                pass
 
     @app.get(
         "/v1/families/{family_id}/recordings/{recording_id}/review-items",

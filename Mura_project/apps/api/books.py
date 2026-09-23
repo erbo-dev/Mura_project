@@ -13,7 +13,6 @@ from __future__ import annotations
 import io
 import urllib.parse
 from collections.abc import Callable
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -21,7 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from sqlalchemy.orm import Session
 
-from apps.api.errors import FAMILY_NOT_FOUND
+from apps.api.errors import BOOK_SOURCE_SNAPSHOT_MISSING, FAMILY_NOT_FOUND
 from mura.book.snapshot import compile_source_snapshot
 from mura.quotas import BookQuotaService
 from mura.domain.book_models import (
@@ -36,6 +35,7 @@ from mura.domain.book_models import (
     BookProgressView,
     BookRegenerateRequest,
     BookSourceOptionView,
+    BookSourceSnapshot,
     BookStage,
     BookStatus,
     BookSummaryView,
@@ -54,7 +54,6 @@ from mura.storage.book import (
     BookSourceSnapshotRepository,
     get_eligible_recordings,
 )
-from mura.storage.book_artifacts import BookArtifactStorage, LocalBookArtifactStorage
 from mura.storage.book_artifacts import BookArtifactStorage, build_book_artifact_storage
 from mura.storage.database import Database, PipelineResultRow
 
@@ -70,8 +69,6 @@ def _not_found(detail: str = FAMILY_NOT_FOUND) -> HTTPException:
 
 def _get_artifact_storage(runtime: object) -> BookArtifactStorage:
     typed = cast(RuntimeWithDatabaseAndSettings, runtime)
-    storage_dir = getattr(typed.settings, "book_storage_dir", Path(".mura/books"))
-    return LocalBookArtifactStorage(storage_dir)
     return build_book_artifact_storage(typed.settings)
 
 
@@ -218,8 +215,7 @@ def register_book_routes(
         runtime: object = Depends(get_runtime_dependency),
     ) -> BookAccepted:
         typed = cast(RuntimeWithDatabaseAndSettings, runtime)
-        with typed.database.session_factory.begin() as session:
-            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+        with typed.database.session_factory() as session:
             resolved_ids = resolve_book_source_ids(
                 session,
                 family_id=family_id,
@@ -231,8 +227,6 @@ def register_book_routes(
                     detail="Archive has no eligible processed recordings for book generation.",
                 )
 
-        book_repo = BookRepository(typed.database)
-        job_repo = BookJobRepository(typed.database)
         compiled = compile_source_snapshot(
             typed.database,
             family_id=family_id,
@@ -240,15 +234,18 @@ def register_book_routes(
         )
 
         creation_repo = BookCreationRepository(typed.database)
-        result = creation_repo.create_queued_book(
-            family_id=family_id,
-            created_by_user_id=context.user_id,
-            title=payload.title,
-            subtitle=payload.subtitle,
-            output_language=payload.output_language.value,
-            target_word_count=payload.target_word_count,
-            compiled_snapshot=compiled,
-        )
+        with typed.database.session_factory.begin() as session:
+            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+            result = creation_repo.create_queued_book(
+                family_id=family_id,
+                created_by_user_id=context.user_id,
+                title=payload.title,
+                subtitle=payload.subtitle,
+                output_language=payload.output_language.value,
+                target_word_count=payload.target_word_count,
+                compiled_snapshot=compiled,
+                session=session,
+            )
         return BookAccepted(
             book_id=result.book.book_id,
             job_id=result.job.job_id,
@@ -533,14 +530,33 @@ def register_book_routes(
         orig_snapshot = snapshot_repo.get_snapshot(book_id)
 
         if payload and payload.requested_recording_ids is not None:
+            # Explicit source changes are intentional and may recover a legacy
+            # book whose original snapshot is unavailable.
             req_ids: list[str] | None = payload.requested_recording_ids
-        elif orig_snapshot and orig_snapshot.manifest:
-            req_ids = orig_snapshot.manifest.get("source_recording_ids")
         else:
-            req_ids = None
+            # Regeneration without an explicit source selection must preserve
+            # the original book's immutable source set. Never reinterpret a
+            # missing/corrupt snapshot as "use the current live archive".
+            if orig_snapshot is None or orig_snapshot.family_id != family_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=BOOK_SOURCE_SNAPSHOT_MISSING,
+                )
+            try:
+                frozen_source = BookSourceSnapshot.model_validate(orig_snapshot.payload)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=BOOK_SOURCE_SNAPSHOT_MISSING,
+                ) from exc
+            req_ids = list(frozen_source.manifest.source_recording_ids)
+            if frozen_source.family_id != family_id or not req_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=BOOK_SOURCE_SNAPSHOT_MISSING,
+                )
 
-        with typed.database.session_factory.begin() as session:
-            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+        with typed.database.session_factory() as session:
             resolved_ids = resolve_book_source_ids(
                 session,
                 family_id=family_id,
@@ -567,17 +583,20 @@ def register_book_routes(
         )
 
         creation_repo = BookCreationRepository(typed.database)
-        result = creation_repo.create_queued_book(
-            family_id=family_id,
-            created_by_user_id=context.user_id,
-            title=title,
-            subtitle=subtitle,
-            output_language=output_lang,
-            target_word_count=target_words,
-            compiled_snapshot=compiled,
-            supersedes_book_id=book.book_id,
-            source_snapshot_version=(book.source_snapshot_version or 1) + 1,
-        )
+        with typed.database.session_factory.begin() as session:
+            BookQuotaService.check_creation_allowed(session, family_id, typed.settings)
+            result = creation_repo.create_queued_book(
+                family_id=family_id,
+                created_by_user_id=context.user_id,
+                title=title,
+                subtitle=subtitle,
+                output_language=output_lang,
+                target_word_count=target_words,
+                compiled_snapshot=compiled,
+                supersedes_book_id=book.book_id,
+                source_snapshot_version=(book.source_snapshot_version or 1) + 1,
+                session=session,
+            )
         return BookAccepted(
             book_id=result.book.book_id,
             job_id=result.job.job_id,
@@ -596,17 +615,16 @@ def register_book_routes(
     ) -> None:
         typed = cast(RuntimeWithDatabaseAndSettings, runtime)
         book_repo = BookRepository(typed.database)
-        book = book_repo.get_book(family_id=family_id, book_id=book_id)
-        if book is None:
+        backend = getattr(
+            typed.settings.book_storage_backend,
+            "value",
+            typed.settings.book_storage_backend,
+        )
+        cleanup_jobs = book_repo.delete_family_book(
+            family_id=family_id,
+            book_id=book_id,
+            default_storage_backend=str(backend),
+            cleanup_max_attempts=typed.settings.storage_cleanup_max_attempts,
+        )
+        if cleanup_jobs is None:
             raise _not_found()
-
-        export_keys = book_repo.delete_family_book(family_id=family_id, book_id=book_id)
-        if export_keys is None:
-            raise _not_found()
-
-        artifact_storage = build_book_artifact_storage(typed.settings)
-        for key in export_keys:
-            try:
-                artifact_storage.delete(storage_key=key)
-            except Exception:
-                pass

@@ -26,7 +26,8 @@ from mura.storage.archive import (
     ArchivePersonRow,
     FamilyGraphEdgeRow,
 )
-from mura.storage.audio import LocalAudioStorage
+from mura.orchestration.cleanup import StorageCleanupWorker
+from mura.storage.audio import LegacyLocalAudioStorage, LocalAudioStorage
 from mura.storage.book import (
     BookChapterRepository,
     BookChapterRow,
@@ -35,6 +36,12 @@ from mura.storage.book import (
     BookRepository,
 )
 from mura.storage.book_artifacts import LocalBookArtifactStorage
+from mura.storage.cleanup import (
+    StorageCleanupJobRow,
+    StorageCleanupRepository,
+    StorageCleanupStatus,
+    StorageKind,
+)
 from mura.storage.database import (
     Database,
     PipelineResultRow,
@@ -69,6 +76,23 @@ def _settings(tmp_path: Path) -> CoreSettings:
             "BOOK_STORAGE_DIR": str(tmp_path / "book_artifacts"),
         }
     )
+
+
+def _drain_cleanup(test_setup: dict[str, object]) -> None:
+    db: Database = test_setup["database"]
+    audio_storage: LocalAudioStorage = test_setup["audio_storage"]
+    book_storage: LocalBookArtifactStorage = test_setup["book_storage"]
+    worker = StorageCleanupWorker(
+        repository=StorageCleanupRepository(db),
+        storage_targets={
+            (StorageKind.AUDIO.value, "local"): audio_storage,
+            (StorageKind.AUDIO.value, "legacy_local"): LegacyLocalAudioStorage(),
+            (StorageKind.BOOK_ARTIFACT.value, "local"): book_storage,
+        },
+        worker_id="worker_privacy_cleanup",
+    )
+    while worker.process_once():
+        pass
 
 
 @pytest.fixture
@@ -195,7 +219,13 @@ def test_delete_recording_success_and_storage_cleanup(test_setup: dict[str, obje
     )
     assert resp.status_code == 204
 
-    # Assert storage cleanup
+    # Relational deletion is synchronous; physical erasure is durable async work.
+    assert audio_storage.exists(stored.storage_key)
+    with db.session_factory() as session:
+        cleanup = list(session.query(StorageCleanupJobRow).all())
+        assert any(row.storage_key == stored.storage_key for row in cleanup)
+        assert all(row.status == StorageCleanupStatus.QUEUED.value for row in cleanup)
+    _drain_cleanup(test_setup)
     assert not audio_storage.exists(stored.storage_key)
 
     # Assert DB cleanup
@@ -307,7 +337,9 @@ def test_delete_book_success_and_artifacts_cleanup(test_setup: dict[str, object]
     )
     assert resp.status_code == 204
 
-    # Assert artifact storage cleanup
+    assert book_storage.exists(storage_key=pdf_key)
+    assert book_storage.exists(storage_key=epub_key)
+    _drain_cleanup(test_setup)
     assert not book_storage.exists(storage_key=pdf_key)
     assert not book_storage.exists(storage_key=epub_key)
 
@@ -483,7 +515,9 @@ def test_delete_family_success_complete_cleanup(test_setup: dict[str, object]) -
     )
     assert resp.status_code == 204
 
-    # Assert storage cleanup
+    assert audio_storage.exists(stored_audio.storage_key)
+    assert book_storage.exists(storage_key=stored_book_key)
+    _drain_cleanup(test_setup)
     assert not audio_storage.exists(stored_audio.storage_key)
     assert not book_storage.exists(storage_key=stored_book_key)
 

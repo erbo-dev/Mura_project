@@ -8,7 +8,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mura.domain.book_models import BookJobStatus, BookLanguage, BookStatus
+from mura.domain.book_models import (
+    BookJobStatus,
+    BookLanguage,
+    BookSourceSnapshot,
+    BookStatus,
+    CompiledSnapshot,
+    SnapshotManifest,
+)
 from mura.leases import LeaseOwnershipLost
 from mura.orchestration.books import BookJobWorker
 from mura.reliability.failures import (
@@ -53,9 +60,10 @@ def test_classify_provider_rate_limit_with_retry_after() -> None:
     assert classified.error_code == "provider_rate_limit"
 
 
-def test_classify_provider_server_error() -> None:
-    exc = Exception("Internal Server Error 503")
-    setattr(exc, "response", _make_mock_response(503))
+@pytest.mark.parametrize("status_code", [500, 501, 502, 503, 505, 599])
+def test_classify_provider_server_error(status_code: int) -> None:
+    exc = Exception(f"Provider Server Error {status_code}")
+    setattr(exc, "response", _make_mock_response(status_code))
     classified = classify_failure(exc)
     assert classified.category == FailureCategory.PROVIDER_SERVER_ERROR
     assert classified.disposition == FailureDisposition.RETRY
@@ -245,19 +253,24 @@ def test_book_worker_defers_on_retryable_provider_error(db: Database, tmp_path: 
     job_repo = BookJobRepository(db)
     artifact_storage = LocalBookArtifactStorage(tmp_path / "artifacts")
 
-    book = book_repo.create_book(
-        book_id="book_worker_retry_1",
+    compiled_snapshot = CompiledSnapshot(
+        snapshot=BookSourceSnapshot(
+            compiler_version="test-retry-policy",
+            family_id="fam_worker_retry",
+            manifest=SnapshotManifest(created_at=now),
+        ),
+        content_hash="0" * 64,
+    )
+    queued = BookCreationRepository(db).create_queued_book(
         family_id="fam_worker_retry",
         created_by_user_id="user_worker_retry",
         title="Retry Flow Book",
         output_language=BookLanguage.RU.value,
         target_word_count=5000,
+        compiled_snapshot=compiled_snapshot,
     )
-    job = job_repo.create_job(
-        book_id=book.book_id,
-        family_id="fam_worker_retry",
-        max_attempts=3,
-    )
+    book = queued.book
+    job = queued.job
 
     # Mock client that raises HTTP 429
     failing_client = MagicMock()

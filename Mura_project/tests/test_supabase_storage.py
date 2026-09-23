@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from mura.config import AudioStorageBackend, CoreSettings
+from mura.storage.storage_errors import StorageDeleteError
 from mura.storage.audio import (
     AudioStorageError,
     AudioTooLargeError,
@@ -286,3 +287,50 @@ def test_build_audio_storage_constructs_supabase_backend() -> None:
     assert backend.bucket == "test-bucket"
     assert backend.timeout_seconds == 45.0
 
+
+
+
+@pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503, 504])
+def test_supabase_delete_transient_errors_are_retryable(
+    storage: SupabaseAudioStorage,
+    mock_session: MagicMock,
+    status_code: int,
+) -> None:
+    response = MagicMock()
+    response.status_code = status_code
+    response.headers = {"Retry-After": "17"} if status_code == 429 else {}
+    mock_session.delete.return_value = response
+
+    with pytest.raises(StorageDeleteError) as exc_info:
+        storage.delete("object.wav")
+    assert exc_info.value.retryable is True
+    if status_code == 429:
+        assert exc_info.value.retry_after_seconds == 17.0
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_supabase_delete_auth_errors_are_terminal(
+    storage: SupabaseAudioStorage,
+    mock_session: MagicMock,
+    status_code: int,
+) -> None:
+    response = MagicMock()
+    response.status_code = status_code
+    response.headers = {}
+    mock_session.delete.return_value = response
+
+    with pytest.raises(StorageDeleteError) as exc_info:
+        storage.delete("object.wav")
+    assert exc_info.value.retryable is False
+    assert exc_info.value.code == "storage_auth_failed"
+
+
+def test_supabase_delete_timeout_is_retryable(
+    storage: SupabaseAudioStorage,
+    mock_session: MagicMock,
+) -> None:
+    mock_session.delete.side_effect = requests.Timeout("socket timeout")
+    with pytest.raises(StorageDeleteError) as exc_info:
+        storage.delete("object.wav")
+    assert exc_info.value.retryable is True
+    assert exc_info.value.code == "storage_timeout"

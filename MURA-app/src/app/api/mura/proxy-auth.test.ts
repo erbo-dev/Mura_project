@@ -188,6 +188,53 @@ describe("blocked surfaces", () => {
   });
 });
 
+describe("request bodies", () => {
+  it("forwards a JSON confirmation body on DELETE", async () => {
+    signedIn();
+    const fetchSpy = upstream();
+    vi.stubGlobal("fetch", fetchSpy);
+    const payload = JSON.stringify({ confirm_family_id: FAMILY });
+    const request = new Request(
+      `https://app.example/api/mura/v1/families/${FAMILY}`,
+      {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: payload,
+      },
+    );
+
+    const response = await handleCoreProxy(request, ["v1", "families", FAMILY]);
+
+    expect(response.status).toBe(200);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${CORE_URL}/v1/families/${FAMILY}`);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBe(payload);
+    expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+  });
+
+  it("keeps a bodyless DELETE bodyless", async () => {
+    signedIn();
+    const fetchSpy = upstream();
+    vi.stubGlobal("fetch", fetchSpy);
+    const request = new Request(
+      `https://app.example/api/mura/v1/families/${FAMILY}/recordings/${RECORDING}`,
+      { method: "DELETE" },
+    );
+
+    await handleCoreProxy(request, [
+      "v1",
+      "families",
+      FAMILY,
+      "recordings",
+      RECORDING,
+    ]);
+
+    const init = (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(init.body).toBeUndefined();
+  });
+});
+
 describe("responses never leak the token", () => {
   it("keeps the bearer out of an upstream failure", async () => {
     signedIn();

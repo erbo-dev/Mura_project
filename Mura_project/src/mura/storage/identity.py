@@ -25,6 +25,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mura.identity.auth import Principal, VerifiedIdentity
 from mura.identity.policy import FamilyRole
+from mura.storage.cleanup import (
+    StorageCleanupRepository,
+    StorageCleanupResourceType,
+    StorageKind,
+)
 from mura.storage.database import Base, Database, utcnow
 
 
@@ -33,6 +38,10 @@ class SoleOwnerError(RuntimeError):
 
 
 class MembershipNotFoundError(LookupError):
+    pass
+
+
+class FamilyDeleteAuthorizationError(PermissionError):
     pass
 
 
@@ -237,6 +246,18 @@ class IdentityRepository:
 
     # ------------------------------------------------------- owner invariants
 
+    def _lock_family(self, session: object, family_id: str) -> bool:
+        """Serialize membership mutation, creation quotas, and family deletion."""
+
+        return (
+            session.scalar(  # type: ignore[attr-defined]
+                select(FamilyRow.family_id)
+                .where(FamilyRow.family_id == family_id)
+                .with_for_update()
+            )
+            is not None
+        )
+
     def _lock_owners(self, session: object, family_id: str) -> int:
         """Count owners while holding their rows, so a race cannot pass twice.
 
@@ -259,6 +280,8 @@ class IdentityRepository:
         self, *, family_id: str, user_id: str, role: FamilyRole
     ) -> FamilyMembershipRow:
         with self.database.session_factory.begin() as session:
+            if not self._lock_family(session, family_id):
+                raise MembershipNotFoundError(family_id)
             owners = self._lock_owners(session, family_id)
             membership = session.scalar(
                 select(FamilyMembershipRow)
@@ -283,6 +306,8 @@ class IdentityRepository:
 
     def remove_member(self, *, family_id: str, user_id: str) -> None:
         with self.database.session_factory.begin() as session:
+            if not self._lock_family(session, family_id):
+                raise MembershipNotFoundError(family_id)
             owners = self._lock_owners(session, family_id)
             membership = session.scalar(
                 select(FamilyMembershipRow)
@@ -312,106 +337,217 @@ class IdentityRepository:
                 or 0
             )
 
-    def delete_family(self, family_id: str) -> tuple[list[str], list[str]] | None:
-        """Deletes a family and all associated data, returning (audio_storage_keys, book_export_storage_keys)."""
+    def delete_family(
+        self,
+        family_id: str,
+        *,
+        requesting_user_id: str | None = None,
+        default_audio_backend: str = "local",
+        default_book_backend: str = "local",
+        cleanup_repository: StorageCleanupRepository | None = None,
+        cleanup_max_attempts: int = 8,
+    ) -> list[str] | None:
+        """Delete a family and atomically persist every physical cleanup job.
+
+        When requesting_user_id is supplied (the API path), authorization and
+        the sole-owner invariant are re-checked while the Family row lock is
+        held. Membership mutations take this same lock, eliminating the race
+        between an owner-count read and family deletion.
+        """
+
+        from mura.observability import ProcessingTraceEventRow
+        from mura.storage.archive import (
+            ArchiveClaimRow,
+            ArchiveConflictRow,
+            ArchiveCorrectionRow,
+            ArchivePersonRow,
+            FamilyGraphEdgeRow,
+        )
+        from mura.storage.book import (
+            BookChapterRow,
+            BookContinuityStateRow,
+            BookExportRow,
+            BookJobRow,
+            BookPlanRow,
+            BookRow,
+            BookSourceSnapshotRow,
+        )
+        from mura.storage.book_artifacts import build_book_storage_key
+        from mura.storage.database import PipelineResultRow, ProcessingJobRow, RecordingRow
+        from mura.domain.book_models import ExportFormat
+
+        cleanup_repo = cleanup_repository or StorageCleanupRepository(self.database)
         with self.database.session_factory.begin() as session:
             family = session.scalar(
-                select(FamilyRow).where(FamilyRow.family_id == family_id)
+                select(FamilyRow)
+                .where(FamilyRow.family_id == family_id)
+                .with_for_update()
             )
             if family is None:
                 return None
 
-            # 1. Collect recording audio storage keys
-            from mura.storage.database import PipelineResultRow, ProcessingJobRow, RecordingRow
+            if requesting_user_id is not None:
+                requester = session.scalar(
+                    select(FamilyMembershipRow)
+                    .where(
+                        FamilyMembershipRow.family_id == family_id,
+                        FamilyMembershipRow.user_id == requesting_user_id,
+                    )
+                    .with_for_update()
+                )
+                if requester is None:
+                    raise MembershipNotFoundError(requesting_user_id)
+                if requester.role != FamilyRole.OWNER.value:
+                    raise FamilyDeleteAuthorizationError(requesting_user_id)
+                if self._lock_owners(session, family_id) != 1:
+                    raise SoleOwnerError("family deletion requires the sole owner")
 
-            recording_rows = list(
+            recordings = list(
                 session.scalars(
-                    select(RecordingRow).where(RecordingRow.family_id == family_id)
+                    select(RecordingRow)
+                    .where(RecordingRow.family_id == family_id)
+                    .with_for_update()
                 ).all()
             )
-            audio_keys = [
-                r.storage_key or r.audio_path
-                for r in recording_rows
-                if (r.storage_key or r.audio_path)
-            ]
-            recording_ids = [r.recording_id for r in recording_rows]
-
-            # 2. Collect book export artifact keys
-            from mura.storage.book import (
-                BookChapterRow,
-                BookContinuityStateRow,
-                BookExportRow,
-                BookJobRow,
-                BookPlanRow,
-                BookRow,
-                BookSourceSnapshotRow,
-            )
-
-            book_rows = list(
+            books = list(
                 session.scalars(
-                    select(BookRow).where(BookRow.family_id == family_id)
+                    select(BookRow)
+                    .where(BookRow.family_id == family_id)
+                    .with_for_update()
                 ).all()
             )
-            book_ids = [b.book_id for b in book_rows]
-            export_keys: list[str] = []
-            if book_ids:
-                export_keys = list(
-                    session.scalars(
-                        select(BookExportRow.storage_key).where(
-                            BookExportRow.book_id.in_(book_ids),
-                            BookExportRow.storage_key.is_not(None),
-                        )
-                    ).all()
+            recording_ids = [row.recording_id for row in recordings]
+            book_ids = [row.book_id for row in books]
+
+            cleanup_items: list[dict[str, str]] = []
+            for recording in recordings:
+                key = recording.storage_key or recording.audio_path
+                if not key:
+                    continue
+                backend = (
+                    recording.storage_backend or default_audio_backend
+                    if recording.storage_key
+                    else "legacy_local"
+                )
+                cleanup_items.append(
+                    {
+                        "resource_type": StorageCleanupResourceType.RECORDING_AUDIO.value,
+                        "storage_kind": StorageKind.AUDIO.value,
+                        "storage_backend": str(backend),
+                        "storage_key": str(key),
+                    }
                 )
 
-            # 3. Clean up DB records
+            exports = []
+            if book_ids:
+                exports = list(
+                    session.scalars(
+                        select(BookExportRow).where(BookExportRow.book_id.in_(book_ids))
+                    ).all()
+                )
+            for export in exports:
+                if not export.storage_key:
+                    continue
+                cleanup_items.append(
+                    {
+                        "resource_type": (
+                            StorageCleanupResourceType.BOOK_PDF.value
+                            if export.format == "pdf"
+                            else StorageCleanupResourceType.BOOK_EPUB.value
+                        ),
+                        "storage_kind": StorageKind.BOOK_ARTIFACT.value,
+                        "storage_backend": export.storage_backend or default_book_backend,
+                        "storage_key": export.storage_key,
+                    }
+                )
+            for book in books:
+                book.cancel_requested_at = utcnow()
+                for export_format, resource_type in (
+                    (ExportFormat.PDF, StorageCleanupResourceType.BOOK_PDF),
+                    (ExportFormat.EPUB, StorageCleanupResourceType.BOOK_EPUB),
+                ):
+                    cleanup_items.append(
+                        {
+                            "resource_type": resource_type.value,
+                            "storage_kind": StorageKind.BOOK_ARTIFACT.value,
+                            "storage_backend": default_book_backend,
+                            "storage_key": build_book_storage_key(
+                                family_id=family_id,
+                                book_id=book.book_id,
+                                export_format=export_format,
+                            ),
+                        }
+                    )
+
+            cleanup_rows = cleanup_repo.enqueue_many(
+                cleanup_items,
+                max_attempts=cleanup_max_attempts,
+                session=session,
+            )
+
             if book_ids:
                 session.execute(delete(BookExportRow).where(BookExportRow.book_id.in_(book_ids)))
-                session.execute(delete(BookContinuityStateRow).where(BookContinuityStateRow.book_id.in_(book_ids)))
+                session.execute(
+                    delete(BookContinuityStateRow).where(
+                        BookContinuityStateRow.book_id.in_(book_ids)
+                    )
+                )
                 session.execute(delete(BookChapterRow).where(BookChapterRow.book_id.in_(book_ids)))
                 session.execute(delete(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids)))
-                session.execute(delete(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids)))
+                session.execute(
+                    delete(BookSourceSnapshotRow).where(
+                        BookSourceSnapshotRow.book_id.in_(book_ids)
+                    )
+                )
                 session.execute(delete(BookJobRow).where(BookJobRow.book_id.in_(book_ids)))
                 session.execute(delete(BookRow).where(BookRow.family_id == family_id))
 
             if recording_ids:
-                try:
-                    from mura.observability import ProcessingTraceRow
-
-                    session.execute(delete(ProcessingTraceRow).where(ProcessingTraceRow.recording_id.in_(recording_ids)))
-                except Exception:
-                    pass
-                try:
-                    from mura.storage.archive import ArchiveClaimRow
-
-                    session.execute(delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id.in_(recording_ids)))
-                except Exception:
-                    pass
-                session.execute(delete(ProcessingJobRow).where(ProcessingJobRow.recording_id.in_(recording_ids)))
-                session.execute(delete(PipelineResultRow).where(PipelineResultRow.recording_id.in_(recording_ids)))
+                session.execute(
+                    delete(ProcessingTraceEventRow).where(
+                        ProcessingTraceEventRow.recording_id.in_(recording_ids)
+                    )
+                )
+                session.execute(
+                    delete(ArchiveClaimRow).where(
+                        ArchiveClaimRow.recording_id.in_(recording_ids)
+                    )
+                )
+                session.execute(
+                    delete(ProcessingJobRow).where(
+                        ProcessingJobRow.recording_id.in_(recording_ids)
+                    )
+                )
+                session.execute(
+                    delete(PipelineResultRow).where(
+                        PipelineResultRow.recording_id.in_(recording_ids)
+                    )
+                )
                 session.execute(delete(RecordingRow).where(RecordingRow.family_id == family_id))
 
-            try:
-                from mura.storage.archive import (
-                    ArchiveClaimRow,
-                    ArchiveConflictRow,
-                    ArchiveCorrectionRow,
-                    ArchivePersonRow,
-                    FamilyGraphEdgeRow,
+            session.execute(
+                delete(ArchiveCorrectionRow).where(ArchiveCorrectionRow.family_id == family_id)
+            )
+            session.execute(
+                delete(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id)
+            )
+            session.execute(
+                delete(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == family_id)
+            )
+            session.execute(
+                delete(ArchiveClaimRow).where(ArchiveClaimRow.family_id == family_id)
+            )
+            session.execute(
+                delete(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id)
+            )
+            session.execute(
+                delete(FamilyMembershipRow).where(
+                    FamilyMembershipRow.family_id == family_id
                 )
-
-                session.execute(delete(ArchiveCorrectionRow).where(ArchiveCorrectionRow.family_id == family_id))
-                session.execute(delete(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id))
-                session.execute(delete(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == family_id))
-                session.execute(delete(ArchiveClaimRow).where(ArchiveClaimRow.family_id == family_id))
-                session.execute(delete(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id))
-            except Exception:
-                pass
-
-            session.execute(delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id))
+            )
             session.delete(family)
 
-            return [k for k in audio_keys if k], [k for k in export_keys if k]
+            return [row.cleanup_job_id for row in cleanup_rows]
 
 
 def _principal(user: UserRow) -> Principal:

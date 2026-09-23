@@ -20,6 +20,7 @@ from mura.book.continuity import (
     update_continuity,
 )
 from mura.book.exporter import (
+    BookExportCancelled,
     ExportEngineUnavailable,
     ExportService,
     PDFRenderer,
@@ -29,7 +30,6 @@ from mura.book.prompts import (
     BOOK_PLANNER_PROMPT_VERSION,
 )
 from mura.book.reviewer import review_chapter
-from mura.book.snapshot import compile_source_snapshot
 from mura.book.writer import repair_chapter, write_chapter
 from mura.domain.book_models import (
     BookBlueprint,
@@ -47,7 +47,6 @@ from mura.domain.book_models import (
 )
 from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
 from mura.reliability.failures import calculate_retry_delay, classify_failure
-from mura.logging import WorkerBookJobContextManager
 from mura.logging import BookChapterContextManager, WorkerBookJobContextManager
 from mura.sentry import capture_exception
 from mura.storage.ai_usage import AIUsageLedger
@@ -63,8 +62,8 @@ from mura.storage.book import (
     BookSourceSnapshotRepository,
 )
 from mura.storage.book_artifacts import BookArtifactStorage
-from mura.storage.database import Database
-from datetime import datetime, timedelta
+from datetime import timedelta
+
 from mura.storage.database import Database, utcnow
 
 logger = logging.getLogger(__name__)
@@ -180,9 +179,20 @@ class BookJobWorker:
                 self._stop_event.wait(self.poll_interval_seconds)
 
     def _check_cancellation(self, job: BookJobRow, book_id: str) -> bool:
+        # Deletion removes the Book and its queue row atomically. Missing means
+        # deletion already won; detached work must stop without recreating state.
+        if self.book_repo.get_book_unscoped(book_id) is None:
+            logger.info(
+                "book_job_abandoned_deleted",
+                extra={"event": "book_job_abandoned_deleted", "book_id": book_id},
+            )
+            return True
         if self.book_repo.is_cancel_requested(book_id):
-            self.job_repo.cancel_job(job.job_id, lease_owner=self.worker_id)
-            self.book_repo.cancel_book(book_id)
+            self.job_repo.cancel_book_and_job(
+                job.job_id,
+                book_id=book_id,
+                lease_owner=self.worker_id,
+            )
             logger.info(
                 "book_cancelled",
                 extra={
@@ -215,6 +225,14 @@ class BookJobWorker:
         ):
             try:
                 self._execute_job_attempt(job, book, attempt)
+            except BookExportCancelled:
+                # Export publication discovered cancellation/deletion after a
+                # potentially long render. Convert an explicit cancellation to
+                # CANCELLED; deletion is already represented by the missing
+                # Book row and must simply abandon detached work.
+                if self._check_cancellation(job, book.book_id):
+                    return
+                raise
             except LeaseOwnershipLost as lease_exc:
                 logger.warning(
                     "book_job_lease_lost",
@@ -227,6 +245,16 @@ class BookJobWorker:
                 )
                 return
             except Exception as exc:
+                if self.book_repo.get_book_unscoped(book.book_id) is None:
+                    logger.info(
+                        "book_job_abandoned_deleted",
+                        extra={
+                            "event": "book_job_abandoned_deleted",
+                            "book_id": book.book_id,
+                            "job_id": job.job_id,
+                        },
+                    )
+                    return
                 classified = classify_failure(exc)
                 capture_exception(
                     exc,
@@ -320,37 +348,18 @@ class BookJobWorker:
         if self._check_cancellation(job, book.book_id):
             return
 
-        # 1. PREPARING_SOURCES (Snapshot Compilation / Verification)
+        # 1. PREPARING_SOURCES (immutable snapshot verification)
         snapshot_row = self.snapshot_repo.get_snapshot(book.book_id)
         if snapshot_row is None:
-            self.book_repo.update_stage(
-                book.book_id,
-                stage=BookStage.PREPARING_SOURCES.value,
-                status=BookStatus.PLANNING.value,
-            )
-            self.job_repo.update_job_stage(
-                job.job_id,
-                stage=BookStage.PREPARING_SOURCES.value,
-                lease_owner=self.worker_id,
-            )
-            compiled = compile_source_snapshot(
-                self.db,
-                family_id=book.family_id,
-            )
-            snapshot = compiled.snapshot
-            self.snapshot_repo.save_snapshot(
-                book_id=book.book_id,
-                family_id=book.family_id,
-                compiler_version=snapshot.compiler_version,
-                content_hash=compiled.content_hash,
-                payload=snapshot.model_dump(mode="json"),
-                manifest=snapshot.manifest.model_dump(mode="json"),
-                source_recording_count=len(snapshot.manifest.source_recording_ids),
-                source_story_count=len(snapshot.manifest.source_story_ids),
-                source_claim_count=len(snapshot.manifest.source_claim_ids),
-            )
-        else:
-            snapshot = BookSourceSnapshot.model_validate(snapshot_row.payload)
+            # A queued book must already own the exact source snapshot compiled
+            # by the API. Recompiling here from the live archive would allow
+            # later or unrequested recordings to enter an existing book.
+            raise RuntimeError(f"source snapshot missing for book {book.book_id}")
+        if snapshot_row.family_id != book.family_id:
+            raise RuntimeError(f"source snapshot family mismatch for book {book.book_id}")
+        snapshot = BookSourceSnapshot.model_validate(snapshot_row.payload)
+        if snapshot.family_id != book.family_id:
+            raise RuntimeError(f"source snapshot payload family mismatch for book {book.book_id}")
 
         if self._check_cancellation(job, book.book_id):
             return
@@ -362,6 +371,8 @@ class BookJobWorker:
                 book.book_id,
                 stage=BookStage.PLANNING.value,
                 status=BookStatus.PLANNING.value,
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
             self.job_repo.update_job_stage(
                 job.job_id,
@@ -403,15 +414,22 @@ class BookJobWorker:
                     and isinstance(self.deepseek_client.model, str)
                     else "deepseek-chat"
                 ),
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
             chapter_plans = [ch.model_dump(mode="json") for ch in blueprint.chapters]
             self.chapter_repo.create_chapter_stubs(
-                book_id=book.book_id, chapter_plans=chapter_plans
+                book_id=book.book_id,
+                chapter_plans=chapter_plans,
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
             self.book_repo.update_stage(
                 book.book_id,
                 stage=BookStage.PLANNING.value,
                 chapters_total=len(blueprint.chapters),
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
         else:
             blueprint = BookBlueprint.model_validate(plan_row.blueprint)
@@ -444,6 +462,8 @@ class BookJobWorker:
                             state=continuity.model_dump(mode="json"),
                             prompt_version="initial",
                             model="rule_based",
+                            job_id=job.job_id,
+                            lease_owner=self.worker_id,
                         )
                     else:
                         continuity = ContinuityState.model_validate(continuity_row.state)
@@ -468,6 +488,8 @@ class BookJobWorker:
                     stage=BookStage.WRITING_CHAPTER.value,
                     status=BookStatus.WRITING.value,
                     current_chapter_number=chapter.chapter_number,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
                 self.job_repo.update_job_stage(
                     job.job_id,
@@ -491,6 +513,8 @@ class BookJobWorker:
                         writer_prompt_version=write_telemetry.get("prompt_version", "v1"),
                         writer_model=write_telemetry.get("model", "deepseek-chat"),
                         repair_attempts=0,
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
                 else:
                     draft = ChapterDraft(
@@ -507,6 +531,8 @@ class BookJobWorker:
                     book.book_id,
                     stage=BookStage.REVIEWING_CHAPTER.value,
                     current_chapter_number=chapter.chapter_number,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
                 self.job_repo.update_job_stage(
                     job.job_id,
@@ -532,6 +558,8 @@ class BookJobWorker:
                     gate_report=gate_report.model_dump(mode="json"),
                     reviewer_prompt_version=review_telemetry.get("prompt_version"),
                     reviewer_model=review_telemetry.get("model"),
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
                 # Repairing if needed
@@ -547,6 +575,8 @@ class BookJobWorker:
                         book.book_id,
                         stage=BookStage.REPAIRING_CHAPTER.value,
                         current_chapter_number=chapter.chapter_number,
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
                     self.job_repo.update_job_stage(
                         job.job_id,
@@ -579,6 +609,8 @@ class BookJobWorker:
                         writer_prompt_version=rep_telemetry.get("prompt_version"),
                         writer_model=rep_telemetry.get("model"),
                         repair_attempts=repair_count,
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
 
                     # Re-review
@@ -599,6 +631,8 @@ class BookJobWorker:
                         gate_report=gate_report.model_dump(mode="json"),
                         reviewer_prompt_version=review_telemetry.get("prompt_version"),
                         reviewer_model=review_telemetry.get("model"),
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
 
                 if not gate_report.passed:
@@ -608,6 +642,8 @@ class BookJobWorker:
                         error_code="GATE_FAILED",
                         gate_report=gate_report.model_dump(mode="json"),
                         review=review_result.model_dump(mode="json"),
+                        job_id=job.job_id,
+                        lease_owner=self.worker_id,
                     )
                     raise RuntimeError(
                         f"Chapter {chapter.chapter_number} failed validation "
@@ -622,6 +658,8 @@ class BookJobWorker:
                     word_count=len(draft.text.split()),
                     review=review_result.model_dump(mode="json"),
                     gate_report=gate_report.model_dump(mode="json"),
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
                 # Update continuity
@@ -629,6 +667,8 @@ class BookJobWorker:
                     book.book_id,
                     stage=BookStage.UPDATING_CONTINUITY.value,
                     current_chapter_number=chapter.chapter_number,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
                 self.job_repo.update_job_stage(
                     job.job_id,
@@ -648,6 +688,8 @@ class BookJobWorker:
                     state=new_continuity.model_dump(mode="json"),
                     prompt_version=cont_telemetry.get("prompt_version", "v1"),
                     model=cont_telemetry.get("model", "deepseek-chat"),
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
                 # Update book approved chapters and words
@@ -661,6 +703,8 @@ class BookJobWorker:
                     stage=BookStage.WRITING_CHAPTER.value,
                     chapters_approved=len(approved_chs),
                     word_count=total_words,
+                    job_id=job.job_id,
+                    lease_owner=self.worker_id,
                 )
 
         if self._check_cancellation(job, book.book_id):
@@ -671,6 +715,8 @@ class BookJobWorker:
             book.book_id,
             stage=BookStage.EXPORTING_PDF.value,
             status=BookStatus.EXPORTING.value,
+            job_id=job.job_id,
+            lease_owner=self.worker_id,
         )
         self.job_repo.update_job_stage(
             job.job_id,
@@ -682,6 +728,8 @@ class BookJobWorker:
                 family_id=book.family_id,
                 book_id=book.book_id,
                 export_format=ExportFormat.PDF,
+                job_id=job.job_id,
+                lease_owner=self.worker_id,
             )
         except ExportEngineUnavailable as exc:
             logger.warning("PDF renderer unavailable, skipping PDF export: %s", exc)
@@ -694,6 +742,8 @@ class BookJobWorker:
             book.book_id,
             stage=BookStage.EXPORTING_EPUB.value,
             status=BookStatus.EXPORTING.value,
+            job_id=job.job_id,
+            lease_owner=self.worker_id,
         )
         self.job_repo.update_job_stage(
             job.job_id,
@@ -704,6 +754,8 @@ class BookJobWorker:
             family_id=book.family_id,
             book_id=book.book_id,
             export_format=ExportFormat.EPUB,
+            job_id=job.job_id,
+            lease_owner=self.worker_id,
         )
 
         if self._check_cancellation(job, book.book_id):
@@ -730,8 +782,12 @@ class BookJobWorker:
         ]
         final_words = sum(ch.word_count for ch in approved_chs)
 
-        self.job_repo.complete_job(job.job_id, lease_owner=self.worker_id)
-        self.book_repo.complete_book(book.book_id, word_count=final_words)
+        self.job_repo.complete_book_and_job(
+            job.job_id,
+            book_id=book.book_id,
+            word_count=final_words,
+            lease_owner=self.worker_id,
+        )
 
         logger.info(
             "book_completed",

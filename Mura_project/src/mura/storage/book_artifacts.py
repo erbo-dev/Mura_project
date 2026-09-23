@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
 import re
 from typing import Any, Protocol
 
 import requests
 
 from mura.domain.book_models import ExportFormat
+from mura.storage.storage_errors import StorageDeleteError, storage_delete_http_error
 
 _SAFE_SEGMENT = re.compile(r"\A[A-Za-z0-9_-]{1,128}\Z")
 
@@ -40,6 +40,16 @@ def _validate_storage_key(storage_key: str) -> None:
     parts = safe.split("/")
     if any(p in {"", ".", ".."} for p in parts):
         raise ValueError(f"Storage path traversal detected for key: {storage_key}")
+
+
+def build_book_storage_key(
+    *,
+    family_id: str,
+    book_id: str,
+    export_format: ExportFormat,
+) -> str:
+    _validate_ids(family_id, book_id)
+    return f"families/{family_id}/books/{book_id}/book.{export_format.value}"
 
 
 class BookArtifactStorage(Protocol):
@@ -96,9 +106,11 @@ class LocalBookArtifactStorage:
         export_format: ExportFormat,
         data: bytes,
     ) -> str:
-        _validate_ids(family_id, book_id)
-        filename = f"book.{export_format.value}"
-        storage_key = f"families/{family_id}/books/{book_id}/{filename}"
+        storage_key = build_book_storage_key(
+            family_id=family_id,
+            book_id=book_id,
+            export_format=export_format,
+        )
         target_path = self._key_to_path(storage_key)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(data)
@@ -119,18 +131,34 @@ class LocalBookArtifactStorage:
     def delete(self, *, storage_key: str) -> bool:
         try:
             target_path = self._key_to_path(storage_key)
-            if not target_path.exists():
-                return False
             target_path.unlink()
-            for parent in (target_path.parent, target_path.parent.parent):
-                try:
-                    if parent != self.base_dir and parent.is_relative_to(self.base_dir):
-                        parent.rmdir()
-                except OSError:
-                    break
-            return True
-        except Exception:
+        except FileNotFoundError:
             return False
+        except PermissionError as exc:
+            raise StorageDeleteError(
+                code="storage_permission_denied",
+                retryable=False,
+                message="local storage deletion permission denied",
+            ) from exc
+        except ValueError as exc:
+            raise StorageDeleteError(
+                code="storage_invalid_key",
+                retryable=False,
+                message="local storage key is invalid",
+            ) from exc
+        except OSError as exc:
+            raise StorageDeleteError(
+                code="storage_io_error",
+                retryable=True,
+                message="local storage deletion failed",
+            ) from exc
+        for parent in (target_path.parent, target_path.parent.parent):
+            try:
+                if parent != self.base_dir and parent.is_relative_to(self.base_dir):
+                    parent.rmdir()
+            except OSError:
+                break
+        return True
 
 
 class SupabaseBookArtifactStorage:
@@ -245,29 +273,49 @@ class SupabaseBookArtifactStorage:
     def delete(self, *, storage_key: str) -> bool:
         try:
             _validate_storage_key(storage_key)
-            url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
+        except ValueError as exc:
+            raise StorageDeleteError(
+                code="storage_invalid_key",
+                retryable=False,
+                message="book artifact storage key is invalid",
+            ) from exc
+
+        url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
+        try:
             response = self.session.delete(
                 url,
                 headers=self._headers(),
                 timeout=(5.0, 15.0),
             )
-            if response.status_code in {200, 204}:
-                return True
-            if response.status_code == 404:
-                return False
+        except requests.Timeout as exc:
+            raise StorageDeleteError(
+                code="storage_timeout",
+                retryable=True,
+                message="storage deletion timed out",
+            ) from exc
+        except requests.RequestException as exc:
+            raise StorageDeleteError(
+                code="storage_unavailable",
+                retryable=True,
+                message="storage deletion transport failed",
+            ) from exc
+
+        if response.status_code in {200, 204}:
+            return True
+        if response.status_code == 404:
             return False
-        except Exception:
-            return False
+        raise storage_delete_http_error(response.status_code, response.headers)
 
 
 def build_book_artifact_storage(settings: Any) -> BookArtifactStorage:
-    """Construct book artifact storage based on settings."""
-    backend_val = getattr(settings, "audio_storage_backend", None)
-    is_supabase = (
-        backend_val == "supabase"
-        or getattr(backend_val, "value", None) == "supabase"
+    """Construct book artifact storage from BOOK_STORAGE_BACKEND."""
+    backend_val = getattr(
+        settings,
+        "book_storage_backend",
+        BookArtifactStorageBackend.LOCAL,
     )
-    if is_supabase:
+    backend = getattr(backend_val, "value", backend_val)
+    if backend == BookArtifactStorageBackend.SUPABASE.value:
         url = getattr(settings, "supabase_url", None)
         key = getattr(settings, "supabase_service_role_key", None)
         if not url or not key:
@@ -283,5 +331,8 @@ def build_book_artifact_storage(settings: Any) -> BookArtifactStorage:
             timeout_seconds=timeout,
         )
 
-    base_dir = getattr(settings, "book_storage_dir", Path(".mura/books"))
-    return LocalBookArtifactStorage(base_dir)
+    if backend == BookArtifactStorageBackend.LOCAL.value:
+        base_dir = getattr(settings, "book_storage_dir", Path(".mura/books"))
+        return LocalBookArtifactStorage(base_dir)
+
+    raise ValueError(f"Unsupported BOOK_STORAGE_BACKEND: {backend!r}")

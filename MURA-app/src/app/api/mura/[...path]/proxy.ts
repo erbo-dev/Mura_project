@@ -205,12 +205,19 @@ export async function handleCoreProxy(request: Request, path: string[]): Promise
   });
 
   let body: BodyInit | undefined;
-  if (request.method === "POST" || request.method === "PATCH") {
+  if (
+    request.method === "POST" ||
+    request.method === "PATCH" ||
+    request.method === "DELETE"
+  ) {
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       body = await request.text();
       headers.set("content-type", "application/json");
-    } else {
+    } else if (
+      contentType.includes("multipart/form-data") ||
+      contentType.includes("application/x-www-form-urlencoded")
+    ) {
       body = await request.formData();
     }
   }
