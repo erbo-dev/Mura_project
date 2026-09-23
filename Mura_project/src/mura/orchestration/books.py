@@ -30,6 +30,7 @@ from mura.book.prompts import (
     BOOK_PLANNER_PROMPT_VERSION,
 )
 from mura.book.reviewer import review_chapter
+from mura.book.snapshot_validation import validate_snapshot_closure
 from mura.book.writer import repair_chapter, write_chapter
 from mura.domain.book_models import (
     BookBlueprint,
@@ -360,6 +361,12 @@ class BookJobWorker:
         snapshot = BookSourceSnapshot.model_validate(snapshot_row.payload)
         if snapshot.family_id != book.family_id:
             raise RuntimeError(f"source snapshot payload family mismatch for book {book.book_id}")
+        # Defense in depth for queued books created before Phase 2.8 or rows
+        # corrupted after persistence. Reclaiming work never weakens closure.
+        validate_snapshot_closure(
+            snapshot,
+            expected_recording_ids=snapshot.manifest.source_recording_ids,
+        )
 
         if self._check_cancellation(job, book.book_id):
             return
