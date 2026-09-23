@@ -20,10 +20,17 @@ from mura.book.relationship_semantics import canonical_relationship
 
 
 _BOOK_GROUNDED_EVIDENCE_CLASSES = {
-    EvidenceClass.A_EXPLICIT.value,
-    EvidenceClass.B_MORPHOLOGICALLY_EXPLICIT.value,
-    EvidenceClass.C_SPEAKER_ANCHORED.value,
+    EvidenceClass.A_EXPLICIT.value.casefold(),
+    EvidenceClass.B_MORPHOLOGICALLY_EXPLICIT.value.casefold(),
+    EvidenceClass.C_SPEAKER_ANCHORED.value.casefold(),
 }
+
+
+def _normalized_evidence_class(value: str) -> str:
+    # Historical/synthetic fixtures used enum-name casing (A_EXPLICIT) while
+    # production rows use enum values (A_explicit). They carry the same
+    # evidence strength; normalize spelling, not semantics.
+    return str(value or "").strip().casefold()
 
 
 class BookClaimLike(Protocol):
@@ -64,7 +71,7 @@ def book_truth_fields_eligible(
         return False
     if assertion_mode not in (None, AssertionMode.EXPLICIT.value):
         return False
-    if evidence_class not in _BOOK_GROUNDED_EVIDENCE_CLASSES:
+    if _normalized_evidence_class(evidence_class) not in _BOOK_GROUNDED_EVIDENCE_CLASSES:
         return False
     return bool(evidence_ids)
 
