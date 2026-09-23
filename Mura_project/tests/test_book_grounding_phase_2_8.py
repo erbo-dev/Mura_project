@@ -606,3 +606,9 @@ def test_known_person_supported_profession_paraphrase_is_allowed() -> None:
     snapshot.claims[0].summary = "Алихан был врачом."
     report = _gate("Алихан работал врачом.", snapshot=snapshot)
     assert GateCode.FACTUAL_ASSERTION not in {issue.code for issue in report.blockers}
+
+
+
+def test_fabricated_inline_dash_dialogue_after_colon_is_blocked() -> None:
+    report = _gate("Он сказал: — Я обязательно вернусь, — и ушёл.")
+    assert GateCode.QUOTE in {issue.code for issue in report.blockers}
