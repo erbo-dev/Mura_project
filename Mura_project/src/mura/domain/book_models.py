@@ -356,6 +356,7 @@ class SnapshotClaim(StrictModel):
     evidence_class: str
     assertion_mode: str | None = None
     verification_status: str = "unreviewed"
+    archive_status: str = "active"
     evidence_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
 
