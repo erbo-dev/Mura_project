@@ -1593,6 +1593,40 @@ class BookJobRepository:
             job.last_heartbeat_at = None
             job.updated_at = now
 
+    def cancel_book_and_job(
+        self,
+        job_id: str,
+        *,
+        book_id: str,
+        lease_owner: str,
+    ) -> None:
+        """Atomically cancel the durable Book and its owned queue job."""
+
+        now = utcnow()
+        with self.database.session_factory.begin() as session:
+            _guard_worker_write(
+                session,
+                book_id=book_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+            )
+            book = session.get(BookRow, book_id)
+            job = session.get(BookJobRow, job_id)
+            if book is None or job is None:
+                raise LookupError(f"unknown book/job: {book_id}/{job_id}")
+
+            book.status = BookStatusEnum.CANCELLED.value
+            book.stage = BookStageEnum.CANCELLED.value
+            book.updated_at = now
+
+            job.status = BookJobStatusEnum.CANCELLED.value
+            job.stage = BookStageEnum.CANCELLED.value
+            job.lease_owner = None
+            job.claimed_at = None
+            job.lease_expires_at = None
+            job.last_heartbeat_at = None
+            job.updated_at = now
+
     def cancel_job(
         self,
         job_id: str,
