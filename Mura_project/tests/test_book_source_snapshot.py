@@ -482,3 +482,82 @@ def test_no_synthetic_corpus_reads():
     assert "MURA/samples" not in src
     assert "MURA\\samples" not in src
     assert "synthetic" not in src.lower()
+
+
+
+def test_selected_source_snapshot_does_not_import_excluded_family_graph_context():
+    """Regression: a Book selecting A+B must not inherit C-only people/edges."""
+    bundle = GroundingBundle(
+        family_id=FAMILY_A,
+        recordings=[
+            {"recording_id": "rec_a", "family_id": FAMILY_A, "speaker_name": "Narrator"},
+            {"recording_id": "rec_b", "family_id": FAMILY_A, "speaker_name": "Narrator"},
+        ],
+        pipeline_payloads={
+            "rec_a": {
+                "extraction": {
+                    "evidence_spans": [
+                        {"evidence_id": "ev_a", "text": "Алихан — мой дед."}
+                    ]
+                }
+            },
+            "rec_b": {
+                "extraction": {
+                    "evidence_spans": [
+                        {"evidence_id": "ev_b", "text": "Мы жили в Семее."}
+                    ]
+                }
+            },
+        },
+        people=[
+            {
+                "person_id": "per_alikhan",
+                "family_id": FAMILY_A,
+                "canonical_name": "Алихан",
+                "normalized_name": "алихан",
+                "aliases": [],
+                "verified_aliases": [],
+                "category": "core",
+                "source_recording_ids": ["rec_a", "rec_c"],
+            },
+            {
+                "person_id": "per_murat",
+                "family_id": FAMILY_A,
+                "canonical_name": "Мурат",
+                "normalized_name": "мурат",
+                "aliases": [],
+                "verified_aliases": [],
+                "category": "core",
+                "source_recording_ids": ["rec_c"],
+            },
+        ],
+        relationships=[
+            {
+                "edge_id": "edge_alikhan_murat",
+                "family_id": FAMILY_A,
+                "relationship_type": "sibling",
+                "subject_person_id": "per_alikhan",
+                "subject_role": "brother",
+                "object_person_id": "per_murat",
+                "object_role": "brother",
+                "source_claim_ids": ["cl_c_sibling"],
+            }
+        ],
+        claims=[],
+        stories=[],
+        events=[],
+        corrections=[],
+        conflicts=[],
+        unresolved_questions=[],
+        resolved_mentions={},
+    )
+
+    snapshot = compile_source_snapshot(
+        bundle,
+        recording_ids=["rec_a", "rec_b"],
+        created_at=datetime(2026, 9, 23, tzinfo=UTC),
+    ).snapshot
+
+    assert snapshot.manifest.source_recording_ids == ["rec_a", "rec_b"]
+    assert {person.display_name for person in snapshot.people} == {"Алихан"}
+    assert snapshot.relationships == []
