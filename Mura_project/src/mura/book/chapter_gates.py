@@ -353,7 +353,21 @@ def run_chapter_gates(
                 )
             )
 
-    # Gate 7: CONFLICT. An unresolved selected-source conflict may be narrated,
+    # Gate 7: FACTUAL_ASSERTION. Known names are not a license to invent
+    # biography or scene facts about them. High-signal factual clauses derived
+    # independently from prose must have selected-source lexical support.
+    for clause in analysis.unsupported_factual_clauses:
+        blockers.append(
+            GateIssue(
+                code=GateCode.FACTUAL_ASSERTION,
+                severity=IssueSeverity.BLOCKER,
+                issue_type=GateCode.FACTUAL_ASSERTION.issue_type,
+                detail="Chapter contains a factual clause about a known person with no support in selected sources.",
+                offending=[clause],
+            )
+        )
+
+    # Gate 8: CONFLICT. An unresolved selected-source conflict may be narrated,
     # but not silently collapsed into certainty.
     plan_claim_ids = set(chapter_plan.claim_ids)
     relevant_open_conflicts = [
@@ -385,7 +399,7 @@ def run_chapter_gates(
                 )
             )
 
-    # Gate 8: EVIDENCE_COVERAGE — inferred from prose, never trusted from
+    # Gate 9: EVIDENCE_COVERAGE — inferred from prose, never trusted from
     # draft.evidence_usage.
     total_planned = len(chapter_plan.evidence_refs)
     if total_planned > 0:
@@ -425,7 +439,7 @@ def run_chapter_gates(
     else:
         coverage_ratio = 1.0
 
-    # Gate 9: WORD_COUNT
+    # Gate 10: WORD_COUNT
     wc = _word_count(text)
     if wc < min_chapter_words or wc > max_chapter_words:
         blockers.append(
@@ -438,7 +452,7 @@ def run_chapter_gates(
             )
         )
 
-    # Gate 10: LANGUAGE
+    # Gate 11: LANGUAGE
     cyrillic_chars = len(re.findall(r"[а-яА-ЯёЁәіңғүұқөһӘІҢҒҮҰҚӨҺ]", text))
     latin_chars = len(re.findall(r"[a-zA-Z]", text))
     total_alpha = cyrillic_chars + latin_chars
