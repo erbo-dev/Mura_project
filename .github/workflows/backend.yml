@@ -60,5 +60,12 @@ jobs:
       - name: Bytecode compilation check
         run: python -m compileall -q src/mura apps tests
 
+      - name: Run PostgreSQL concurrency gate
+        run: |
+          python -m pytest -q \
+            tests/test_postgres_atomicity.py::test_postgres_concurrent_book_creation_serializes_on_family_lock \
+            tests/test_postgres_atomicity.py::test_postgres_concurrent_family_deletes_converge_to_one_result \
+            tests/test_postgres_atomicity.py::test_postgres_family_delete_rechecks_owner_count_after_membership_race
+
       - name: Run pytest test suite
         run: python -m pytest
