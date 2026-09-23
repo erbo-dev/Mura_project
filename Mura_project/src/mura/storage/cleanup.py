@@ -238,8 +238,17 @@ class StorageCleanupRepository:
             statement = (
                 select(StorageCleanupJobRow)
                 .where(
-                    StorageCleanupJobRow.attempts < StorageCleanupJobRow.max_attempts,
-                    or_(due_queued, expired_running),
+                    or_(
+                        and_(
+                            due_queued,
+                            StorageCleanupJobRow.attempts < StorageCleanupJobRow.max_attempts,
+                        ),
+                        # A process crash is not a provider failure. Even when
+                        # the last allowed attempt was in flight, reclaim it so
+                        # an idempotent delete can observe "already absent" and
+                        # durably complete instead of leaving RUNNING forever.
+                        expired_running,
+                    )
                 )
                 .order_by(StorageCleanupJobRow.created_at)
                 .with_for_update(skip_locked=True)
@@ -248,12 +257,14 @@ class StorageCleanupRepository:
             job = session.scalar(statement)
             if job is None:
                 return None
+            reclaimed_running = job.status == StorageCleanupStatus.RUNNING.value
             job.status = StorageCleanupStatus.RUNNING.value
             job.lease_owner = lease_owner
             job.claimed_at = moment
             job.lease_expires_at = moment + timedelta(seconds=lease_seconds)
             job.last_heartbeat_at = moment
-            job.attempts += 1
+            if not reclaimed_running:
+                job.attempts += 1
             job.error_code = None
             job.error_detail = None
             job.updated_at = moment
