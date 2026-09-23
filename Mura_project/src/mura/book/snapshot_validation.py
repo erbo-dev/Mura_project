@@ -127,6 +127,10 @@ def validate_snapshot_closure(
             raise SnapshotClosureError(
                 f"claim {claim.claim_id} is outside selected recordings"
             )
+        if claim.archive_status not in {"active", "accepted", "disputed"}:
+            raise SnapshotClosureError(
+                f"claim {claim.claim_id} has non-Book archive status {claim.archive_status!r}"
+            )
         dangling = sorted(set(claim.evidence_ids) - set(evidence_by_id))
         if dangling:
             raise SnapshotClosureError(
