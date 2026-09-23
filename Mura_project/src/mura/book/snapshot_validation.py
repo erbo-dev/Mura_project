@@ -84,15 +84,42 @@ def validate_snapshot_closure(
         manifest.source_story_ids
     ):
         raise SnapshotClosureError("manifest story ids do not match snapshot stories")
-    if _exact_ids(item.event_id for item in snapshot.events) != _exact_ids(
-        manifest.source_event_ids
-    ):
+    story_ids = [item.story_id for item in snapshot.stories]
+    if len(story_ids) != len(set(story_ids)):
+        raise SnapshotClosureError("snapshot contains duplicate story ids")
+    event_ids = [item.event_id for item in snapshot.events]
+    if len(event_ids) != len(set(event_ids)):
+        raise SnapshotClosureError("snapshot contains duplicate event ids")
+    relationship_ids = [item.edge_id for item in snapshot.relationships]
+    if len(relationship_ids) != len(set(relationship_ids)):
+        raise SnapshotClosureError("snapshot contains duplicate relationship ids")
+    correction_ids = [item.correction_id for item in snapshot.corrections]
+    if len(correction_ids) != len(set(correction_ids)):
+        raise SnapshotClosureError("snapshot contains duplicate correction ids")
+    conflict_ids = [item.conflict_id for item in snapshot.conflicts]
+    if len(conflict_ids) != len(set(conflict_ids)):
+        raise SnapshotClosureError("snapshot contains duplicate conflict ids")
+
+    if _exact_ids(story_ids) != _exact_ids(manifest.source_story_ids):
+        raise SnapshotClosureError("manifest story ids do not match snapshot stories")
+    if _exact_ids(event_ids) != _exact_ids(manifest.source_event_ids):
         raise SnapshotClosureError("manifest event ids do not match snapshot events")
+    if manifest.correction_count != len(snapshot.corrections):
+        raise SnapshotClosureError("manifest correction count does not match snapshot")
+    if manifest.uncertainty_count != len(snapshot.uncertainties):
+        raise SnapshotClosureError("manifest uncertainty count does not match snapshot")
+    if manifest.conflict_count != len(snapshot.conflicts):
+        raise SnapshotClosureError("manifest conflict count does not match snapshot")
 
     for evidence in snapshot.evidence:
         if evidence.recording_id not in selected:
             raise SnapshotClosureError(
                 f"evidence {evidence.evidence_id} is outside selected recordings"
+            )
+        missing_people = sorted(set(evidence.person_ids) - set(people_by_id))
+        if missing_people:
+            raise SnapshotClosureError(
+                f"evidence {evidence.evidence_id} has dangling people refs: {missing_people}"
             )
 
     for claim in snapshot.claims:
