@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session
 
 from mura.domain.book_models import (
     SNAPSHOT_SCHEMA_VERSION,
+    MAX_BOOK_EVIDENCE_QUOTES,
+    MAX_BOOK_SOURCE_RECORDINGS,
     BookSourceSnapshot,
     CompiledSnapshot,
     SnapshotClaim,
@@ -44,6 +46,11 @@ from mura.storage.archive_read import (
     grounding_bundle,
 )
 from mura.storage.database import Database, utcnow
+from mura.book.snapshot_validation import (
+    SnapshotClosureError,
+    SnapshotSizeError,
+    validate_snapshot_closure,
+)
 
 COMPILER_VERSION = "mura-book-snapshot-compiler-v1"
 
@@ -187,8 +194,8 @@ def compile_source_snapshot(
     *,
     family_id: str | None = None,
     recording_ids: list[str] | None = None,
-    max_recordings: int = 100,
-    max_evidence_quotes: int = 400,
+    max_recordings: int = MAX_BOOK_SOURCE_RECORDINGS,
+    max_evidence_quotes: int = MAX_BOOK_EVIDENCE_QUOTES,
     created_at: datetime | None = None,
 ) -> CompiledSnapshot:
     """Compile an authorized family archive into an immutable CompiledSnapshot."""
@@ -205,6 +212,18 @@ def compile_source_snapshot(
         )
 
     snapshot_created_at = created_at or utcnow()
+    normalized_selected_ids = sorted(
+        set(
+            recording_ids
+            if recording_ids is not None
+            else [
+                str(row.get("recording_id"))
+                for row in bundle.recordings
+                if row.get("recording_id")
+            ]
+        )
+    )
+    selected_recording_set = set(normalized_selected_ids)
 
     # 1. Harvest evidence spans from pipeline payloads
     all_evidence: list[SnapshotEvidence] = []
@@ -263,22 +282,31 @@ def compile_source_snapshot(
     # Sort evidence deterministically
     all_evidence.sort(key=lambda e: (e.recording_id, e.evidence_id))
 
-    # Apply max_evidence_quotes cap, prioritizing referenced evidence
-    if len(all_evidence) > max_evidence_quotes:
-        prio_evidence: list[SnapshotEvidence] = []
-        rest_evidence: list[SnapshotEvidence] = []
-        for ev in all_evidence:
-            if ev.evidence_id in referenced_evidence_ids:
-                prio_evidence.append(ev)
-            else:
-                rest_evidence.append(ev)
-        remaining = max_evidence_quotes - len(prio_evidence)
-        if remaining > 0:
-            evidence_list = prio_evidence + rest_evidence[:remaining]
-        else:
-            evidence_list = prio_evidence[:max_evidence_quotes]
-    else:
+    # Mandatory provenance may never be truncated to satisfy a context cap.
+    evidence_by_id = {item.evidence_id: item for item in all_evidence}
+    missing_required_evidence = sorted(referenced_evidence_ids - set(evidence_by_id))
+    if missing_required_evidence:
+        raise SnapshotClosureError(
+            "selected claims reference evidence missing from selected recordings: "
+            f"{missing_required_evidence}"
+        )
+
+    required_evidence = [
+        item for item in all_evidence if item.evidence_id in referenced_evidence_ids
+    ]
+    optional_evidence = [
+        item for item in all_evidence if item.evidence_id not in referenced_evidence_ids
+    ]
+    if max_evidence_quotes >= 0 and len(required_evidence) > max_evidence_quotes:
+        raise SnapshotSizeError(
+            "required referenced evidence exceeds the supported Book snapshot budget"
+        )
+    if max_evidence_quotes < 0:
         evidence_list = all_evidence
+    else:
+        remaining = max(0, max_evidence_quotes - len(required_evidence))
+        evidence_list = required_evidence + optional_evidence[:remaining]
+        evidence_list.sort(key=lambda item: (item.recording_id, item.evidence_id))
 
     evidence_texts = [e.text for e in evidence_list]
 
@@ -291,8 +319,48 @@ def compile_source_snapshot(
     years_set: set[int] = set()
 
     for p in bundle.people:
-        b_date = _parse_snapshot_date(p.get("birth_date"))
-        d_date = _parse_snapshot_date(p.get("death_date"))
+        generic_sources = sorted(
+            {
+                str(value)
+                for value in p.get("source_recording_ids", [])
+                if isinstance(value, str) and value
+            }
+        )
+        generic_is_fully_selected = bool(generic_sources) and set(generic_sources) <= selected_recording_set
+        raw_attribute_sources = (
+            p.get("attribute_sources")
+            if isinstance(p.get("attribute_sources"), dict)
+            else {}
+        )
+
+        def attribute_sources(key: str) -> list[str]:
+            raw = raw_attribute_sources.get(key)
+            if isinstance(raw, list):
+                values = sorted(
+                    {str(value) for value in raw if isinstance(value, str) and value}
+                )
+                return values if values and set(values) <= selected_recording_set else []
+            # Backward-compatible safe case: the person row itself declares
+            # that every contributing recording is selected. If an excluded
+            # recording appears in the aggregate provenance, optional
+            # attributes need their own explicit provenance or are omitted.
+            return generic_sources if generic_is_fully_selected else []
+
+        display_sources = attribute_sources("display_name")
+        display_name = str(p.get("canonical_name") or "").strip()
+        if not display_name or not display_sources:
+            continue
+
+        b_date = (
+            _parse_snapshot_date(p.get("birth_date"))
+            if attribute_sources("birth_date")
+            else None
+        )
+        d_date = (
+            _parse_snapshot_date(p.get("death_date"))
+            if attribute_sources("death_date")
+            else None
+        )
         if b_date:
             years_set.update(_extract_years_from_text(b_date.value))
             years_set.update(_extract_years_from_text(b_date.original_expression))
@@ -300,48 +368,130 @@ def compile_source_snapshot(
             years_set.update(_extract_years_from_text(d_date.value))
             years_set.update(_extract_years_from_text(d_date.original_expression))
 
-        professions = [
-            str(x).strip() for x in p.get("professions", []) if isinstance(x, str) and x.strip()
-        ]
-        locations = [
-            str(x).strip() for x in p.get("locations", []) if isinstance(x, str) and x.strip()
-        ]
-        for loc in locations:
-            known_places_set.add(loc)
+        aliases: list[str] = []
+        projected_sources: dict[str, list[str]] = {"display_name": display_sources}
+        raw_aliases = p.get("verified_aliases", []) or p.get("aliases", [])
+        if isinstance(raw_aliases, list):
+            for value in raw_aliases:
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                alias = value.strip()
+                sources = attribute_sources(f"alias:{alias}")
+                if sources:
+                    aliases.append(alias)
+                    projected_sources[f"alias:{alias}"] = sources
 
+        category_sources = attribute_sources("category")
+        category = str(p.get("category") or "unknown") if category_sources else "unknown"
+        if category_sources:
+            projected_sources["category"] = category_sources
+
+        relation_sources = attribute_sources("relation_to_speaker")
         relations = p.get("relations_to_speakers")
         rel_str: str | None = None
-        if isinstance(relations, dict):
-            for v in relations.values():
-                if isinstance(v, str) and v.strip():
-                    rel_str = v.strip()
+        if relation_sources and isinstance(relations, dict):
+            for value in relations.values():
+                if isinstance(value, str) and value.strip():
+                    rel_str = value.strip()
                     break
+        if rel_str:
+            projected_sources["relation_to_speaker"] = relation_sources
 
+        professions: list[str] = []
+        for value in p.get("professions", []):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            profession = value.strip()
+            sources = attribute_sources(f"profession:{profession}")
+            if sources:
+                professions.append(profession)
+                projected_sources[f"profession:{profession}"] = sources
+
+        locations: list[str] = []
+        for value in p.get("locations", []):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            location = value.strip()
+            sources = attribute_sources(f"location:{location}")
+            if sources:
+                locations.append(location)
+                projected_sources[f"location:{location}"] = sources
+                known_places_set.add(location)
+
+        descriptions: list[str] = []
+        raw_descriptions = p.get("descriptions", [])
+        if isinstance(raw_descriptions, list):
+            for value in raw_descriptions:
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                description = value.strip()
+                sources = attribute_sources(f"description:{description}")
+                if sources:
+                    descriptions.append(description)
+                    projected_sources.setdefault("descriptions", [])
+                    projected_sources["descriptions"] = sorted(
+                        set(projected_sources["descriptions"]) | set(sources)
+                    )
+
+        source_ids = sorted(
+            {
+                recording_id
+                for values in projected_sources.values()
+                for recording_id in values
+            }
+        )
         people.append(
             SnapshotPerson(
                 person_id=p["person_id"],
-                display_name=p["canonical_name"],
-                aliases=sorted(set(p.get("verified_aliases", []) or p.get("aliases", []))),
-                category=str(p.get("category") or "unknown"),
+                display_name=display_name,
+                aliases=sorted(set(aliases)),
+                category=category,
                 relation_to_speaker=rel_str,
                 birth_date=b_date,
                 death_date=d_date,
                 professions=sorted(set(professions)),
                 locations=sorted(set(locations)),
-                descriptions=[],
-                source_recording_ids=sorted(set(p.get("source_recording_ids", []))),
+                descriptions=sorted(set(descriptions)),
+                source_recording_ids=source_ids,
+                attribute_sources=projected_sources,
             )
         )
 
     people.sort(key=lambda x: x.person_id)
     known_person_ids = {p.person_id for p in people}
 
-    # 4. Relationships (edges where both endpoints exist in known people)
+    # 4. Relationships. A family graph edge is materialized family-wide;
+    # only the selected supporting claims can authorize it for this Book.
     relationships: list[SnapshotRelationship] = []
+    bundle_claim_by_id = {
+        str(item.get("claim_id")): item
+        for item in bundle.claims
+        if item.get("claim_id")
+    }
     for r in bundle.relationships:
         sub_id = r.get("subject_person_id")
         obj_id = r.get("object_person_id")
-        if sub_id in known_person_ids and obj_id in known_person_ids:
+        support_ids: list[str] = []
+        for claim_id in r.get("source_claim_ids", []):
+            claim = bundle_claim_by_id.get(str(claim_id))
+            if not claim:
+                continue
+            if claim.get("recording_id") not in selected_recording_set:
+                continue
+            if claim.get("object_type") != "relationship":
+                continue
+            if {claim.get("subject_person_id"), claim.get("object_person_id")} != {
+                sub_id,
+                obj_id,
+            }:
+                continue
+            support_ids.append(str(claim_id))
+
+        if (
+            support_ids
+            and sub_id in known_person_ids
+            and obj_id in known_person_ids
+        ):
             relationships.append(
                 SnapshotRelationship(
                     edge_id=r["edge_id"],
@@ -350,7 +500,7 @@ def compile_source_snapshot(
                     subject_role=r.get("subject_role", ""),
                     object_person_id=obj_id,
                     object_role=r.get("object_role", ""),
-                    source_claim_ids=sorted(set(r.get("source_claim_ids", []))),
+                    source_claim_ids=sorted(set(support_ids)),
                 )
             )
     relationships.sort(key=lambda x: x.edge_id)
@@ -491,21 +641,27 @@ def compile_source_snapshot(
         )
     uncertainties.sort(key=lambda x: x.uncertainty_id)
 
-    # 10. Conflicts
+    # 10. Conflicts. Mixed selected/excluded conflicts are omitted rather
+    # than importing the excluded side's content or rationale.
     conflicts: list[SnapshotConflict] = []
+    included_claim_ids = {claim.claim_id for claim in claims}
     for cf in bundle.conflicts:
         c_ids = sorted(set(cf.get("claim_ids", [])))
-        # Find which recordings these claims touch
-        c_recs = sorted(
-            {c.recording_id for c in claims if c.claim_id in c_ids}
-        )
+        preferred = cf.get("preferred_claim_id")
+        if (
+            not c_ids
+            or any(claim_id not in included_claim_ids for claim_id in c_ids)
+            or (preferred is not None and preferred not in c_ids)
+        ):
+            continue
+        c_recs = sorted({c.recording_id for c in claims if c.claim_id in c_ids})
         conflicts.append(
             SnapshotConflict(
                 conflict_id=cf["conflict_id"],
                 conflict_type=cf.get("conflict_type", "factual"),
                 status=cf.get("status", "open"),
                 claim_ids=c_ids,
-                preferred_claim_id=cf.get("preferred_claim_id"),
+                preferred_claim_id=preferred,
                 rationale=cf.get("rationale", ""),
                 resolution_note=cf.get("resolution_note"),
                 recording_ids=c_recs,
@@ -552,5 +708,9 @@ def compile_source_snapshot(
         known_places=sorted(known_places_set),
     )
 
+    validate_snapshot_closure(
+        snapshot,
+        expected_recording_ids=normalized_selected_ids,
+    )
     content_hash = compute_content_hash(snapshot)
     return CompiledSnapshot(snapshot=snapshot, content_hash=content_hash)
