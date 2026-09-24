@@ -587,7 +587,7 @@ def test_compiler_relationship_support_rejects_semantic_parent_reversal() -> Non
             "rec_a": {
                 "extraction": {
                     "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "А — родитель Б."}  # noqa: RUF001
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}  # noqa: RUF001  # noqa: RUF001
                     ]
                 }
             }
@@ -670,7 +670,7 @@ def test_compiler_relationship_support_accepts_equivalent_parent_representation(
             "rec_a": {
                 "extraction": {
                     "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "А — родитель Б."}
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}  # noqa: RUF001
                     ]
                 }
             }
