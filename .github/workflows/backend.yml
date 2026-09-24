@@ -115,6 +115,7 @@ jobs:
             tests/test_postgres_atomicity.py::test_postgres_concurrent_family_deletes_converge_to_one_result \
             tests/test_postgres_atomicity.py::test_postgres_family_delete_rechecks_owner_count_after_membership_race \
             tests/test_postgres_atomicity.py::test_postgres_concurrent_recording_creation_respects_family_daily_limit \
+            tests/test_postgres_atomicity.py::test_postgres_concurrent_recording_creation_respects_user_daily_limit_across_families \
             tests/test_identity_families.py::test_postgres_account_delete_vs_owner_promotion_never_orphans_family
 
       - name: Run pytest with coverage measurement
