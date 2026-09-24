@@ -215,12 +215,12 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
         chapters_by_book: dict[str, list[BookChapterRow]] = defaultdict(list)
         continuity_by_book: dict[str, list[BookContinuityStateRow]] = defaultdict(list)
         exports_by_book: dict[str, list[BookExportRow]] = defaultdict(list)
-        for row in chapters:
-            chapters_by_book[row.book_id].append(row)
-        for row in continuity:
-            continuity_by_book[row.book_id].append(row)
-        for row in exports:
-            exports_by_book[row.book_id].append(row)
+        for chapter_row in chapters:
+            chapters_by_book[chapter_row.book_id].append(chapter_row)
+        for continuity_row in continuity:
+            continuity_by_book[continuity_row.book_id].append(continuity_row)
+        for export_row in exports:
+            exports_by_book[export_row.book_id].append(export_row)
 
         object_manifest: list[dict[str, Any]] = []
         for recording in recordings:
