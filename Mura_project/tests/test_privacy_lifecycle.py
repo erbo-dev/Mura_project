@@ -1,10 +1,10 @@
 """Tests for Privacy Deletion Lifecycle & Data Export (Phase 2.3 Part F).
 
 Covers:
-- DELETE /v1/families/{family_id}/recordings/{recording_id} (authorization, DB cascade, audio storage cleanup, BOLA)
-- DELETE /v1/families/{family_id}/books/{book_id} (authorization, DB cascade, artifact storage cleanup, BOLA)
-- DELETE /v1/families/{family_id} (confirmation validation, sole owner invariant, full DB & storage wipeout)
-- GET /v1/families/{family_id}/privacy/export (complete structured GDPR/privacy export)
+- recording deletion authorization, DB cascade, audio cleanup, and BOLA;
+- Book deletion authorization, DB cascade, artifact cleanup, and BOLA;
+- family deletion confirmation, sole-owner invariant, DB/storage cleanup;
+- complete structured family privacy export.
 """
 
 from __future__ import annotations
@@ -21,15 +21,14 @@ from mura.config import CoreSettings
 from mura.domain.book_models import ExportFormat, ExportStatus
 from mura.identity.policy import FamilyRole
 from mura.jobs import JobStatus
+from mura.orchestration.cleanup import StorageCleanupWorker
 from mura.storage.archive import (
     ArchiveClaimRow,
     ArchivePersonRow,
     FamilyGraphEdgeRow,
 )
-from mura.orchestration.cleanup import StorageCleanupWorker
 from mura.storage.audio import LegacyLocalAudioStorage, LocalAudioStorage
 from mura.storage.book import (
-    BookChapterRepository,
     BookChapterRow,
     BookExportRepository,
     BookRepository,
@@ -107,11 +106,41 @@ def test_setup(tmp_path: Path) -> dict[str, object]:
     verifier = FakePrincipalVerifier()
 
     # Users
-    user_owner = create_test_user(identity_repo, subject="owner", email="owner@test.kz", display_name="Owner User", verifier=verifier)
-    user_owner2 = create_test_user(identity_repo, subject="owner2", email="owner2@test.kz", display_name="Owner 2", verifier=verifier)
-    user_editor = create_test_user(identity_repo, subject="editor", email="editor@test.kz", display_name="Editor User", verifier=verifier)
-    user_viewer = create_test_user(identity_repo, subject="viewer", email="viewer@test.kz", display_name="Viewer User", verifier=verifier)
-    user_stranger = create_test_user(identity_repo, subject="stranger", email="stranger@test.kz", display_name="Stranger User", verifier=verifier)
+    user_owner = create_test_user(
+        identity_repo,
+        subject="owner",
+        email="owner@test.kz",
+        display_name="Owner User",
+        verifier=verifier,
+    )
+    user_owner2 = create_test_user(
+        identity_repo,
+        subject="owner2",
+        email="owner2@test.kz",
+        display_name="Owner 2",
+        verifier=verifier,
+    )
+    user_editor = create_test_user(
+        identity_repo,
+        subject="editor",
+        email="editor@test.kz",
+        display_name="Editor User",
+        verifier=verifier,
+    )
+    user_viewer = create_test_user(
+        identity_repo,
+        subject="viewer",
+        email="viewer@test.kz",
+        display_name="Viewer User",
+        verifier=verifier,
+    )
+    user_stranger = create_test_user(
+        identity_repo,
+        subject="stranger",
+        email="stranger@test.kz",
+        display_name="Stranger User",
+        verifier=verifier,
+    )
 
     # Families
     create_family_with_id(database, family_id="fam_alpha", name="Alpha Family", owner=user_owner)

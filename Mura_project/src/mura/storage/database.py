@@ -324,22 +324,17 @@ class RecordingRepository:
             session.execute(
                 delete(PipelineResultRow).where(PipelineResultRow.recording_id == recording_id)
             )
-            try:
-                from mura.observability import ProcessingTraceRow
+            from mura.observability import ProcessingTraceEventRow
+            from mura.storage.archive import ArchiveClaimRow
 
-                session.execute(
-                    delete(ProcessingTraceRow).where(ProcessingTraceRow.recording_id == recording_id)
+            session.execute(
+                delete(ProcessingTraceEventRow).where(
+                    ProcessingTraceEventRow.recording_id == recording_id
                 )
-            except Exception:
-                pass
-            try:
-                from mura.storage.archive import ArchiveClaimRow
-
-                session.execute(
-                    delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)
-                )
-            except Exception:
-                pass
+            )
+            session.execute(
+                delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)
+            )
 
             session.delete(recording)
             session.flush()
@@ -524,9 +519,7 @@ class RecordingRepository:
         lease_owner: str | None,
     ) -> ProcessingJobRow:
         job = session.scalar(
-            select(ProcessingJobRow)
-            .where(ProcessingJobRow.job_id == job_id)
-            .with_for_update()
+            select(ProcessingJobRow).where(ProcessingJobRow.job_id == job_id).with_for_update()
         )
         if job is None:
             raise LookupError(f"unknown job: {job_id}")

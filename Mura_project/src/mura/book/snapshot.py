@@ -22,11 +22,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from mura.book.relationship_semantics import relationship_semantics_match
+from mura.book.snapshot_validation import (
+    SnapshotClosureError,
+    SnapshotSizeError,
+    validate_snapshot_closure,
+)
 from mura.domain.book_models import (
-    SNAPSHOT_SCHEMA_VERSION,
     MAX_BOOK_EVIDENCE_QUOTES,
     MAX_BOOK_SNAPSHOT_BYTES,
     MAX_BOOK_SOURCE_RECORDINGS,
+    SNAPSHOT_SCHEMA_VERSION,
     BookSourceSnapshot,
     CompiledSnapshot,
     SnapshotClaim,
@@ -47,12 +53,6 @@ from mura.storage.archive_read import (
     grounding_bundle,
 )
 from mura.storage.database import Database, utcnow
-from mura.book.relationship_semantics import relationship_semantics_match
-from mura.book.snapshot_validation import (
-    SnapshotClosureError,
-    SnapshotSizeError,
-    validate_snapshot_closure,
-)
 
 COMPILER_VERSION = "mura-book-snapshot-compiler-v1"
 
@@ -220,17 +220,13 @@ def compile_source_snapshot(
             recording_ids
             if recording_ids is not None
             else [
-                str(row.get("recording_id"))
-                for row in bundle.recordings
-                if row.get("recording_id")
+                str(row.get("recording_id")) for row in bundle.recordings if row.get("recording_id")
             ]
         )
     )
     selected_recording_set = set(normalized_selected_ids)
     bundle_recording_ids = {
-        str(row.get("recording_id"))
-        for row in bundle.recordings
-        if row.get("recording_id")
+        str(row.get("recording_id")) for row in bundle.recordings if row.get("recording_id")
     }
     missing_selected_recordings = sorted(selected_recording_set - bundle_recording_ids)
     if missing_selected_recordings:
@@ -257,8 +253,7 @@ def compile_source_snapshot(
             observed_languages_set.add(det_lang)
 
     speaker_map = {
-        r["recording_id"]: r.get("speaker_name", "Narrator")
-        for r in selected_bundle_recordings
+        r["recording_id"]: r.get("speaker_name", "Narrator") for r in selected_bundle_recordings
     }
 
     referenced_evidence_ids: set[str] = set()
@@ -353,11 +348,12 @@ def compile_source_snapshot(
                 if isinstance(value, str) and value
             }
         )
-        generic_is_fully_selected = bool(generic_sources) and set(generic_sources) <= selected_recording_set
-        raw_attribute_sources = (
-            p.get("attribute_sources")
-            if isinstance(p.get("attribute_sources"), dict)
-            else {}
+        generic_is_fully_selected = (
+            bool(generic_sources) and set(generic_sources) <= selected_recording_set
+        )
+        raw_attribute_sources_value = p.get("attribute_sources")
+        raw_attribute_sources: dict[str, object] = (
+            raw_attribute_sources_value if isinstance(raw_attribute_sources_value, dict) else {}
         )
 
         def attribute_sources(
@@ -368,9 +364,7 @@ def compile_source_snapshot(
         ) -> list[str]:
             raw = raw_sources.get(key)
             if isinstance(raw, list):
-                values = sorted(
-                    {str(value) for value in raw if isinstance(value, str) and value}
-                )
+                values = sorted({str(value) for value in raw if isinstance(value, str) and value})
                 return values if values and set(values) <= selected_recording_set else []
             # Backward-compatible safe case: the person row itself declares
             # that every contributing recording is selected. If an excluded
@@ -384,14 +378,10 @@ def compile_source_snapshot(
             continue
 
         b_date = (
-            _parse_snapshot_date(p.get("birth_date"))
-            if attribute_sources("birth_date")
-            else None
+            _parse_snapshot_date(p.get("birth_date")) if attribute_sources("birth_date") else None
         )
         d_date = (
-            _parse_snapshot_date(p.get("death_date"))
-            if attribute_sources("death_date")
-            else None
+            _parse_snapshot_date(p.get("death_date")) if attribute_sources("death_date") else None
         )
         if b_date:
             years_set.update(_extract_years_from_text(b_date.value))
@@ -471,11 +461,7 @@ def compile_source_snapshot(
                     projected_sources[f"description:{description}"] = sources
 
         source_ids = sorted(
-            {
-                recording_id
-                for values in projected_sources.values()
-                for recording_id in values
-            }
+            {recording_id for values in projected_sources.values() for recording_id in values}
         )
         people.append(
             SnapshotPerson(
@@ -501,9 +487,7 @@ def compile_source_snapshot(
     # only the selected supporting claims can authorize it for this Book.
     relationships: list[SnapshotRelationship] = []
     bundle_claim_by_id = {
-        str(item.get("claim_id")): item
-        for item in bundle.claims
-        if item.get("claim_id")
+        str(item.get("claim_id")): item for item in bundle.claims if item.get("claim_id")
     }
     for r in bundle.relationships:
         sub_id = r.get("subject_person_id")
@@ -517,13 +501,18 @@ def compile_source_snapshot(
                 continue
             if claim.get("object_type") != "relationship":
                 continue
-            payload = claim.get("payload") if isinstance(claim.get("payload"), dict) else {}
+            raw_payload = claim.get("payload")
+            relationship_payload: dict[str, Any] = (
+                raw_payload if isinstance(raw_payload, dict) else {}
+            )
             if not relationship_semantics_match(
-                left_type=str(payload.get("relationship_type") or claim.get("predicate") or ""),
+                left_type=str(
+                    relationship_payload.get("relationship_type") or claim.get("predicate") or ""
+                ),
                 left_subject_person_id=claim.get("subject_person_id"),
-                left_subject_role=str(payload.get("subject_role") or ""),
+                left_subject_role=str(relationship_payload.get("subject_role") or ""),
                 left_object_person_id=claim.get("object_person_id"),
-                left_object_role=str(payload.get("object_role") or ""),
+                left_object_role=str(relationship_payload.get("object_role") or ""),
                 right_type=str(r.get("relationship_type") or ""),
                 right_subject_person_id=sub_id,
                 right_subject_role=str(r.get("subject_role") or ""),
@@ -533,11 +522,7 @@ def compile_source_snapshot(
                 continue
             support_ids.append(str(claim_id))
 
-        if (
-            support_ids
-            and sub_id in known_person_ids
-            and obj_id in known_person_ids
-        ):
+        if support_ids and sub_id in known_person_ids and obj_id in known_person_ids:
             relationships.append(
                 SnapshotRelationship(
                     edge_id=r["edge_id"],
@@ -796,8 +781,7 @@ def compile_source_snapshot(
     )
     if max_snapshot_bytes >= 0 and snapshot_size > max_snapshot_bytes:
         raise SnapshotSizeError(
-            f"compiled Book snapshot is {snapshot_size} bytes; "
-            f"limit is {max_snapshot_bytes}"
+            f"compiled Book snapshot is {snapshot_size} bytes; limit is {max_snapshot_bytes}"
         )
     content_hash = compute_content_hash(snapshot)
     return CompiledSnapshot(snapshot=snapshot, content_hash=content_hash)

@@ -16,15 +16,15 @@ from mura.book.exporter import BookExportCancelled
 from mura.book.snapshot import compile_source_snapshot
 from mura.deepseek.client import DeepSeekUsage
 from mura.domain.book_models import (
+    CONTINUITY_SCHEMA_VERSION,
     BookJobStatus,
     BookLanguage,
     BookSourceSnapshot,
-    ChapterDraft,
-    ChapterPlan,
     BookStage,
     BookStatus,
+    ChapterDraft,
+    ChapterPlan,
     ChapterStatus,
-    CONTINUITY_SCHEMA_VERSION,
 )
 from mura.orchestration.books import BookJobWorker
 from mura.storage.archive_read import GroundingBundle
@@ -56,7 +56,9 @@ def db() -> Database:
 def family_and_user(db: Database) -> tuple[str, str]:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id=FAMILY_TEST, name="Worker Family", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id=FAMILY_TEST, name="Worker Family", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id=USER_TEST,
@@ -271,7 +273,9 @@ def _prepare_snapshot(db: Database, family_id: str) -> None:
     )
 
 
-def test_book_worker_end_to_end_flow(db: Database, family_and_user: tuple[str, str], tmp_path: Path) -> None:
+def test_book_worker_end_to_end_flow(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
     fid, uid = family_and_user
     _prepare_snapshot(db, fid)
 
@@ -428,7 +432,9 @@ def test_book_worker_resumes_without_rewriting_approved(
 
     # Check client calls: book_write should only have been called ONCE (for Chapter 2)
     write_calls = [
-        call for call in client.request_json.call_args_list if call.kwargs.get("operation") == "book_write"
+        call
+        for call in client.request_json.call_args_list
+        if call.kwargs.get("operation") == "book_write"
     ]
     assert len(write_calls) == 1
 
@@ -524,7 +530,6 @@ def test_book_worker_cancellation(
     assert client.request_json.call_count == 0
 
 
-
 def test_book_worker_export_cancellation_race_stays_cancelled(
     db: Database, family_and_user: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -574,7 +579,6 @@ def test_book_worker_export_cancellation_race_stays_cancelled(
     assert cancelled_job is not None
     assert cancelled_job.status == BookJobStatus.CANCELLED.value
     assert cancelled_job.stage == BookStage.CANCELLED.value
-
 
 
 def test_crash_reclaim_resume_preserves_structured_draft_gate_semantics(
@@ -680,7 +684,6 @@ def test_crash_reclaim_resume_preserves_structured_draft_gate_semantics(
         max_chapter_words=1000,
     )
     assert after.model_dump(mode="json") == before.model_dump(mode="json")
-
 
 
 def test_book_worker_fails_closed_on_legacy_pre_provenance_snapshot(

@@ -22,8 +22,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO, Protocol
-from typing import TYPE_CHECKING, BinaryIO, Protocol
+from typing import TYPE_CHECKING, BinaryIO, Protocol, cast
 
 import requests
 
@@ -439,16 +438,25 @@ class SupabaseAudioStorage:
 
         buffer.seek(0)
         upload_url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
-        headers = self._headers({
-            "Content-Type": declared,
-            "x-upsert": "true",
-        })
+        headers = self._headers(
+            {
+                "Content-Type": declared,
+                "x-upsert": "true",
+            }
+        )
 
         try:
             try:
-                from mura.testing.fault_injection import FAULT_STORAGE_503, consume_fault, is_fault_injection_enabled
+                from mura.testing.fault_injection import (
+                    FAULT_STORAGE_503,
+                    consume_fault,
+                    is_fault_injection_enabled,
+                )
+
                 if is_fault_injection_enabled() and consume_fault(FAULT_STORAGE_503):
-                    raise AudioStorageError("Supabase Storage rejected upload with HTTP 503: Service Unavailable")
+                    raise AudioStorageError(
+                        "Supabase Storage rejected upload with HTTP 503: Service Unavailable"
+                    )
             except ImportError:
                 pass
             response = self.session.post(
@@ -462,7 +470,8 @@ class SupabaseAudioStorage:
 
         if response.status_code >= 400:
             raise AudioStorageError(
-                f"Supabase Storage rejected upload with HTTP {response.status_code}: {response.text}"
+                "Supabase Storage rejected upload with HTTP "
+                f"{response.status_code}: {response.text}"
             )
 
         return StoredAudio(
@@ -524,7 +533,9 @@ class SupabaseAudioStorage:
                 timeout=(10.0, self.timeout_seconds),
             )
         except Exception as exc:
-            raise AudioStorageError(f"failed to retrieve audio from Supabase Storage: {exc}") from exc
+            raise AudioStorageError(
+                f"failed to retrieve audio from Supabase Storage: {exc}"
+            ) from exc
 
         if response.status_code == 404:
             raise FileNotFoundError(f"recording audio {storage_key} not found in Supabase Storage")
@@ -534,7 +545,7 @@ class SupabaseAudioStorage:
             )
 
         response.raw.decode_content = True
-        return response.raw
+        return cast(BinaryIO, response.raw)
 
     @contextmanager
     def materialize(self, storage_key: str) -> Iterator[Path]:
@@ -565,4 +576,3 @@ def build_audio_storage(settings: CoreSettings) -> AudioStorage:
             timeout_seconds=settings.supabase_storage_timeout_seconds,
         )
     raise ValueError(f"unsupported audio storage backend: {settings.audio_storage_backend}")
-

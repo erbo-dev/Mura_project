@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+logger = logging.getLogger("mura.deepseek.client")
 
 
 class DeepSeekError(RuntimeError):
@@ -87,9 +89,7 @@ class DeepSeekClient:
             models.append(self.fallback_model)
 
         resolved_op = (
-            operation
-            if operation != "llm_chat"
-            else self._detect_operation(system_prompt)
+            operation if operation != "llm_chat" else self._detect_operation(system_prompt)
         )
         for model in models:
             try:
@@ -153,6 +153,7 @@ class DeepSeekClient:
                         get_fault_metadata,
                         is_fault_injection_enabled,
                     )
+
                     if is_fault_injection_enabled():
                         if consume_fault(FAULT_DEEPSEEK_TIMEOUT):
                             raise requests.exceptions.Timeout("Injected DeepSeek timeout")
@@ -161,7 +162,9 @@ class DeepSeekClient:
                             resp.status_code = 429
                             meta = get_fault_metadata(FAULT_DEEPSEEK_429)
                             resp.headers["Retry-After"] = str(meta.get("retry_after", 30))
-                            resp._content = b'{"error":{"message":"Rate limit exceeded","code":429}}'
+                            resp._content = (
+                                b'{"error":{"message":"Rate limit exceeded","code":429}}'
+                            )
                             self._raise_for_status(resp)
                         if consume_fault(FAULT_PROVIDER_401):
                             resp = requests.Response()
@@ -171,7 +174,9 @@ class DeepSeekClient:
                         if consume_fault(FAULT_PROVIDER_503):
                             resp = requests.Response()
                             resp.status_code = 503
-                            resp._content = b'{"error":{"message":"Service Unavailable","code":503}}'
+                            resp._content = (
+                                b'{"error":{"message":"Service Unavailable","code":503}}'
+                            )
                             self._raise_for_status(resp)
                 except ImportError:
                     pass
@@ -218,17 +223,12 @@ class DeepSeekClient:
                     try:
                         self.on_usage(result_usage, True, operation, None, attempt)
                     except Exception:
-                        pass
+                        logger.debug("DeepSeek usage callback failed")
                 return parsed, result_usage
             except (requests.Timeout, requests.ConnectionError, DeepSeekError) as exc:
                 last_error = exc
                 if self.on_usage is not None:
                     try:
-                        err_code = (
-                            "provider_timeout"
-                            if isinstance(exc, requests.Timeout)
-                            else ("provider_rate_limit" if "429" in str(exc) else "extraction_failed")
-                        )
                         if isinstance(exc, requests.Timeout):
                             err_code = "provider_timeout"
                         elif "429" in str(exc):
@@ -242,12 +242,17 @@ class DeepSeekClient:
                         )
                         self.on_usage(failed_usage, False, operation, err_code, attempt)
                     except Exception:
-                        pass
+                        logger.debug("DeepSeek usage callback failed")
                 if attempt < attempts:
                     time.sleep(min(2**attempt, 10))
 
-        response = getattr(last_error, "response", None)
-        raise DeepSeekError(f"request failed after {attempts} attempts: {last_error}", response=response) from last_error
+        error_response = getattr(last_error, "response", None)
+        if not isinstance(error_response, requests.Response):
+            error_response = None
+        raise DeepSeekError(
+            f"request failed after {attempts} attempts: {last_error}",
+            response=error_response,
+        ) from last_error
 
     @staticmethod
     def _detect_operation(system_prompt: str) -> str:

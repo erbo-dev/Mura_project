@@ -169,12 +169,20 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
         book_ids = [row.book_id for row in books]
 
         snapshots = (
-            list(session.scalars(select(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids))).all())
-            if book_ids else []
+            list(
+                session.scalars(
+                    select(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids))
+                ).all()
+            )
+            if book_ids
+            else []
         )
         plans = (
-            list(session.scalars(select(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids))).all())
-            if book_ids else []
+            list(
+                session.scalars(select(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids))).all()
+            )
+            if book_ids
+            else []
         )
         chapters = (
             list(
@@ -184,7 +192,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     .order_by(BookChapterRow.book_id, BookChapterRow.chapter_number)
                 ).all()
             )
-            if book_ids else []
+            if book_ids
+            else []
         )
         continuity = (
             list(
@@ -197,7 +206,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     )
                 ).all()
             )
-            if book_ids else []
+            if book_ids
+            else []
         )
         exports = (
             list(
@@ -207,7 +217,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     .order_by(BookExportRow.book_id, BookExportRow.format)
                 ).all()
             )
-            if book_ids else []
+            if book_ids
+            else []
         )
 
         snapshot_by_book = {row.book_id: row for row in snapshots}
@@ -215,12 +226,12 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
         chapters_by_book: dict[str, list[BookChapterRow]] = defaultdict(list)
         continuity_by_book: dict[str, list[BookContinuityStateRow]] = defaultdict(list)
         exports_by_book: dict[str, list[BookExportRow]] = defaultdict(list)
-        for row in chapters:
-            chapters_by_book[row.book_id].append(row)
-        for row in continuity:
-            continuity_by_book[row.book_id].append(row)
-        for row in exports:
-            exports_by_book[row.book_id].append(row)
+        for chapter_row in chapters:
+            chapters_by_book[chapter_row.book_id].append(chapter_row)
+        for continuity_row in continuity:
+            continuity_by_book[continuity_row.book_id].append(continuity_row)
+        for export_row in exports:
+            exports_by_book[export_row.book_id].append(export_row)
 
         object_manifest: list[dict[str, Any]] = []
         for recording in recordings:
@@ -341,14 +352,10 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     **row,
                     "story_id": row["claim_id"],
                     "title": (
-                        row["payload"].get("title")
-                        if isinstance(row["payload"], dict)
-                        else None
+                        row["payload"].get("title") if isinstance(row["payload"], dict) else None
                     ),
                     "summary": (
-                        row["payload"].get("summary")
-                        if isinstance(row["payload"], dict)
-                        else None
+                        row["payload"].get("summary") if isinstance(row["payload"], dict) else None
                     ),
                 }
                 for row in claims_payload
@@ -359,9 +366,7 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     **row,
                     "event_id": row["source_object_id"] or row["claim_id"],
                     "title": (
-                        row["payload"].get("title")
-                        if isinstance(row["payload"], dict)
-                        else None
+                        row["payload"].get("title") if isinstance(row["payload"], dict) else None
                     ),
                 }
                 for row in claims_payload
@@ -439,7 +444,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                             "payload": snapshot_by_book[book.book_id].payload,
                             "created_at": _iso(snapshot_by_book[book.book_id].created_at),
                         }
-                        if book.book_id in snapshot_by_book else None
+                        if book.book_id in snapshot_by_book
+                        else None
                     ),
                     "plan": (
                         {
@@ -453,7 +459,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                             "created_at": _iso(plan_by_book[book.book_id].created_at),
                             "updated_at": _iso(plan_by_book[book.book_id].updated_at),
                         }
-                        if book.book_id in plan_by_book else None
+                        if book.book_id in plan_by_book
+                        else None
                     ),
                     "chapters": [
                         {

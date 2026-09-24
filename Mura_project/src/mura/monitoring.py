@@ -9,25 +9,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from pydantic import Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 
+from mura.domain.book_models import TERMINAL_BOOK_JOB_STATUSES, BookJobStatus
 from mura.domain.models import StrictModel
 from mura.jobs import JobStatus
 from mura.storage.ai_usage import AIUsageLedger
-from mura.domain.book_models import BookJobStatus, TERMINAL_BOOK_JOB_STATUSES
 from mura.storage.book import BookJobRow
 from mura.storage.cleanup import (
+    TERMINAL_CLEANUP_STATUSES,
     StorageCleanupJobRow,
     StorageCleanupStatus,
-    TERMINAL_CLEANUP_STATUSES,
 )
 from mura.storage.database import (
+    TERMINAL_JOB_STATUSES,
     Database,
     ProcessingJobRow,
-    TERMINAL_JOB_STATUSES,
     utcnow,
 )
 
@@ -37,8 +36,6 @@ def _as_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC)
-
-
 
 
 class BookQueueMetrics(StrictModel):
@@ -59,6 +56,7 @@ class BookStuckJobItem(StrictModel):
     attempts: int
     reason: str
     age_seconds: float
+
 
 class StorageCleanupMetrics(StrictModel):
     queued: int = Field(ge=0)
@@ -183,14 +181,15 @@ class QueueHealthService:
         moment = now or utcnow()
         with self.database.session_factory() as session:
             # Aggregate status counts using existing index ix_processing_jobs_status
-            counts = dict(
-                session.execute(
+            counts: dict[str, int] = {
+                str(row[0]): int(row[1])
+                for row in session.execute(
                     select(
                         ProcessingJobRow.status,
                         func.count(ProcessingJobRow.job_id),
                     ).group_by(ProcessingJobRow.status)
-                ).all()
-            )
+                )
+            }
 
             pending = counts.get(JobStatus.QUEUED.value, 0)
             failed = counts.get(JobStatus.FAILED.value, 0)
@@ -213,11 +212,13 @@ class QueueHealthService:
             )
 
             # Expired leases: non-terminal jobs whose lease_expires_at is in the past
-            expired_leases = session.scalar(
-                select(func.count(ProcessingJobRow.job_id)).where(
-                    ProcessingJobRow.status.notin_(TERMINAL_JOB_STATUSES),
-                    ProcessingJobRow.lease_expires_at.is_not(None),
-                    ProcessingJobRow.lease_expires_at <= moment,
+            expired_leases = (
+                session.scalar(
+                    select(func.count(ProcessingJobRow.job_id)).where(
+                        ProcessingJobRow.status.notin_(TERMINAL_JOB_STATUSES),
+                        ProcessingJobRow.lease_expires_at.is_not(None),
+                        ProcessingJobRow.lease_expires_at <= moment,
+                    )
                 )
             ) or 0
 
@@ -234,17 +235,21 @@ class QueueHealthService:
         since = moment - timedelta(hours=24)
 
         with self.database.session_factory() as session:
-            completed_24h = session.scalar(
-                select(func.count(ProcessingJobRow.job_id)).where(
-                    ProcessingJobRow.status == JobStatus.COMPLETED.value,
-                    ProcessingJobRow.completed_at >= since,
+            completed_24h = (
+                session.scalar(
+                    select(func.count(ProcessingJobRow.job_id)).where(
+                        ProcessingJobRow.status == JobStatus.COMPLETED.value,
+                        ProcessingJobRow.completed_at >= since,
+                    )
                 )
             ) or 0
 
-            failed_24h = session.scalar(
-                select(func.count(ProcessingJobRow.job_id)).where(
-                    ProcessingJobRow.status == JobStatus.FAILED.value,
-                    ProcessingJobRow.completed_at >= since,
+            failed_24h = (
+                session.scalar(
+                    select(func.count(ProcessingJobRow.job_id)).where(
+                        ProcessingJobRow.status == JobStatus.FAILED.value,
+                        ProcessingJobRow.completed_at >= since,
+                    )
                 )
             ) or 0
 
@@ -338,18 +343,18 @@ class QueueHealthService:
 
         return stuck_items
 
-
     def get_book_queue_metrics(self, now: datetime | None = None) -> BookQueueMetrics:
         moment = now or utcnow()
         with self.database.session_factory() as session:
-            counts = dict(
-                session.execute(
+            counts: dict[str, int] = {
+                str(row[0]): int(row[1])
+                for row in session.execute(
                     select(
                         BookJobRow.status,
                         func.count(BookJobRow.job_id),
                     ).group_by(BookJobRow.status)
-                ).all()
-            )
+                )
+            }
 
             queued = counts.get(BookJobStatus.QUEUED.value, 0)
             failed = counts.get(BookJobStatus.FAILED.value, 0)
@@ -367,11 +372,13 @@ class QueueHealthService:
                 else None
             )
 
-            expired_leases = session.scalar(
-                select(func.count(BookJobRow.job_id)).where(
-                    BookJobRow.status.notin_(TERMINAL_BOOK_JOB_STATUSES),
-                    BookJobRow.lease_expires_at.is_not(None),
-                    BookJobRow.lease_expires_at <= moment,
+            expired_leases = (
+                session.scalar(
+                    select(func.count(BookJobRow.job_id)).where(
+                        BookJobRow.status.notin_(TERMINAL_BOOK_JOB_STATUSES),
+                        BookJobRow.lease_expires_at.is_not(None),
+                        BookJobRow.lease_expires_at <= moment,
+                    )
                 )
             ) or 0
 
@@ -386,7 +393,9 @@ class QueueHealthService:
 
     def get_book_stuck_jobs(self, now: datetime | None = None) -> list[BookStuckJobItem]:
         moment = now or utcnow()
-        pending_cutoff = moment - timedelta(seconds=self.thresholds.stuck_book_pending_threshold_seconds)
+        pending_cutoff = moment - timedelta(
+            seconds=self.thresholds.stuck_book_pending_threshold_seconds
+        )
         lease_cutoff = moment - timedelta(seconds=self.thresholds.book_lease_grace_seconds)
 
         stuck_items: list[BookStuckJobItem] = []
@@ -475,31 +484,40 @@ class QueueHealthService:
 
         return stuck_items
 
-    def get_storage_cleanup_metrics(
-        self, now: datetime | None = None
-    ) -> StorageCleanupMetrics:
+    def get_storage_cleanup_metrics(self, now: datetime | None = None) -> StorageCleanupMetrics:
         moment = now or utcnow()
         with self.database.session_factory() as session:
-            queued = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
-                    StorageCleanupJobRow.next_attempt_at <= moment,
+            queued = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
+                        StorageCleanupJobRow.next_attempt_at <= moment,
+                    )
                 )
-            ) or 0
-            retry_waiting = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
-                    StorageCleanupJobRow.next_attempt_at > moment,
+                or 0
+            )
+            retry_waiting = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
+                        StorageCleanupJobRow.next_attempt_at > moment,
+                    )
                 )
-            ) or 0
-            running = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value
+                or 0
+            )
+            running = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value
+                    )
                 )
-            ) or 0
-            failed = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.FAILED.value
+                or 0
+            )
+            failed = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.FAILED.value
+                    )
                 )
             ) or 0
             oldest = session.scalar(
@@ -507,23 +525,26 @@ class QueueHealthService:
                     StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES)
                 )
             )
-            expired = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value,
-                    StorageCleanupJobRow.lease_expires_at.is_not(None),
-                    StorageCleanupJobRow.lease_expires_at <= moment,
+            expired = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value,
+                        StorageCleanupJobRow.lease_expires_at.is_not(None),
+                        StorageCleanupJobRow.lease_expires_at <= moment,
+                    )
                 )
-            ) or 0
-            exhausted = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
-                    StorageCleanupJobRow.attempts >= StorageCleanupJobRow.max_attempts,
+                or 0
+            )
+            exhausted = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
+                        StorageCleanupJobRow.attempts >= StorageCleanupJobRow.max_attempts,
+                    )
                 )
             ) or 0
             oldest_age = (
-                round((moment - _as_utc(oldest)).total_seconds(), 2)
-                if oldest is not None
-                else None
+                round((moment - _as_utc(oldest)).total_seconds(), 2) if oldest is not None else None
             )
             return StorageCleanupMetrics(
                 queued=queued,
@@ -542,9 +563,7 @@ class QueueHealthService:
         pending_cutoff = moment - timedelta(
             seconds=self.thresholds.cleanup_pending_threshold_seconds
         )
-        lease_cutoff = moment - timedelta(
-            seconds=self.thresholds.cleanup_lease_grace_seconds
-        )
+        lease_cutoff = moment - timedelta(seconds=self.thresholds.cleanup_lease_grace_seconds)
         reasons: dict[str, str] = {}
         with self.database.session_factory() as session:
             for row in session.scalars(
@@ -589,9 +608,7 @@ class QueueHealthService:
                     status=row.status,
                     attempts=row.attempts,
                     reason=reasons[row.cleanup_job_id],
-                    age_seconds=round(
-                        (moment - _as_utc(row.created_at)).total_seconds(), 2
-                    ),
+                    age_seconds=round((moment - _as_utc(row.created_at)).total_seconds(), 2),
                 )
                 for row in rows
             ]

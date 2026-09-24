@@ -201,7 +201,7 @@ def _snapshot_relationship(
     people = [
         SnapshotPerson(
             person_id="p_a",
-            display_name="А",
+            display_name="А",  # noqa: RUF001
             source_recording_ids=["rec_a"],
             attribute_sources={"display_name": ["rec_a"]},
         ),
@@ -288,7 +288,6 @@ def test_snapshot_closure_rejects_reversed_parent_child_semantics() -> None:
     )
     with pytest.raises(SnapshotClosureError):
         validate_snapshot_closure(snapshot, expected_recording_ids=["rec_a"])
-
 
 
 def _prose_snapshot(
@@ -497,20 +496,26 @@ def test_evidence_coverage_rejects_role_or_order_inversion(
     draft: str,
 ) -> None:
     snapshot = _prose_snapshot(evidence_text=evidence)
-    assert evidence_refs_used_by_prose(
-        draft,
-        snapshot,
-        candidate_ids=["ev_a"],
-    ) == ()
+    assert (
+        evidence_refs_used_by_prose(
+            draft,
+            snapshot,
+            candidate_ids=["ev_a"],
+        )
+        == ()
+    )
 
 
 def test_evidence_coverage_does_not_count_name_and_year_only() -> None:
     snapshot = _prose_snapshot(evidence_text="Алихан родился в 1945 году.")
-    assert evidence_refs_used_by_prose(
-        "Алихан служил в 1945 году.",
-        snapshot,
-        candidate_ids=["ev_a"],
-    ) == ()
+    assert (
+        evidence_refs_used_by_prose(
+            "Алихан служил в 1945 году.",
+            snapshot,
+            candidate_ids=["ev_a"],
+        )
+        == ()
+    )
 
 
 def test_place_correction_hyphen_variant_remains_rejected() -> None:
@@ -551,7 +556,6 @@ def test_small_number_correction_word_digit_variant_remains_rejected() -> None:
     )
 
 
-
 def test_open_question_is_uncertainty_context_not_book_truth() -> None:
     claim = _Claim(
         object_type="question",
@@ -580,14 +584,12 @@ def test_compiler_relationship_support_rejects_semantic_parent_reversal() -> Non
 
     bundle = GroundingBundle(
         family_id="fam_a",
-        recordings=[
-            {"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}
-        ],
+        recordings=[{"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}],
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
                     "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "А — родитель Б."}
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}  # noqa: RUF001  # noqa: RUF001
                     ]
                 }
             }
@@ -663,14 +665,12 @@ def test_compiler_relationship_support_accepts_equivalent_parent_representation(
 
     bundle = GroundingBundle(
         family_id="fam_a",
-        recordings=[
-            {"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}
-        ],
+        recordings=[{"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}],
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
                     "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "А — родитель Б."}
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}  # noqa: RUF001
                     ]
                 }
             }

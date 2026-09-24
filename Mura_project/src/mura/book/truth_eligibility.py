@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from mura.book.relationship_semantics import canonical_relationship
 from mura.domain.models import (
     AssertionMode,
     ClaimObjectType,
@@ -16,8 +17,6 @@ from mura.domain.models import (
     RelationshipState,
     VerificationStatus,
 )
-from mura.book.relationship_semantics import canonical_relationship
-
 
 _BOOK_GROUNDED_EVIDENCE_CLASSES = {
     EvidenceClass.A_EXPLICIT.value.casefold(),
@@ -121,7 +120,6 @@ def is_book_truth_eligible(
         )
 
     return True
-
 
 
 def is_book_uncertainty_context_eligible(

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from mura.domain.models import RelationshipRole, RelationshipType
 
-
 _ROLE_ALIASES = {
     "parent": RelationshipRole.PARENT.value,
     "father": RelationshipRole.PARENT.value,

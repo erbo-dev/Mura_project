@@ -20,9 +20,9 @@ written from work that has not finished grounding itself.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import (
@@ -60,13 +60,13 @@ from mura.domain.book_models import (
     ChapterStatus as ChapterStatusEnum,
 )
 from mura.jobs import JobStatus
+from mura.leases import LeaseOwnershipLost
+from mura.storage.book_artifacts import build_book_storage_key
 from mura.storage.cleanup import (
     StorageCleanupRepository,
     StorageCleanupResourceType,
     StorageKind,
 )
-from mura.leases import LeaseOwnershipLost
-from mura.storage.book_artifacts import build_book_storage_key
 from mura.storage.database import (
     JSON_VALUE,
     Base,
@@ -219,9 +219,7 @@ class BookPlanRow(Base):
 
 class BookChapterRow(Base):
     __tablename__ = "book_chapters"
-    __table_args__ = (
-        UniqueConstraint("book_id", "chapter_number", name="uq_book_chapter_number"),
-    )
+    __table_args__ = (UniqueConstraint("book_id", "chapter_number", name="uq_book_chapter_number"),)
 
     chapter_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     book_id: Mapped[str] = mapped_column(
@@ -279,9 +277,7 @@ class BookContinuityStateRow(Base):
 
 class BookExportRow(Base):
     __tablename__ = "book_exports"
-    __table_args__ = (
-        UniqueConstraint("book_id", "format", name="uq_book_export_format"),
-    )
+    __table_args__ = (UniqueConstraint("book_id", "format", name="uq_book_export_format"),)
 
     export_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     book_id: Mapped[str] = mapped_column(
@@ -354,9 +350,7 @@ def _guard_worker_write(
     if job_id is None or lease_owner is None:
         raise ValueError("job_id and lease_owner must be provided together")
 
-    book = session.scalar(
-        select(BookRow).where(BookRow.book_id == book_id).with_for_update()
-    )
+    book = session.scalar(select(BookRow).where(BookRow.book_id == book_id).with_for_update())
     if book is None:
         raise LookupError(f"unknown book: {book_id}")
 
@@ -496,9 +490,7 @@ class BookRepository:
 
             book.cancel_requested_at = utcnow()
             exports = list(
-                session.scalars(
-                    select(BookExportRow).where(BookExportRow.book_id == book_id)
-                ).all()
+                session.scalars(select(BookExportRow).where(BookExportRow.book_id == book_id)).all()
             )
             cleanup_items: list[dict[str, str]] = []
             for export in exports:
@@ -544,9 +536,7 @@ class BookRepository:
 
             session.execute(delete(BookExportRow).where(BookExportRow.book_id == book_id))
             session.execute(
-                delete(BookContinuityStateRow).where(
-                    BookContinuityStateRow.book_id == book_id
-                )
+                delete(BookContinuityStateRow).where(BookContinuityStateRow.book_id == book_id)
             )
             session.execute(delete(BookChapterRow).where(BookChapterRow.book_id == book_id))
             session.execute(delete(BookPlanRow).where(BookPlanRow.book_id == book_id))
@@ -569,9 +559,12 @@ class BookRepository:
         offset: int = 0,
     ) -> tuple[list[BookRow], int]:
         with self.database.session_factory() as session:
-            total = session.scalar(
-                select(func.count()).select_from(BookRow).where(BookRow.family_id == family_id)
-            ) or 0
+            total = (
+                session.scalar(
+                    select(func.count()).select_from(BookRow).where(BookRow.family_id == family_id)
+                )
+                or 0
+            )
             items = list(
                 session.scalars(
                     select(BookRow)
@@ -687,7 +680,7 @@ class QueuedBookResult:
 
 
 class BookCreationRepository:
-    """Atomic transaction manager for creating a book, its source snapshot, and its execution job."""
+    """Create a Book, immutable source snapshot, and execution job atomically."""
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -861,9 +854,7 @@ class BookPlanRepository:
                 job_id=job_id,
                 lease_owner=lease_owner,
             )
-            existing = session.scalar(
-                select(BookPlanRow).where(BookPlanRow.book_id == book_id)
-            )
+            existing = session.scalar(select(BookPlanRow).where(BookPlanRow.book_id == book_id))
             if existing is None:
                 row = BookPlanRow(
                     plan_id=pid,
@@ -1464,9 +1455,7 @@ class BookJobRepository:
         lease_owner: str | None,
     ) -> BookJobRow:
         job = session.scalar(
-            select(BookJobRow)
-            .where(BookJobRow.job_id == job_id)
-            .with_for_update()
+            select(BookJobRow).where(BookJobRow.job_id == job_id).with_for_update()
         )
         if job is None:
             raise LookupError(f"unknown book job: {job_id}")

@@ -15,7 +15,7 @@ expressiveness.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Protocol, cast
+from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import StreamingResponse

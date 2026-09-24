@@ -125,9 +125,7 @@ def validate_snapshot_closure(
             )
 
     conflict_claim_ids = {
-        claim_id
-        for conflict in snapshot.conflicts
-        for claim_id in conflict.claim_ids
+        claim_id for conflict in snapshot.conflicts for claim_id in conflict.claim_ids
     }
 
     for claim in snapshot.claims:
@@ -140,17 +138,12 @@ def validate_snapshot_closure(
             verification_status=claim.verification_status,
             assertion_mode=claim.assertion_mode,
             allow_disputed=(
-                claim.archive_status == "disputed"
-                and claim.claim_id in conflict_claim_ids
+                claim.archive_status == "disputed" and claim.claim_id in conflict_claim_ids
             ),
         ):
-            raise SnapshotClosureError(
-                f"claim {claim.claim_id} is not eligible for Book truth"
-            )
+            raise SnapshotClosureError(f"claim {claim.claim_id} is not eligible for Book truth")
         if claim.recording_id not in selected:
-            raise SnapshotClosureError(
-                f"claim {claim.claim_id} is outside selected recordings"
-            )
+            raise SnapshotClosureError(f"claim {claim.claim_id} is outside selected recordings")
         if claim.archive_status not in {"active", "accepted", "disputed"}:
             raise SnapshotClosureError(
                 f"claim {claim.claim_id} has non-Book archive status {claim.archive_status!r}"
@@ -216,21 +209,22 @@ def validate_snapshot_closure(
                 f"relationship {relationship.edge_id} has no supporting claims"
             )
         for claim_id in relationship.source_claim_ids:
-            claim = claim_by_id.get(claim_id)
-            if claim is None:
+            relationship_claim = claim_by_id.get(claim_id)
+            if relationship_claim is None:
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} has dangling claim {claim_id}"
                 )
-            if claim.object_type != "relationship":
+            if relationship_claim.object_type != "relationship":
                 raise SnapshotClosureError(
-                    f"relationship {relationship.edge_id} support {claim_id} is not a relationship claim"
+                    f"relationship {relationship.edge_id} support {claim_id} "
+                    "is not a relationship claim"
                 )
             if not relationship_semantics_match(
-                left_type=claim.predicate,
-                left_subject_person_id=claim.subject_person_id,
-                left_subject_role=claim.subject_role,
-                left_object_person_id=claim.object_person_id,
-                left_object_role=claim.object_role,
+                left_type=relationship_claim.predicate,
+                left_subject_person_id=relationship_claim.subject_person_id,
+                left_subject_role=relationship_claim.subject_role,
+                left_object_person_id=relationship_claim.object_person_id,
+                left_object_role=relationship_claim.object_role,
                 right_type=relationship.relationship_type,
                 right_subject_person_id=relationship.subject_person_id,
                 right_subject_role=relationship.subject_role,
@@ -238,18 +232,17 @@ def validate_snapshot_closure(
                 right_object_role=relationship.object_role,
             ):
                 raise SnapshotClosureError(
-                    f"relationship {relationship.edge_id} support {claim_id} has incompatible direction or roles"
+                    f"relationship {relationship.edge_id} support {claim_id} "
+                    "has incompatible direction or roles"
                 )
-            if claim.recording_id not in selected:
+            if relationship_claim.recording_id not in selected:
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} support is outside selected sources"
                 )
 
     for story in snapshot.stories:
         if story.recording_id not in selected:
-            raise SnapshotClosureError(
-                f"story {story.story_id} is outside selected recordings"
-            )
+            raise SnapshotClosureError(f"story {story.story_id} is outside selected recordings")
         dangling = sorted(set(story.evidence_quote_ids) - set(evidence_by_id))
         if dangling:
             raise SnapshotClosureError(
@@ -263,9 +256,7 @@ def validate_snapshot_closure(
 
     for event in snapshot.events:
         if event.recording_id is None or event.recording_id not in selected:
-            raise SnapshotClosureError(
-                f"event {event.event_id} is outside selected recordings"
-            )
+            raise SnapshotClosureError(f"event {event.event_id} is outside selected recordings")
         dangling = sorted(set(event.evidence_quote_ids) - set(evidence_by_id))
         if dangling:
             raise SnapshotClosureError(
@@ -296,9 +287,7 @@ def validate_snapshot_closure(
 
     for conflict in snapshot.conflicts:
         if not conflict.claim_ids:
-            raise SnapshotClosureError(
-                f"conflict {conflict.conflict_id} has no included claims"
-            )
+            raise SnapshotClosureError(f"conflict {conflict.conflict_id} has no included claims")
         dangling = sorted(set(conflict.claim_ids) - set(claim_by_id))
         if dangling:
             raise SnapshotClosureError(
