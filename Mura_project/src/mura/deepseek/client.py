@@ -160,7 +160,9 @@ class DeepSeekClient:
                             resp.status_code = 429
                             meta = get_fault_metadata(FAULT_DEEPSEEK_429)
                             resp.headers["Retry-After"] = str(meta.get("retry_after", 30))
-                            resp._content = b'{"error":{"message":"Rate limit exceeded","code":429}}'
+                            resp._content = (
+                                b'{"error":{"message":"Rate limit exceeded","code":429}}'
+                            )
                             self._raise_for_status(resp)
                         if consume_fault(FAULT_PROVIDER_401):
                             resp = requests.Response()
@@ -170,7 +172,9 @@ class DeepSeekClient:
                         if consume_fault(FAULT_PROVIDER_503):
                             resp = requests.Response()
                             resp.status_code = 503
-                            resp._content = b'{"error":{"message":"Service Unavailable","code":503}}'
+                            resp._content = (
+                                b'{"error":{"message":"Service Unavailable","code":503}}'
+                            )
                             self._raise_for_status(resp)
                 except ImportError:
                     pass
@@ -223,11 +227,6 @@ class DeepSeekClient:
                 last_error = exc
                 if self.on_usage is not None:
                     try:
-                        err_code = (
-                            "provider_timeout"
-                            if isinstance(exc, requests.Timeout)
-                            else ("provider_rate_limit" if "429" in str(exc) else "extraction_failed")
-                        )
                         if isinstance(exc, requests.Timeout):
                             err_code = "provider_timeout"
                         elif "429" in str(exc):
