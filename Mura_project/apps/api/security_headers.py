@@ -13,6 +13,7 @@ from __future__ import annotations
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 HSTS_HEADER = "max-age=31536000; includeSubDomains"
 
@@ -25,7 +26,7 @@ SECURITY_HEADERS: dict[str, str] = {
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app: object, *, hsts_enabled: bool = False) -> None:
+    def __init__(self, app: ASGIApp, *, hsts_enabled: bool = False) -> None:
         super().__init__(app)
         self.hsts_enabled = hsts_enabled
 
