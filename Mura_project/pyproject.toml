@@ -39,7 +39,7 @@ mura-worker = "apps.worker.main:main"
 
 [project.optional-dependencies]
 books = [
-  "weasyprint>=62,<70",
+  "weasyprint>=70,<71",
 ]
 kaggle = [
   "torch==2.10.*",
@@ -59,11 +59,15 @@ dev = [
   "httpx>=0.28,<1",
   "mypy>=1.17,<2",
   "pip-audit>=2.9,<3",
-  "pytest>=8.4,<9",
+  "pytest>=9.0.3,<10",
   "pytest-cov>=6.2,<7",
   # Pinned exactly: formatter output is version-sensitive, so a range makes
   # `ruff format --check` non-reproducible between local and CI over time.
   "ruff==0.16.3",
+  # pip-audit inspects the complete CI environment, including build tooling.
+  # Keep setuptools above the current security-fixed floor instead of inheriting
+  # the runner image's bundled version.
+  "setuptools>=83,<84",
   "types-requests>=2.32,<3",
 ]
 
