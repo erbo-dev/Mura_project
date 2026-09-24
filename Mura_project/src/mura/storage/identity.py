@@ -219,7 +219,9 @@ class IdentityRepository:
                     ).all()
                 )
                 if set(locked_family_ids) != set(family_ids):
-                    raise MembershipNotFoundError("family membership changed during account deletion")
+                    raise MembershipNotFoundError(
+                        "family membership changed during account deletion"
+                    )
 
                 # Re-read and lock the account's memberships after FamilyRow
                 # locks so a concurrent owner mutation cannot change the answer.
@@ -451,6 +453,7 @@ class IdentityRepository:
         between an owner-count read and family deletion.
         """
 
+        from mura.domain.book_models import ExportFormat
         from mura.observability import ProcessingTraceEventRow
         from mura.storage.archive import (
             ArchiveClaimRow,
@@ -470,7 +473,6 @@ class IdentityRepository:
         )
         from mura.storage.book_artifacts import build_book_storage_key
         from mura.storage.database import PipelineResultRow, ProcessingJobRow, RecordingRow
-        from mura.domain.book_models import ExportFormat
 
         cleanup_repo = cleanup_repository or StorageCleanupRepository(self.database)
         with self.database.session_factory.begin() as session:
