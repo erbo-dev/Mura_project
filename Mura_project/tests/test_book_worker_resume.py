@@ -271,9 +271,7 @@ def _prepare_snapshot(db: Database, family_id: str) -> None:
     )
 
 
-def test_book_worker_end_to_end_flow(
-    db: Database, family_and_user: tuple[str, str], tmp_path: Path
-) -> None:
+def test_book_worker_end_to_end_flow(db: Database, family_and_user: tuple[str, str], tmp_path: Path) -> None:
     fid, uid = family_and_user
     _prepare_snapshot(db, fid)
 
@@ -430,9 +428,7 @@ def test_book_worker_resumes_without_rewriting_approved(
 
     # Check client calls: book_write should only have been called ONCE (for Chapter 2)
     write_calls = [
-        call
-        for call in client.request_json.call_args_list
-        if call.kwargs.get("operation") == "book_write"
+        call for call in client.request_json.call_args_list if call.kwargs.get("operation") == "book_write"
     ]
     assert len(write_calls) == 1
 
