@@ -17,7 +17,6 @@ from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
