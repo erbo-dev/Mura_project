@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from threading import Barrier, Event, Thread
 import uuid
 from pathlib import Path
+from threading import Barrier, Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -29,7 +29,6 @@ from mura.release_control import (
     ReleaseControlRow,
 )
 from mura.storage.archive import ArchivePersonRow
-from mura.storage.completion import finalize_recording_job
 from mura.storage.book import (
     BookCreationRepository,
     BookJobRow,
@@ -43,6 +42,7 @@ from mura.storage.cleanup import (
     StorageCleanupStatus,
     StorageKind,
 )
+from mura.storage.completion import finalize_recording_job
 from mura.storage.database import (
     Database,
     ProcessingJobRow,
