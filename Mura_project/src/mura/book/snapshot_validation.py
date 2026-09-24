@@ -223,7 +223,8 @@ def validate_snapshot_closure(
                 )
             if claim.object_type != "relationship":
                 raise SnapshotClosureError(
-                    f"relationship {relationship.edge_id} support {claim_id} is not a relationship claim"
+                    f"relationship {relationship.edge_id} support {claim_id} "
+                    "is not a relationship claim"
                 )
             if not relationship_semantics_match(
                 left_type=claim.predicate,
@@ -238,7 +239,8 @@ def validate_snapshot_closure(
                 right_object_role=relationship.object_role,
             ):
                 raise SnapshotClosureError(
-                    f"relationship {relationship.edge_id} support {claim_id} has incompatible direction or roles"
+                    f"relationship {relationship.edge_id} support {claim_id} "
+                    "has incompatible direction or roles"
                 )
             if claim.recording_id not in selected:
                 raise SnapshotClosureError(
