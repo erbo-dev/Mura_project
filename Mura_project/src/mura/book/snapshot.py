@@ -502,13 +502,19 @@ def compile_source_snapshot(
             if claim.get("object_type") != "relationship":
                 continue
             raw_payload = claim.get("payload")
-            payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+            relationship_payload: dict[str, Any] = (
+                raw_payload if isinstance(raw_payload, dict) else {}
+            )
             if not relationship_semantics_match(
-                left_type=str(payload.get("relationship_type") or claim.get("predicate") or ""),
+                left_type=str(
+                    relationship_payload.get("relationship_type")
+                    or claim.get("predicate")
+                    or ""
+                ),
                 left_subject_person_id=claim.get("subject_person_id"),
-                left_subject_role=str(payload.get("subject_role") or ""),
+                left_subject_role=str(relationship_payload.get("subject_role") or ""),
                 left_object_person_id=claim.get("object_person_id"),
-                left_object_role=str(payload.get("object_role") or ""),
+                left_object_role=str(relationship_payload.get("object_role") or ""),
                 right_type=str(r.get("relationship_type") or ""),
                 right_subject_person_id=sub_id,
                 right_subject_role=str(r.get("subject_role") or ""),
