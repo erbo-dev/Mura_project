@@ -246,6 +246,8 @@ class DeepSeekClient:
                     time.sleep(min(2**attempt, 10))
 
         error_response = getattr(last_error, "response", None)
+        if not isinstance(error_response, requests.Response):
+            error_response = None
         raise DeepSeekError(
             f"request failed after {attempts} attempts: {last_error}",
             response=error_response,
