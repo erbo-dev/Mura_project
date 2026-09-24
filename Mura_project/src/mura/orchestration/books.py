@@ -630,9 +630,7 @@ class BookJobWorker:
                         continuity=continuity,
                         output_language=out_lang,
                     )
-                    repair_prompt_version, repair_model = _require_repair_telemetry(
-                        rep_telemetry
-                    )
+                    repair_prompt_version, repair_model = _require_repair_telemetry(rep_telemetry)
 
                     self.chapter_repo.update_chapter_draft(
                         book_id=book.book_id,
