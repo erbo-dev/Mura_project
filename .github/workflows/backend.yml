@@ -14,11 +14,6 @@ on:
     paths:
       - "Mura_project/**"
       - ".github/workflows/backend.yml"
-  pull_request:
-    paths:
-      - "Mura_project/**"
-      - ".github/workflows/backend.yml"
-
 jobs:
   test:
     name: Python 3.11 — verify backend
