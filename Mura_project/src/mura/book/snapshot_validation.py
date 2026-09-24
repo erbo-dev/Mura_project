@@ -235,7 +235,7 @@ def validate_snapshot_closure(
                     f"relationship {relationship.edge_id} support {claim_id} "
                     "has incompatible direction or roles"
                 )
-            if claim.recording_id not in selected:
+            if relationship_claim.recording_id not in selected:
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} support is outside selected sources"
                 )
