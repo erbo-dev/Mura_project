@@ -125,9 +125,7 @@ def validate_snapshot_closure(
             )
 
     conflict_claim_ids = {
-        claim_id
-        for conflict in snapshot.conflicts
-        for claim_id in conflict.claim_ids
+        claim_id for conflict in snapshot.conflicts for claim_id in conflict.claim_ids
     }
 
     for claim in snapshot.claims:
@@ -140,17 +138,12 @@ def validate_snapshot_closure(
             verification_status=claim.verification_status,
             assertion_mode=claim.assertion_mode,
             allow_disputed=(
-                claim.archive_status == "disputed"
-                and claim.claim_id in conflict_claim_ids
+                claim.archive_status == "disputed" and claim.claim_id in conflict_claim_ids
             ),
         ):
-            raise SnapshotClosureError(
-                f"claim {claim.claim_id} is not eligible for Book truth"
-            )
+            raise SnapshotClosureError(f"claim {claim.claim_id} is not eligible for Book truth")
         if claim.recording_id not in selected:
-            raise SnapshotClosureError(
-                f"claim {claim.claim_id} is outside selected recordings"
-            )
+            raise SnapshotClosureError(f"claim {claim.claim_id} is outside selected recordings")
         if claim.archive_status not in {"active", "accepted", "disputed"}:
             raise SnapshotClosureError(
                 f"claim {claim.claim_id} has non-Book archive status {claim.archive_status!r}"
@@ -249,9 +242,7 @@ def validate_snapshot_closure(
 
     for story in snapshot.stories:
         if story.recording_id not in selected:
-            raise SnapshotClosureError(
-                f"story {story.story_id} is outside selected recordings"
-            )
+            raise SnapshotClosureError(f"story {story.story_id} is outside selected recordings")
         dangling = sorted(set(story.evidence_quote_ids) - set(evidence_by_id))
         if dangling:
             raise SnapshotClosureError(
@@ -265,9 +256,7 @@ def validate_snapshot_closure(
 
     for event in snapshot.events:
         if event.recording_id is None or event.recording_id not in selected:
-            raise SnapshotClosureError(
-                f"event {event.event_id} is outside selected recordings"
-            )
+            raise SnapshotClosureError(f"event {event.event_id} is outside selected recordings")
         dangling = sorted(set(event.evidence_quote_ids) - set(evidence_by_id))
         if dangling:
             raise SnapshotClosureError(
@@ -298,9 +287,7 @@ def validate_snapshot_closure(
 
     for conflict in snapshot.conflicts:
         if not conflict.claim_ids:
-            raise SnapshotClosureError(
-                f"conflict {conflict.conflict_id} has no included claims"
-            )
+            raise SnapshotClosureError(f"conflict {conflict.conflict_id} has no included claims")
         dangling = sorted(set(conflict.claim_ids) - set(claim_by_id))
         if dangling:
             raise SnapshotClosureError(

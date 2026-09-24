@@ -122,7 +122,6 @@ def is_book_truth_eligible(
     return True
 
 
-
 def is_book_uncertainty_context_eligible(
     claim: BookClaimLike,
     *,

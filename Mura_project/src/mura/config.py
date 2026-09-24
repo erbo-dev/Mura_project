@@ -100,9 +100,7 @@ class CoreSettings(BaseSettings):
     kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
     asr_provider: ASRProvider = Field(default=ASRProvider.KAGGLE, alias="ASR_PROVIDER")
     whisper_api_key: str | None = Field(default=None, alias="WHISPER_API_KEY")
-    whisper_base_url: str = Field(
-        default="https://api.openai.com/v1", alias="WHISPER_BASE_URL"
-    )
+    whisper_base_url: str = Field(default="https://api.openai.com/v1", alias="WHISPER_BASE_URL")
     whisper_model: str = Field(default="whisper-1", alias="WHISPER_MODEL")
     database_url: str = Field(alias="DATABASE_URL", min_length=1)
     database_auto_create: bool = Field(default=False, alias="DATABASE_AUTO_CREATE")
@@ -112,15 +110,9 @@ class CoreSettings(BaseSettings):
     )
     audio_storage_dir: Path = Field(default=Path(".mura/audio"), alias="AUDIO_STORAGE_DIR")
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
-    supabase_service_role_key: str | None = Field(
-        default=None, alias="SUPABASE_SERVICE_ROLE_KEY"
-    )
-    supabase_storage_bucket: str = Field(
-        default="mura-audio", alias="SUPABASE_STORAGE_BUCKET"
-    )
-    supabase_books_bucket: str = Field(
-        default="mura-books", alias="SUPABASE_BOOKS_BUCKET"
-    )
+    supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
+    supabase_storage_bucket: str = Field(default="mura-audio", alias="SUPABASE_STORAGE_BUCKET")
+    supabase_books_bucket: str = Field(default="mura-books", alias="SUPABASE_BOOKS_BUCKET")
     supabase_storage_timeout_seconds: float = Field(
         default=60.0, alias="SUPABASE_STORAGE_TIMEOUT_SECONDS", ge=1.0, le=600.0
     )
@@ -393,9 +385,7 @@ class CoreSettings(BaseSettings):
                 "STORAGE_CLEANUP_LEASE_SECONDS"
             )
         if self.storage_cleanup_lease_seconds < 3 * self.storage_cleanup_heartbeat_seconds:
-            raise ValueError(
-                "STORAGE_CLEANUP_LEASE_SECONDS must allow at least three heartbeats"
-            )
+            raise ValueError("STORAGE_CLEANUP_LEASE_SECONDS must allow at least three heartbeats")
         return self
 
     @model_validator(mode="after")
@@ -488,9 +478,7 @@ class WorkerSettings(BaseSettings):
     kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
     asr_provider: ASRProvider = Field(default=ASRProvider.KAGGLE, alias="ASR_PROVIDER")
     whisper_api_key: str | None = Field(default=None, alias="WHISPER_API_KEY")
-    whisper_base_url: str = Field(
-        default="https://api.openai.com/v1", alias="WHISPER_BASE_URL"
-    )
+    whisper_base_url: str = Field(default="https://api.openai.com/v1", alias="WHISPER_BASE_URL")
     whisper_model: str = Field(default="whisper-1", alias="WHISPER_MODEL")
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
     asr_device: str = Field(default="cuda:0", alias="ASR_DEVICE")

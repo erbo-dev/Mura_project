@@ -190,9 +190,7 @@ class IdentityRepository:
 
         with self.database.session_factory.begin() as session:
             user = session.scalar(
-                select(UserRow)
-                .where(UserRow.user_id == user_id)
-                .with_for_update()
+                select(UserRow).where(UserRow.user_id == user_id).with_for_update()
             )
             if user is None:
                 return False
@@ -477,9 +475,7 @@ class IdentityRepository:
         cleanup_repo = cleanup_repository or StorageCleanupRepository(self.database)
         with self.database.session_factory.begin() as session:
             family = session.scalar(
-                select(FamilyRow)
-                .where(FamilyRow.family_id == family_id)
-                .with_for_update()
+                select(FamilyRow).where(FamilyRow.family_id == family_id).with_for_update()
             )
             if family is None:
                 return None
@@ -509,9 +505,7 @@ class IdentityRepository:
             )
             books = list(
                 session.scalars(
-                    select(BookRow)
-                    .where(BookRow.family_id == family_id)
-                    .with_for_update()
+                    select(BookRow).where(BookRow.family_id == family_id).with_for_update()
                 ).all()
             )
             recording_ids = [row.recording_id for row in recordings]
@@ -593,9 +587,7 @@ class IdentityRepository:
                 session.execute(delete(BookChapterRow).where(BookChapterRow.book_id.in_(book_ids)))
                 session.execute(delete(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids)))
                 session.execute(
-                    delete(BookSourceSnapshotRow).where(
-                        BookSourceSnapshotRow.book_id.in_(book_ids)
-                    )
+                    delete(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids))
                 )
                 session.execute(delete(BookJobRow).where(BookJobRow.book_id.in_(book_ids)))
                 session.execute(delete(BookRow).where(BookRow.family_id == family_id))
@@ -607,14 +599,10 @@ class IdentityRepository:
                     )
                 )
                 session.execute(
-                    delete(ArchiveClaimRow).where(
-                        ArchiveClaimRow.recording_id.in_(recording_ids)
-                    )
+                    delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id.in_(recording_ids))
                 )
                 session.execute(
-                    delete(ProcessingJobRow).where(
-                        ProcessingJobRow.recording_id.in_(recording_ids)
-                    )
+                    delete(ProcessingJobRow).where(ProcessingJobRow.recording_id.in_(recording_ids))
                 )
                 session.execute(
                     delete(PipelineResultRow).where(
@@ -632,16 +620,10 @@ class IdentityRepository:
             session.execute(
                 delete(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == family_id)
             )
+            session.execute(delete(ArchiveClaimRow).where(ArchiveClaimRow.family_id == family_id))
+            session.execute(delete(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id))
             session.execute(
-                delete(ArchiveClaimRow).where(ArchiveClaimRow.family_id == family_id)
-            )
-            session.execute(
-                delete(ArchivePersonRow).where(ArchivePersonRow.family_id == family_id)
-            )
-            session.execute(
-                delete(FamilyMembershipRow).where(
-                    FamilyMembershipRow.family_id == family_id
-                )
+                delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id)
             )
             session.delete(family)
 

@@ -15,20 +15,71 @@ from dataclasses import dataclass
 from mura.domain.book_models import BookSourceSnapshot
 
 _CYR = "A-Za-zА-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі"
-_CAPITALIZED_TOKEN = re.compile(
-    rf"(?<![\w-])([A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}})"
-)
+_CAPITALIZED_TOKEN = re.compile(rf"(?<![\w-])([A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}})")
 
 _NON_PERSON_WORDS = {
-    "это", "этот", "эта", "тогда", "потом", "когда", "однажды", "сначала",
-    "после", "перед", "домой", "семья", "война", "победа", "госпиталь",
-    "дом", "город", "деревня", "село", "улица", "фотография", "фото",
-    "письмо", "день", "вечер", "утро", "ночь", "год", "жизнь", "работа",
-    "школа", "история", "источники", "источник",
-    "үйде", "ауылдағы", "сол", "осы", "бұл", "кейін", "соғыс", "жеңіс",
-    "үй", "қала", "ауыл", "көше", "сурет", "хат", "күн", "кеш", "таң",
-    "түн", "жыл", "өмір", "жұмыс", "мектеп",
-    "атамыз", "әжеміз", "дедушка", "бабушка", "мама", "папа",
+    "это",
+    "этот",
+    "эта",
+    "тогда",
+    "потом",
+    "когда",
+    "однажды",
+    "сначала",
+    "после",
+    "перед",
+    "домой",
+    "семья",
+    "война",
+    "победа",
+    "госпиталь",
+    "дом",
+    "город",
+    "деревня",
+    "село",
+    "улица",
+    "фотография",
+    "фото",
+    "письмо",
+    "день",
+    "вечер",
+    "утро",
+    "ночь",
+    "год",
+    "жизнь",
+    "работа",
+    "школа",
+    "история",
+    "источники",
+    "источник",
+    "үйде",
+    "ауылдағы",
+    "сол",
+    "осы",
+    "бұл",
+    "кейін",
+    "соғыс",
+    "жеңіс",
+    "үй",
+    "қала",
+    "ауыл",
+    "көше",
+    "сурет",
+    "хат",
+    "күн",
+    "кеш",
+    "таң",
+    "түн",
+    "жыл",
+    "өмір",
+    "жұмыс",
+    "мектеп",
+    "атамыз",
+    "әжеміз",
+    "дедушка",
+    "бабушка",
+    "мама",
+    "папа",
 }
 
 _PERSON_ACTION = re.compile(
@@ -62,6 +113,7 @@ def _sentence_start_entity_predicate(tail: str) -> bool:
         if _RU_ENTITY_VERB_ENDING.search(token) or _KK_ENTITY_VERB_ENDING.search(token):
             return True
     return False
+
 
 # High-signal factual predicates about a known person. These are intentionally
 # narrower than natural language in general: the goal is to close obvious
@@ -119,9 +171,7 @@ _PAIR_QUOTES = (
     re.compile(r"„([^“\n]{5,})“"),
     re.compile(r"\"([^\"\n]{5,})\""),
 )
-_DASH_QUOTE = re.compile(
-    r"(?m)(?:^|\n|:\s*)[ \t]*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)"
-)
+_DASH_QUOTE = re.compile(r"(?m)(?:^|\n|:\s*)[ \t]*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)")
 
 _FOUR_DIGIT_YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
 _SHORT_YEAR = re.compile(r"\bв\s+(\d{2})(?:\s*-?\s*(?:м|ом))?\s+году\b", re.IGNORECASE)
@@ -542,8 +592,30 @@ def extract_direct_speech(text: str) -> tuple[str, ...]:
 
 
 _EVIDENCE_STOPWORDS = {
-    "и", "в", "во", "на", "с", "со", "к", "по", "что", "это", "он", "она",
-    "мы", "я", "the", "a", "an", "and", "to", "of", "бұл", "сол", "ол", "мен",
+    "и",
+    "в",
+    "во",
+    "на",
+    "с",
+    "со",
+    "к",
+    "по",
+    "что",
+    "это",
+    "он",
+    "она",
+    "мы",
+    "я",
+    "the",
+    "a",
+    "an",
+    "and",
+    "to",
+    "of",
+    "бұл",
+    "сол",
+    "ол",
+    "мен",
 }
 
 _NEGATION_MARKERS = (" не ", " никогда ", " емес ", " ешқашан ", " never ", " not ")
@@ -624,11 +696,7 @@ def _person_anchor_stems(snapshot: BookSourceSnapshot) -> set[str]:
     anchors: set[str] = set()
     for forms in _person_forms(snapshot).values():
         for form in forms:
-            anchors.update(
-                _stem_token(part)
-                for part in form.split()
-                if len(part) >= 3
-            )
+            anchors.update(_stem_token(part) for part in form.split() if len(part) >= 3)
     return anchors
 
 

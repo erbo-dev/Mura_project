@@ -217,7 +217,6 @@ def test_postgres_migration_and_atomic_completion(tmp_path: Path) -> None:
     assert TraceRepository(database).get_job_trace(job_id=job_id) is not None
 
 
-
 def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
     """Two real PostgreSQL transactions cannot both pass the active-book check."""
 
@@ -356,9 +355,7 @@ def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
             )
             assert (
                 session.scalar(
-                    select(func.count(BookJobRow.job_id)).where(
-                        BookJobRow.family_id == family_id
-                    )
+                    select(func.count(BookJobRow.job_id)).where(BookJobRow.family_id == family_id)
                 )
                 == 1
             )
@@ -369,7 +366,6 @@ def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
         with database.session_factory.begin() as session:
             session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
             session.execute(delete(UserRow).where(UserRow.user_id == user_id))
-
 
 
 def test_postgres_cleanup_claim_skips_locked_job() -> None:
@@ -524,9 +520,7 @@ def test_postgres_concurrent_family_deletes_converge_to_one_result() -> None:
     finally:
         with database.session_factory.begin() as session:
             session.execute(
-                delete(FamilyMembershipRow).where(
-                    FamilyMembershipRow.family_id == family_id
-                )
+                delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id)
             )
             session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
             session.execute(delete(UserRow).where(UserRow.user_id == user_id))
@@ -606,9 +600,7 @@ def test_postgres_family_delete_rechecks_owner_count_after_membership_race() -> 
         try:
             with database.session_factory.begin() as session:
                 family = session.scalar(
-                    select(FamilyRow)
-                    .where(FamilyRow.family_id == family_id)
-                    .with_for_update()
+                    select(FamilyRow).where(FamilyRow.family_id == family_id).with_for_update()
                 )
                 assert family is not None
                 membership = session.scalar(
@@ -681,15 +673,10 @@ def test_postgres_family_delete_rechecks_owner_count_after_membership_race() -> 
         deleter.join(timeout=5)
         with database.session_factory.begin() as session:
             session.execute(
-                delete(FamilyMembershipRow).where(
-                    FamilyMembershipRow.family_id == family_id
-                )
+                delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id)
             )
             session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
-            session.execute(
-                delete(UserRow).where(UserRow.user_id.in_([owner_id, member_id]))
-            )
-
+            session.execute(delete(UserRow).where(UserRow.user_id.in_([owner_id, member_id])))
 
 
 def test_postgres_concurrent_recording_creation_respects_family_daily_limit() -> None:
@@ -789,16 +776,12 @@ def test_postgres_concurrent_recording_creation_respects_family_daily_limit() ->
         with db.session_factory.begin() as session:
             recording_ids = list(
                 session.scalars(
-                    select(RecordingRow.recording_id).where(
-                        RecordingRow.family_id == family_id
-                    )
+                    select(RecordingRow.recording_id).where(RecordingRow.family_id == family_id)
                 ).all()
             )
             if recording_ids:
                 session.execute(
-                    delete(ProcessingJobRow).where(
-                        ProcessingJobRow.recording_id.in_(recording_ids)
-                    )
+                    delete(ProcessingJobRow).where(ProcessingJobRow.recording_id.in_(recording_ids))
                 )
                 session.execute(
                     delete(RecordingRow).where(RecordingRow.recording_id.in_(recording_ids))

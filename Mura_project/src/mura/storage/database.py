@@ -526,9 +526,7 @@ class RecordingRepository:
         lease_owner: str | None,
     ) -> ProcessingJobRow:
         job = session.scalar(
-            select(ProcessingJobRow)
-            .where(ProcessingJobRow.job_id == job_id)
-            .with_for_update()
+            select(ProcessingJobRow).where(ProcessingJobRow.job_id == job_id).with_for_update()
         )
         if job is None:
             raise LookupError(f"unknown job: {job_id}")

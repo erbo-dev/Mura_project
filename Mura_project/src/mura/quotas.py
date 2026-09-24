@@ -38,9 +38,7 @@ class BookQuotaService:
         """
         # 1. Exclusive row lock on the family row
         locked_family_id = session.scalar(
-            select(FamilyRow.family_id)
-            .where(FamilyRow.family_id == family_id)
-            .with_for_update()
+            select(FamilyRow.family_id).where(FamilyRow.family_id == family_id).with_for_update()
         )
         if locked_family_id is None:
             raise HTTPException(
@@ -52,12 +50,15 @@ class BookQuotaService:
         max_daily = getattr(settings, "book_max_created_per_family_per_day", 3)
 
         # 2. Check active books limit (in-progress generations)
-        active_count = session.scalar(
-            select(func.count(BookRow.book_id)).where(
-                BookRow.family_id == family_id,
-                BookRow.status.notin_(TERMINAL_BOOK_STATUSES),
+        active_count = (
+            session.scalar(
+                select(func.count(BookRow.book_id)).where(
+                    BookRow.family_id == family_id,
+                    BookRow.status.notin_(TERMINAL_BOOK_STATUSES),
+                )
             )
-        ) or 0
+            or 0
+        )
 
         if active_count >= max_active:
             raise HTTPException(
@@ -68,20 +69,21 @@ class BookQuotaService:
         # 3. Check daily creation limit (books created in past 24 hours)
         now = utcnow()
         since_24h = now - timedelta(hours=24)
-        daily_count = session.scalar(
-            select(func.count(BookRow.book_id)).where(
-                BookRow.family_id == family_id,
-                BookRow.created_at >= since_24h,
+        daily_count = (
+            session.scalar(
+                select(func.count(BookRow.book_id)).where(
+                    BookRow.family_id == family_id,
+                    BookRow.created_at >= since_24h,
+                )
             )
-        ) or 0
+            or 0
+        )
 
         if daily_count >= max_daily:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=BOOK_DAILY_LIMIT_REACHED,
             )
-
-
 
 
 class RecordingQuotaService:
@@ -100,9 +102,7 @@ class RecordingQuotaService:
             raise ValueError("incoming_size_bytes must be non-negative")
 
         locked_family_id = session.scalar(
-            select(FamilyRow.family_id)
-            .where(FamilyRow.family_id == family_id)
-            .with_for_update()
+            select(FamilyRow.family_id).where(FamilyRow.family_id == family_id).with_for_update()
         )
         if locked_family_id is None:
             raise HTTPException(
@@ -111,12 +111,8 @@ class RecordingQuotaService:
             )
 
         max_active = getattr(settings, "recording_max_active_per_family", 4)
-        max_family_daily = getattr(
-            settings, "recording_max_created_per_family_per_day", 100
-        )
-        max_user_daily = getattr(
-            settings, "recording_max_created_per_user_per_day", 25
-        )
+        max_family_daily = getattr(settings, "recording_max_created_per_family_per_day", 100)
+        max_user_daily = getattr(settings, "recording_max_created_per_user_per_day", 25)
         max_storage_bytes = getattr(
             settings, "family_max_audio_storage_bytes", 10 * 1024 * 1024 * 1024
         )
@@ -176,9 +172,9 @@ class RecordingQuotaService:
 
         stored_bytes = int(
             session.scalar(
-                select(
-                    func.coalesce(func.sum(RecordingRow.audio_size_bytes), 0)
-                ).where(RecordingRow.family_id == family_id)
+                select(func.coalesce(func.sum(RecordingRow.audio_size_bytes), 0)).where(
+                    RecordingRow.family_id == family_id
+                )
             )
             or 0
         )
