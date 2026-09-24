@@ -265,36 +265,52 @@ def run_chapter_gates(
 
     # Writer-reported assertions may add stricter checks, but omitting them can
     # never hide a prose assertion.
-    for assertion in draft.relationship_assertions:
-        s_id = assertion.subject_person_id
-        o_id = assertion.object_person_id
-        r_str = assertion.relation.strip().lower()
+    for reported_assertion in draft.relationship_assertions:
+        s_id = reported_assertion.subject_person_id
+        o_id = reported_assertion.object_person_id
+        r_str = reported_assertion.relation.strip().lower()
         r_norm = _NORM_RELATIONS.get(r_str, r_str)
 
-        if s_id not in known_pids or o_id not in known_pids:
-            blockers.append(
-                GateIssue(
-                    code=GateCode.RELATIONSHIP,
-                    severity=IssueSeverity.BLOCKER,
-                    issue_type=GateCode.RELATIONSHIP.issue_type,
-                    detail=f"Relationship assertion refers to unknown person(s): ({s_id}, {assertion.relation}, {o_id})",
-                    offending=[s_id, o_id],
-                )
-            )
-            continue
-
-        if (s_id, r_norm, o_id) not in grounded_relationships and (s_id, r_str, o_id) not in grounded_relationships:
+        if (
+            s_id is None
+            or o_id is None
+            or s_id not in known_pids
+            or o_id not in known_pids
+        ):
             blockers.append(
                 GateIssue(
                     code=GateCode.RELATIONSHIP,
                     severity=IssueSeverity.BLOCKER,
                     issue_type=GateCode.RELATIONSHIP.issue_type,
                     detail=(
-                        f"Ungrounded relationship assertion: person '{s_id}' as '{assertion.relation}' of '{o_id}' "
-                        "is not supported by family archive relationships."
+                        "Relationship assertion refers to unknown person(s): "
+                        f"({s_id}, {reported_assertion.relation}, {o_id})"
                     ),
-                    location=assertion.text_span or None,
-                    offending=[s_id, assertion.relation, o_id],
+                    offending=[
+                        person_id
+                        for person_id in (s_id, o_id)
+                        if person_id is not None
+                    ],
+                )
+            )
+            continue
+
+        if (
+            (s_id, r_norm, o_id) not in grounded_relationships
+            and (s_id, r_str, o_id) not in grounded_relationships
+        ):
+            blockers.append(
+                GateIssue(
+                    code=GateCode.RELATIONSHIP,
+                    severity=IssueSeverity.BLOCKER,
+                    issue_type=GateCode.RELATIONSHIP.issue_type,
+                    detail=(
+                        f"Ungrounded relationship assertion: person '{s_id}' as "
+                        f"'{reported_assertion.relation}' of '{o_id}' is not supported "
+                        "by family archive relationships."
+                    ),
+                    location=reported_assertion.text_span or None,
+                    offending=[s_id, reported_assertion.relation, o_id],
                 )
             )
 
