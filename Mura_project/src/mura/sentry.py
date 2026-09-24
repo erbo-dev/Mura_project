@@ -191,4 +191,3 @@ def flush_sentry(timeout_seconds: float = 2.0) -> None:
         sentry_sdk.flush(timeout=timeout_seconds)
     except Exception:
         pass
-
