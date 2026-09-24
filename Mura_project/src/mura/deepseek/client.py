@@ -150,6 +150,7 @@ class DeepSeekClient:
                         get_fault_metadata,
                         is_fault_injection_enabled,
                     )
+
                     if is_fault_injection_enabled():
                         if consume_fault(FAULT_DEEPSEEK_TIMEOUT):
                             raise requests.exceptions.Timeout("Injected DeepSeek timeout")
