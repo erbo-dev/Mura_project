@@ -192,7 +192,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     .order_by(BookChapterRow.book_id, BookChapterRow.chapter_number)
                 ).all()
             )
-            if book_ids else []
+            if book_ids
+            else []
         )
         continuity = (
             list(
@@ -205,7 +206,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     )
                 ).all()
             )
-            if book_ids else []
+            if book_ids
+            else []
         )
         exports = (
             list(
@@ -215,7 +217,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     .order_by(BookExportRow.book_id, BookExportRow.format)
                 ).all()
             )
-            if book_ids else []
+            if book_ids
+            else []
         )
 
         snapshot_by_book = {row.book_id: row for row in snapshots}
@@ -349,9 +352,7 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     **row,
                     "story_id": row["claim_id"],
                     "title": (
-                        row["payload"].get("title")
-                        if isinstance(row["payload"], dict)
-                        else None
+                        row["payload"].get("title") if isinstance(row["payload"], dict) else None
                     ),
                     "summary": (
                         row["payload"].get("summary") if isinstance(row["payload"], dict) else None
@@ -365,9 +366,7 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                     **row,
                     "event_id": row["source_object_id"] or row["claim_id"],
                     "title": (
-                        row["payload"].get("title")
-                        if isinstance(row["payload"], dict)
-                        else None
+                        row["payload"].get("title") if isinstance(row["payload"], dict) else None
                     ),
                 }
                 for row in claims_payload
