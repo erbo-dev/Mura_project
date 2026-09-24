@@ -438,10 +438,12 @@ class SupabaseAudioStorage:
 
         buffer.seek(0)
         upload_url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
-        headers = self._headers({
-            "Content-Type": declared,
-            "x-upsert": "true",
-        })
+        headers = self._headers(
+            {
+                "Content-Type": declared,
+                "x-upsert": "true",
+            }
+        )
 
         try:
             try:
@@ -453,8 +455,7 @@ class SupabaseAudioStorage:
 
                 if is_fault_injection_enabled() and consume_fault(FAULT_STORAGE_503):
                     raise AudioStorageError(
-                        "Supabase Storage rejected upload with HTTP 503: "
-                        "Service Unavailable"
+                        "Supabase Storage rejected upload with HTTP 503: Service Unavailable"
                     )
             except ImportError:
                 pass
