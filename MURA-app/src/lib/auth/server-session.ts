@@ -16,9 +16,8 @@
 
 import { readClerkSession } from "@/lib/auth/providers/clerk/adapter";
 import { readDevSession } from "@/lib/auth/providers/dev/adapter";
-import { isDevAuthAllowed } from "@/lib/auth/providers/dev/config";
 import { readSupabaseSession } from "@/lib/auth/providers/supabase/adapter";
-import { isSupabaseAuthConfigured } from "@/lib/auth/providers/supabase/config";
+import { selectAuthProvider } from "@/lib/auth/provider-selection";
 
 export type ServerAuthSession =
   | { status: "authenticated"; accessToken: string }
@@ -47,12 +46,9 @@ export async function readServerAuthSession(request: Request): Promise<ServerAut
    * app says so, exactly as it did before — it does not quietly fall through to
    * an issuer that mints identities on request.
    */
-  if (isDevAuthAllowed()) return readDevSession();
-  /*
-   * Supabase is the production issuer. It is selected only when it is fully
-   * configured, and Clerk remains the fallback for deployments still on it --
-   * neither provider ever stands in for the other's missing configuration.
-   */
-  if (isSupabaseAuthConfigured()) return readSupabaseSession();
-  return readClerkSession();
+  const provider = selectAuthProvider();
+  if (provider === "dev") return readDevSession();
+  if (provider === "supabase") return readSupabaseSession();
+  if (provider === "clerk") return readClerkSession();
+  return { status: "provider_unconfigured" };
 }
