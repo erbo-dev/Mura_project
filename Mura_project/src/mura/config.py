@@ -28,6 +28,14 @@ class ASRProvider(StrEnum):
     WHISPER = "whisper"
 
 
+class WorkerQueue(StrEnum):
+    """Durable queue loops that may be isolated into separate worker processes."""
+
+    RECORDING = "recording"
+    BOOK = "book"
+    CLEANUP = "cleanup"
+
+
 class Environment(StrEnum):
     """Deployment environment. Production-like environments fail closed on unsafe settings."""
 
@@ -117,6 +125,15 @@ class CoreSettings(BaseSettings):
         default=60.0, alias="SUPABASE_STORAGE_TIMEOUT_SECONDS", ge=1.0, le=600.0
     )
     core_max_upload_mb: int = Field(default=25, alias="CORE_MAX_UPLOAD_MB", ge=1, le=200)
+    worker_queues: Annotated[list[WorkerQueue], NoDecode] = Field(
+        default_factory=lambda: [
+            WorkerQueue.RECORDING,
+            WorkerQueue.BOOK,
+            WorkerQueue.CLEANUP,
+        ],
+        alias="WORKER_QUEUES",
+        min_length=1,
+    )
     job_poll_interval_seconds: float = Field(
         default=1.0,
         alias="JOB_POLL_INTERVAL_SECONDS",
@@ -310,7 +327,11 @@ class CoreSettings(BaseSettings):
     mura_fault_injection: bool = Field(default=False, alias="MURA_FAULT_INJECTION")
 
     @field_validator(
-        "cors_allowed_origins", "allowed_hosts", "auth_allowed_algorithms", mode="before"
+        "cors_allowed_origins",
+        "allowed_hosts",
+        "auth_allowed_algorithms",
+        "worker_queues",
+        mode="before",
     )
     @classmethod
     def accept_delimited_values(cls, value: object) -> object:

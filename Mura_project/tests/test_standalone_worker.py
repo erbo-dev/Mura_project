@@ -9,7 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.main import CoreRuntime, create_app, get_settings
-from apps.worker.main import build_worker, install_signal_handlers, main
 from apps.worker.main import (
     WorkerSupervisor,
     build_book_worker,
@@ -18,7 +17,7 @@ from apps.worker.main import (
     install_signal_handlers,
     main,
 )
-from mura.config import CoreSettings
+from mura.config import CoreSettings, WorkerQueue
 from mura.orchestration import RecordingJobWorker
 from mura.orchestration.books import BookJobWorker
 from mura.orchestration.cleanup import StorageCleanupWorker
@@ -90,6 +89,27 @@ def test_health_and_ready_do_not_depend_on_a_worker() -> None:
 
 
 # ----------------------------------------------------------- worker lifecycle
+
+
+def test_worker_queue_selection_defaults_to_all() -> None:
+    assert _settings().worker_queues == [
+        WorkerQueue.RECORDING,
+        WorkerQueue.BOOK,
+        WorkerQueue.CLEANUP,
+    ]
+
+
+def test_worker_queue_selection_accepts_comma_delimited_values() -> None:
+    settings = _settings(WORKER_QUEUES="recording,cleanup")
+
+    assert settings.worker_queues == [WorkerQueue.RECORDING, WorkerQueue.CLEANUP]
+
+
+def test_worker_queue_selection_rejects_unknown_or_empty_values() -> None:
+    with pytest.raises(ValueError):
+        _settings(WORKER_QUEUES="recording,unknown")
+    with pytest.raises(ValueError):
+        _settings(WORKER_QUEUES="")
 
 
 def test_worker_is_constructed_with_lease_settings() -> None:
@@ -246,19 +266,30 @@ def test_build_book_worker_lease_and_heartbeat_settings() -> None:
     assert worker.worker_id.startswith("worker_")
 
 
+def test_build_worker_supervisor_can_isolate_one_queue() -> None:
+    supervisor = build_worker_supervisor(_settings(WORKER_QUEUES="recording"))
+
+    assert isinstance(supervisor.recording_worker, RecordingJobWorker)
+    assert supervisor.book_worker is None
+    assert supervisor.cleanup_worker is None
+
+
 def test_build_worker_supervisor_constructs_all_workers() -> None:
     supervisor = build_worker_supervisor(_settings())
     assert isinstance(supervisor, WorkerSupervisor)
     assert isinstance(supervisor.recording_worker, RecordingJobWorker)
     assert isinstance(supervisor.book_worker, BookJobWorker)
     assert isinstance(supervisor.cleanup_worker, StorageCleanupWorker)
-    assert len(
-        {
-            supervisor.recording_worker.worker_id,
-            supervisor.book_worker.worker_id,
-            supervisor.cleanup_worker.worker_id,
-        }
-    ) == 3
+    assert (
+        len(
+            {
+                supervisor.recording_worker.worker_id,
+                supervisor.book_worker.worker_id,
+                supervisor.cleanup_worker.worker_id,
+            }
+        )
+        == 3
+    )
     assert supervisor.recording_worker.repository.database is supervisor.book_worker.db
     assert (
         supervisor.cleanup_worker.repository.database
@@ -336,4 +367,3 @@ def test_supervisor_propagates_exception_and_stops_sibling() -> None:
 
     assert supervisor.book_worker._stop_event.is_set()
     assert supervisor.cleanup_worker._stop_event.is_set()
-

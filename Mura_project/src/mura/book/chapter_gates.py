@@ -37,25 +37,153 @@ _KZ_GRAPHEMES = set("әіңғүұқөһӘІҢҒҮҰҚӨҺ")
 
 _SOFT_TERMS: set[str] = {
     # Months & Days (Russian & Kazakh)
-    "январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь",
-    "октябрь", "ноябрь", "декабрь", "қаңтар", "ақпан", "наурыз", "сәуір", "мамыр",
-    "маусым", "шілде", "тамыз", "қыркүйек", "қазан", "қараша", "желтоқсан",
-    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
+    "қаңтар",
+    "ақпан",
+    "наурыз",
+    "сәуір",
+    "мамыр",
+    "маусым",
+    "шілде",
+    "тамыз",
+    "қыркүйек",
+    "қазан",
+    "қараша",
+    "желтоқсан",
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
     # Common kinship / titles
-    "ата", "әже", "әке", "шеше", "ана", "аға", "іні", "әпке", "сіңлі", "қарындас",
-    "бала", "қыз", "ұл", "немере", "шөбере", "баба", "келін", "күйеу", "жезде",
-    "дедушка", "бабушка", "отец", "мать", "папа", "мама", "брат", "сестра", "сын", "дочь",
-    "внук", "внучка", "дядя", "тётя", "тетя", "прадед", "прабабушка", "предок", "потомок",
+    "ата",
+    "әже",
+    "әке",
+    "шеше",
+    "ана",
+    "аға",
+    "іні",
+    "әпке",
+    "сіңлі",
+    "қарындас",
+    "бала",
+    "қыз",
+    "ұл",
+    "немере",
+    "шөбере",
+    "баба",
+    "келін",
+    "күйеу",
+    "жезде",
+    "дедушка",
+    "бабушка",
+    "отец",
+    "мать",
+    "папа",
+    "мама",
+    "брат",
+    "сестра",
+    "сын",
+    "дочь",
+    "внук",
+    "внучка",
+    "дядя",
+    "тётя",
+    "тетя",
+    "прадед",
+    "прабабушка",
+    "предок",
+    "потомок",
     # Cultural & historical terms
-    "совет", "ссср", "союз", "партия", "фронт", "война", "победа", "армия", "госпиталь",
-    "колхоз", "совхоз", "завод", "школа", "институт", "университет", "район", "область",
-    "ауыл", "аул", "күй", "домбыра", "домбра", "шапан", "бесік", "тұмар", "құран",
-    "бог", "алла", "құдай", "жаратқан", "жаным", "ботам", "жарығым", "күнім",
-    "батыр", "хан", "би", "болыс", "ақсақал", "ақын", "жырау",
+    "совет",
+    "ссср",
+    "союз",
+    "партия",
+    "фронт",
+    "война",
+    "победа",
+    "армия",
+    "госпиталь",
+    "колхоз",
+    "совхоз",
+    "завод",
+    "школа",
+    "институт",
+    "университет",
+    "район",
+    "область",
+    "ауыл",
+    "аул",
+    "күй",
+    "домбыра",
+    "домбра",
+    "шапан",
+    "бесік",
+    "тұмар",
+    "құран",
+    "бог",
+    "алла",
+    "құдай",
+    "жаратқан",
+    "жаным",
+    "ботам",
+    "жарығым",
+    "күнім",
+    "батыр",
+    "хан",
+    "би",
+    "болыс",
+    "ақсақал",
+    "ақын",
+    "жырау",
     # Pronouns & Demonstratives (Kazakh & Russian)
-    "бұл", "осы", "сол", "ол", "олар", "біз", "мен", "сен", "сіз", "бәрі", "барлығы",
-    "он", "она", "оно", "они", "мы", "вы", "я", "ты", "это", "этот", "эта", "тот", "та",
-    "все", "всё", "каждый", "никто", "ничто", "кто", "что", "где", "когда", "как",
+    "бұл",
+    "осы",
+    "сол",
+    "ол",
+    "олар",
+    "біз",
+    "мен",
+    "сен",
+    "сіз",
+    "бәрі",
+    "барлығы",
+    "он",
+    "она",
+    "оно",
+    "они",
+    "мы",
+    "вы",
+    "я",
+    "ты",
+    "это",
+    "этот",
+    "эта",
+    "тот",
+    "та",
+    "все",
+    "всё",
+    "каждый",
+    "никто",
+    "ничто",
+    "кто",
+    "что",
+    "где",
+    "когда",
+    "как",
 }
 
 _NORM_RELATIONS: dict[str, str] = {
@@ -154,9 +282,7 @@ def run_chapter_gates(
     # Gate 2: YEAR — includes normalized short/textual year forms when they can
     # be resolved deterministically against the snapshot.
     allowed_years_set = set(snapshot.allowed_years)
-    ungrounded_years = [
-        str(year) for year in analysis.years if year not in allowed_years_set
-    ]
+    ungrounded_years = [str(year) for year in analysis.years if year not in allowed_years_set]
     if ungrounded_years or analysis.ambiguous_short_years:
         blockers.append(
             GateIssue(
@@ -164,9 +290,7 @@ def run_chapter_gates(
                 severity=IssueSeverity.BLOCKER,
                 issue_type=GateCode.YEAR.issue_type,
                 detail="Chapter contains unsupported or ambiguous factual year expressions.",
-                offending=sorted(
-                    set(ungrounded_years) | set(analysis.ambiguous_short_years)
-                ),
+                offending=sorted(set(ungrounded_years) | set(analysis.ambiguous_short_years)),
             )
         )
 
@@ -225,10 +349,7 @@ def run_chapter_gates(
             grounded_relationships.add((o_pid, "child", s_pid))
 
     for assertion in analysis.relationships:
-        if (
-            assertion.subject_person_id is None
-            or assertion.object_person_id is None
-        ):
+        if assertion.subject_person_id is None or assertion.object_person_id is None:
             blockers.append(
                 GateIssue(
                     code=GateCode.RELATIONSHIP,
@@ -265,36 +386,44 @@ def run_chapter_gates(
 
     # Writer-reported assertions may add stricter checks, but omitting them can
     # never hide a prose assertion.
-    for assertion in draft.relationship_assertions:
-        s_id = assertion.subject_person_id
-        o_id = assertion.object_person_id
-        r_str = assertion.relation.strip().lower()
+    for reported_assertion in draft.relationship_assertions:
+        s_id = reported_assertion.subject_person_id
+        o_id = reported_assertion.object_person_id
+        r_str = reported_assertion.relation.strip().lower()
         r_norm = _NORM_RELATIONS.get(r_str, r_str)
 
-        if s_id not in known_pids or o_id not in known_pids:
-            blockers.append(
-                GateIssue(
-                    code=GateCode.RELATIONSHIP,
-                    severity=IssueSeverity.BLOCKER,
-                    issue_type=GateCode.RELATIONSHIP.issue_type,
-                    detail=f"Relationship assertion refers to unknown person(s): ({s_id}, {assertion.relation}, {o_id})",
-                    offending=[s_id, o_id],
-                )
-            )
-            continue
-
-        if (s_id, r_norm, o_id) not in grounded_relationships and (s_id, r_str, o_id) not in grounded_relationships:
+        if s_id is None or o_id is None or s_id not in known_pids or o_id not in known_pids:
             blockers.append(
                 GateIssue(
                     code=GateCode.RELATIONSHIP,
                     severity=IssueSeverity.BLOCKER,
                     issue_type=GateCode.RELATIONSHIP.issue_type,
                     detail=(
-                        f"Ungrounded relationship assertion: person '{s_id}' as '{assertion.relation}' of '{o_id}' "
-                        "is not supported by family archive relationships."
+                        "Relationship assertion refers to unknown person(s): "
+                        f"({s_id}, {reported_assertion.relation}, {o_id})"
                     ),
-                    location=assertion.text_span or None,
-                    offending=[s_id, assertion.relation, o_id],
+                    offending=[person_id for person_id in (s_id, o_id) if person_id is not None],
+                )
+            )
+            continue
+
+        if (s_id, r_norm, o_id) not in grounded_relationships and (
+            s_id,
+            r_str,
+            o_id,
+        ) not in grounded_relationships:
+            blockers.append(
+                GateIssue(
+                    code=GateCode.RELATIONSHIP,
+                    severity=IssueSeverity.BLOCKER,
+                    issue_type=GateCode.RELATIONSHIP.issue_type,
+                    detail=(
+                        f"Ungrounded relationship assertion: person '{s_id}' as "
+                        f"'{reported_assertion.relation}' of '{o_id}' is not supported "
+                        "by family archive relationships."
+                    ),
+                    location=reported_assertion.text_span or None,
+                    offending=[s_id, reported_assertion.relation, o_id],
                 )
             )
 
@@ -302,14 +431,11 @@ def run_chapter_gates(
     # years also block obvious short/textual paraphrases such as "24-м году".
     for cor in snapshot.corrections:
         wrong = cor.original_value.strip()
-        found_rejected = bool(
-            wrong and contains_rejected_correction(text, wrong)
-        )
+        found_rejected = bool(wrong and contains_rejected_correction(text, wrong))
         if wrong.isdigit() and len(wrong) == 4:
             normalized_prose = normalize_text(text)
             found_rejected = found_rejected or any(
-                pattern.search(normalized_prose)
-                for pattern in rejected_year_patterns(int(wrong))
+                pattern.search(normalized_prose) for pattern in rejected_year_patterns(int(wrong))
             )
         if found_rejected:
             blockers.append(
@@ -384,9 +510,7 @@ def run_chapter_gates(
                     severity=IssueSeverity.BLOCKER,
                     issue_type=GateCode.CONFLICT.issue_type,
                     detail="Chapter uses unresolved conflicting source claims without preserving disagreement.",
-                    offending=[
-                        conflict.conflict_id for conflict in relevant_open_conflicts
-                    ],
+                    offending=[conflict.conflict_id for conflict in relevant_open_conflicts],
                 )
             )
 
@@ -395,9 +519,7 @@ def run_chapter_gates(
     total_planned = len(chapter_plan.evidence_refs)
     if total_planned > 0:
         actual_evidence_ids = set(analysis.actual_evidence_ids)
-        covered = sum(
-            1 for eid in chapter_plan.evidence_refs if eid in actual_evidence_ids
-        )
+        covered = sum(1 for eid in chapter_plan.evidence_refs if eid in actual_evidence_ids)
         coverage_ratio = covered / total_planned
         if covered == 0:
             blockers.append(
@@ -422,9 +544,7 @@ def run_chapter_gates(
                         f"Evidence coverage {coverage_ratio:.2f} is below target 0.5 "
                         f"({covered}/{total_planned} planned evidence quotes used)."
                     ),
-                    offending=list(
-                        set(chapter_plan.evidence_refs) - actual_evidence_ids
-                    ),
+                    offending=list(set(chapter_plan.evidence_refs) - actual_evidence_ids),
                 )
             )
     else:
