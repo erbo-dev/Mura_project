@@ -22,6 +22,9 @@
     "react-dom": "^19.1.4",
     "tailwind-merge": "^3.6.0"
   },
+  "overrides": {
+    "postcss": "8.5.23"
+  },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
