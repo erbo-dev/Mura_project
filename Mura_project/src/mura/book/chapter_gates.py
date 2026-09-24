@@ -543,8 +543,8 @@ def run_chapter_gates(
                     detail=(
                         f"Evidence coverage {coverage_ratio:.2f} is below target 0.5 "
                         f"({covered}/{total_planned} planned evidence quotes used)."
-
                     ),
+                    offending=list(set(chapter_plan.evidence_refs) - actual_evidence_ids),
                 )
             )
     else:
