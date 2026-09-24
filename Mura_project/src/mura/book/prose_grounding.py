@@ -406,15 +406,17 @@ def extract_relationships(
         for match in regex.finditer(text):
             person_surface = match.group("person")
             person_id = resolve_person_surface(person_surface, snapshot)
-            unresolved = [surface for surface in [person_surface] if person_id is None]
-            unresolved.append("<coreference>")
+            unresolved_surfaces = [
+                surface for surface in [person_surface] if person_id is None
+            ]
+            unresolved_surfaces.append("<coreference>")
             found.append(
                 ProseRelationship(
                     subject_person_id=person_id,
                     relation=_relation_kind(match.group("relation")),
                     object_person_id=None,
                     text_span=match.group(0),
-                    unresolved_surfaces=tuple(unresolved),
+                    unresolved_surfaces=tuple(unresolved_surfaces),
                 )
             )
 
@@ -439,7 +441,7 @@ def extract_years(
             # can reject the unsupported short form.
             years.append(1900 + short if short >= 30 else 2000 + short)
         else:
-            ambiguous.append(match.group(0))
+            ambiguous.append(decade_match.group(0))
 
     folded = normalize_text(text)
     if "двадцать" in folded:
@@ -458,11 +460,11 @@ def extract_years(
     # fail closed rather than guessing "1940s" from "сороковых".
     allowed_decades = {year // 10 * 10 for year in allowed_years}
     for stem, short_decade in _RU_DECADE_WORDS.items():
-        match = re.search(
+        decade_match = re.search(
             rf"\b(?:в\s+)?(?:начале\s+|середине\s+|конце\s+)?{stem}\w*\b",
             folded,
         )
-        if not match:
+        if not decade_match:
             continue
         matching_decades = sorted(
             decade for decade in allowed_decades if decade % 100 == short_decade
