@@ -543,7 +543,7 @@ def register_book_routes(
         ascii_filename = f"{ascii_title}.{fmt.value}"
         encoded_filename = urllib.parse.quote(f"{book.title}.{fmt.value}")
         content_disposition = (
-            f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+            f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
         )
 
         return StreamingResponse(
