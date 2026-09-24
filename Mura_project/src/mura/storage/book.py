@@ -44,12 +44,20 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from mura.domain.book_models import (
     TERMINAL_BOOK_JOB_STATUSES,
     TERMINAL_BOOK_STATUSES,
-    BookJobStatus as BookJobStatusEnum,
-    BookStage as BookStageEnum,
-    BookStatus as BookStatusEnum,
-    ChapterStatus as ChapterStatusEnum,
     CompiledSnapshot,
     ExportFormat,
+)
+from mura.domain.book_models import (
+    BookJobStatus as BookJobStatusEnum,
+)
+from mura.domain.book_models import (
+    BookStage as BookStageEnum,
+)
+from mura.domain.book_models import (
+    BookStatus as BookStatusEnum,
+)
+from mura.domain.book_models import (
+    ChapterStatus as ChapterStatusEnum,
 )
 from mura.jobs import JobStatus
 from mura.leases import LeaseOwnershipLost
