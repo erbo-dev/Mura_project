@@ -225,22 +225,22 @@ def build_cleanup_worker(
     # cleanup job must use the backend recorded when the object was created,
     # even if the application's current write backend later changes.
     if settings.supabase_url and settings.supabase_service_role_key:
-        targets[
-            (StorageKind.AUDIO.value, AudioStorageBackend.SUPABASE.value)
-        ] = SupabaseAudioStorage(
-            url=settings.supabase_url,
-            service_role_key=settings.supabase_service_role_key,
-            bucket=settings.supabase_storage_bucket,
-            max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
-            timeout_seconds=settings.supabase_storage_timeout_seconds,
+        targets[(StorageKind.AUDIO.value, AudioStorageBackend.SUPABASE.value)] = (
+            SupabaseAudioStorage(
+                url=settings.supabase_url,
+                service_role_key=settings.supabase_service_role_key,
+                bucket=settings.supabase_storage_bucket,
+                max_upload_bytes=settings.core_max_upload_mb * 1024 * 1024,
+                timeout_seconds=settings.supabase_storage_timeout_seconds,
+            )
         )
-        targets[
-            (StorageKind.BOOK_ARTIFACT.value, BookArtifactStorageBackend.SUPABASE.value)
-        ] = SupabaseBookArtifactStorage(
-            url=settings.supabase_url,
-            service_role_key=settings.supabase_service_role_key,
-            bucket=settings.supabase_books_bucket,
-            timeout_seconds=settings.supabase_storage_timeout_seconds,
+        targets[(StorageKind.BOOK_ARTIFACT.value, BookArtifactStorageBackend.SUPABASE.value)] = (
+            SupabaseBookArtifactStorage(
+                url=settings.supabase_url,
+                service_role_key=settings.supabase_service_role_key,
+                bucket=settings.supabase_books_bucket,
+                timeout_seconds=settings.supabase_storage_timeout_seconds,
+            )
         )
 
     return StorageCleanupWorker(
@@ -342,9 +342,7 @@ def build_worker_supervisor(settings: CoreSettings) -> WorkerSupervisor:
     )
     selected = set(settings.worker_queues)
     ai_ledger = (
-        AIUsageLedger(database)
-        if selected & {WorkerQueue.RECORDING, WorkerQueue.BOOK}
-        else None
+        AIUsageLedger(database) if selected & {WorkerQueue.RECORDING, WorkerQueue.BOOK} else None
     )
     recording_worker = (
         build_recording_worker(settings, database=database, ai_ledger=ai_ledger)
@@ -423,9 +421,7 @@ def main() -> int:
                 else None
             ),
             "book_worker_id": (
-                supervisor.book_worker.worker_id
-                if supervisor.book_worker is not None
-                else None
+                supervisor.book_worker.worker_id if supervisor.book_worker is not None else None
             ),
             "cleanup_worker_id": (
                 supervisor.cleanup_worker.worker_id
