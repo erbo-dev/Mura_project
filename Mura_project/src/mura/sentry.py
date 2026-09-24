@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from mura.logging import (
     LogSanitizer,
@@ -142,7 +142,7 @@ def init_sentry(
             environment=environment,
             release=resolved_release,
             send_default_pii=False,
-            before_send=_before_send_sanitizer,
+            before_send=cast(Any, _before_send_sanitizer),
             traces_sampler=lambda ctx: _traces_sampler(ctx, traces_sample_rate),
         )
         sentry_sdk.set_tag("service", service)
