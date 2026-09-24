@@ -169,12 +169,20 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
         book_ids = [row.book_id for row in books]
 
         snapshots = (
-            list(session.scalars(select(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids))).all())
-            if book_ids else []
+            list(
+                session.scalars(
+                    select(BookSourceSnapshotRow).where(BookSourceSnapshotRow.book_id.in_(book_ids))
+                ).all()
+            )
+            if book_ids
+            else []
         )
         plans = (
-            list(session.scalars(select(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids))).all())
-            if book_ids else []
+            list(
+                session.scalars(select(BookPlanRow).where(BookPlanRow.book_id.in_(book_ids))).all()
+            )
+            if book_ids
+            else []
         )
         chapters = (
             list(
@@ -346,9 +354,7 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                         else None
                     ),
                     "summary": (
-                        row["payload"].get("summary")
-                        if isinstance(row["payload"], dict)
-                        else None
+                        row["payload"].get("summary") if isinstance(row["payload"], dict) else None
                     ),
                 }
                 for row in claims_payload
@@ -439,7 +445,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                             "payload": snapshot_by_book[book.book_id].payload,
                             "created_at": _iso(snapshot_by_book[book.book_id].created_at),
                         }
-                        if book.book_id in snapshot_by_book else None
+                        if book.book_id in snapshot_by_book
+                        else None
                     ),
                     "plan": (
                         {
@@ -453,7 +460,8 @@ def export_family_data(database: Database, *, family_id: str) -> dict[str, Any] 
                             "created_at": _iso(plan_by_book[book.book_id].created_at),
                             "updated_at": _iso(plan_by_book[book.book_id].updated_at),
                         }
-                        if book.book_id in plan_by_book else None
+                        if book.book_id in plan_by_book
+                        else None
                     ),
                     "chapters": [
                         {
