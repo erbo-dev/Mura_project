@@ -356,9 +356,7 @@ def test_postgres_concurrent_book_creation_serializes_on_family_lock() -> None:
             )
             assert (
                 session.scalar(
-                    select(func.count(BookJobRow.job_id)).where(
-                        BookJobRow.family_id == family_id
-                    )
+                    select(func.count(BookJobRow.job_id)).where(BookJobRow.family_id == family_id)
                 )
                 == 1
             )
@@ -524,9 +522,7 @@ def test_postgres_concurrent_family_deletes_converge_to_one_result() -> None:
     finally:
         with database.session_factory.begin() as session:
             session.execute(
-                delete(FamilyMembershipRow).where(
-                    FamilyMembershipRow.family_id == family_id
-                )
+                delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id)
             )
             session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
             session.execute(delete(UserRow).where(UserRow.user_id == user_id))
@@ -606,9 +602,7 @@ def test_postgres_family_delete_rechecks_owner_count_after_membership_race() -> 
         try:
             with database.session_factory.begin() as session:
                 family = session.scalar(
-                    select(FamilyRow)
-                    .where(FamilyRow.family_id == family_id)
-                    .with_for_update()
+                    select(FamilyRow).where(FamilyRow.family_id == family_id).with_for_update()
                 )
                 assert family is not None
                 membership = session.scalar(
