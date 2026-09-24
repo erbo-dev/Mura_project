@@ -324,24 +324,17 @@ class RecordingRepository:
             session.execute(
                 delete(PipelineResultRow).where(PipelineResultRow.recording_id == recording_id)
             )
-            try:
-                from mura.observability import ProcessingTraceEventRow
+            from mura.observability import ProcessingTraceEventRow
+            from mura.storage.archive import ArchiveClaimRow
 
-                session.execute(
-                    delete(ProcessingTraceEventRow).where(
-                        ProcessingTraceEventRow.recording_id == recording_id
-                    )
+            session.execute(
+                delete(ProcessingTraceEventRow).where(
+                    ProcessingTraceEventRow.recording_id == recording_id
                 )
-            except Exception:
-                pass
-            try:
-                from mura.storage.archive import ArchiveClaimRow
-
-                session.execute(
-                    delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)
-                )
-            except Exception:
-                pass
+            )
+            session.execute(
+                delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)
+            )
 
             session.delete(recording)
             session.flush()
