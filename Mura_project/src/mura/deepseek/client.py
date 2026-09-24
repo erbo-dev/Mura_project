@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import json
 import re
 import time
@@ -246,8 +245,11 @@ class DeepSeekClient:
                 if attempt < attempts:
                     time.sleep(min(2**attempt, 10))
 
-        response = getattr(last_error, "response", None)
-        raise DeepSeekError(f"request failed after {attempts} attempts: {last_error}", response=response) from last_error
+        error_response = getattr(last_error, "response", None)
+        raise DeepSeekError(
+            f"request failed after {attempts} attempts: {last_error}",
+            response=error_response,
+        ) from last_error
 
     @staticmethod
     def _detect_operation(system_prompt: str) -> str:
