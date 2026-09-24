@@ -789,6 +789,7 @@ def test_postgres_concurrent_recording_creation_respects_family_daily_limit() ->
             session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
             session.execute(delete(UserRow).where(UserRow.user_id == user_id))
 
+
 def test_postgres_concurrent_recording_creation_respects_user_daily_limit_across_families() -> None:
     assert POSTGRES_URL is not None
     suffix = uuid.uuid4().hex[:12]
@@ -900,14 +901,10 @@ def test_postgres_concurrent_recording_creation_respects_user_daily_limit_across
             )
             if recording_ids:
                 session.execute(
-                    delete(ProcessingJobRow).where(
-                        ProcessingJobRow.recording_id.in_(recording_ids)
-                    )
+                    delete(ProcessingJobRow).where(ProcessingJobRow.recording_id.in_(recording_ids))
                 )
                 session.execute(
-                    delete(RecordingRow).where(
-                        RecordingRow.recording_id.in_(recording_ids)
-                    )
+                    delete(RecordingRow).where(RecordingRow.recording_id.in_(recording_ids))
                 )
             session.execute(delete(FamilyRow).where(FamilyRow.family_id.in_(family_ids)))
             session.execute(delete(UserRow).where(UserRow.user_id == user_id))
