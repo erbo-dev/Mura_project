@@ -441,7 +441,7 @@ def extract_years(
             # can reject the unsupported short form.
             years.append(1900 + short if short >= 30 else 2000 + short)
         else:
-            ambiguous.append(decade_match.group(0))
+            ambiguous.append(match.group(0))
 
     folded = normalize_text(text)
     if "двадцать" in folded:
@@ -470,7 +470,7 @@ def extract_years(
             decade for decade in allowed_decades if decade % 100 == short_decade
         )
         if len(matching_decades) != 1:
-            ambiguous.append(match.group(0))
+            ambiguous.append(decade_match.group(0))
 
     return tuple(years), tuple(dict.fromkeys(ambiguous))
 
