@@ -24,7 +24,7 @@ import logging
 import signal
 import sys
 from types import FrameType
-from typing import Any
+from typing import Any, cast
 
 from mura.asr.factory import build_asr_client
 from mura.config import CoreSettings, WorkerQueue
@@ -389,7 +389,7 @@ def install_signal_handlers(
 
 def main() -> int:
     try:
-        settings = CoreSettings()
+        settings = cast(Any, CoreSettings)()
     except Exception:
         # Never echo the validation error: it can quote supplied secrets.
         logger.error("worker is not configured; refusing to start")
