@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from apps.api.errors import (
+    AUTHENTICATION_REQUIRED,
     BOOK_DAILY_LIMIT_REACHED,
     BOOK_GENERATION_ALREADY_ACTIVE,
     FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
@@ -22,7 +23,7 @@ from mura.domain.book_models import TERMINAL_BOOK_STATUSES
 from mura.jobs import JobStatus
 from mura.storage.book import BookRow
 from mura.storage.database import ProcessingJobRow, RecordingRow, utcnow
-from mura.storage.identity import FamilyRow
+from mura.storage.identity import FamilyRow, UserRow
 
 
 class BookQuotaService:
@@ -100,6 +101,18 @@ class RecordingQuotaService:
     ) -> None:
         if incoming_size_bytes < 0:
             raise ValueError("incoming_size_bytes must be non-negative")
+
+        # Serialize the user-wide daily quota across different families.
+        # Account deletion also locks UserRow before FamilyRow, preserving a
+        # consistent lock order and avoiding a cross-feature deadlock.
+        locked_user_id = session.scalar(
+            select(UserRow.user_id).where(UserRow.user_id == user_id).with_for_update()
+        )
+        if locked_user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=AUTHENTICATION_REQUIRED,
+            )
 
         locked_family_id = session.scalar(
             select(FamilyRow.family_id).where(FamilyRow.family_id == family_id).with_for_update()
