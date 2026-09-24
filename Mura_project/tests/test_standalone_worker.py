@@ -367,4 +367,3 @@ def test_supervisor_propagates_exception_and_stops_sibling() -> None:
 
     assert supervisor.book_worker._stop_event.is_set()
     assert supervisor.cleanup_worker._stop_event.is_set()
-
