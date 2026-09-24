@@ -37,4 +37,3 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if self.hsts_enabled:
             response.headers.setdefault("Strict-Transport-Security", HSTS_HEADER)
         return response
-
