@@ -209,22 +209,22 @@ def validate_snapshot_closure(
                 f"relationship {relationship.edge_id} has no supporting claims"
             )
         for claim_id in relationship.source_claim_ids:
-            claim = claim_by_id.get(claim_id)
-            if claim is None:
+            relationship_claim = claim_by_id.get(claim_id)
+            if relationship_claim is None:
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} has dangling claim {claim_id}"
                 )
-            if claim.object_type != "relationship":
+            if relationship_claim.object_type != "relationship":
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} support {claim_id} "
                     "is not a relationship claim"
                 )
             if not relationship_semantics_match(
-                left_type=claim.predicate,
-                left_subject_person_id=claim.subject_person_id,
-                left_subject_role=claim.subject_role,
-                left_object_person_id=claim.object_person_id,
-                left_object_role=claim.object_role,
+                left_type=relationship_claim.predicate,
+                left_subject_person_id=relationship_claim.subject_person_id,
+                left_subject_role=relationship_claim.subject_role,
+                left_object_person_id=relationship_claim.object_person_id,
+                left_object_role=relationship_claim.object_role,
                 right_type=relationship.relationship_type,
                 right_subject_person_id=relationship.subject_person_id,
                 right_subject_role=relationship.subject_role,
