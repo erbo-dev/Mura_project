@@ -1,0 +1,48 @@
+name: Temporary Ruff Format Artifact
+
+on:
+  push:
+    branches:
+      - "fix/post-hardening-ci-followup"
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned Ruff
+        run: python -m pip install ruff==0.16.3
+
+      - name: Format changed Python files
+        shell: bash
+        run: |
+          FILES="$(git diff --name-only origin/main...HEAD -- '*.py' | tr '\n' ' ')"
+          test -n "$FILES"
+          ruff format $FILES
+
+      - name: Upload formatted files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-formatted-files
+          path: |
+            Mura_project/apps/api/errors.py
+            Mura_project/src/mura/book/prose_grounding.py
+            Mura_project/src/mura/book/snapshot.py
+            Mura_project/src/mura/book/snapshot_validation.py
+            Mura_project/src/mura/book/truth_eligibility.py
+            Mura_project/src/mura/config.py
+            Mura_project/src/mura/quotas.py
+            Mura_project/src/mura/storage/book.py
+            Mura_project/src/mura/storage/database.py
+            Mura_project/src/mura/storage/identity.py
+            Mura_project/tests/test_book_semantic_hardening.py
+            Mura_project/tests/test_book_worker_resume.py
+            Mura_project/tests/test_postgres_atomicity.py
+          if-no-files-found: error
