@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import timedelta
 from typing import Any
 
 from mura.book.blueprint_validation import BlueprintLimits
@@ -47,8 +48,8 @@ from mura.domain.book_models import (
     ReviewStatus,
 )
 from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
-from mura.reliability.failures import calculate_retry_delay, classify_failure
 from mura.logging import BookChapterContextManager, WorkerBookJobContextManager
+from mura.reliability.failures import calculate_retry_delay, classify_failure
 from mura.sentry import capture_exception
 from mura.storage.ai_usage import AIUsageLedger
 from mura.storage.book import (
@@ -63,8 +64,6 @@ from mura.storage.book import (
     BookSourceSnapshotRepository,
 )
 from mura.storage.book_artifacts import BookArtifactStorage
-from datetime import timedelta
-
 from mura.storage.database import Database, utcnow
 
 logger = logging.getLogger(__name__)
