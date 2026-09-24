@@ -125,9 +125,7 @@ def validate_snapshot_closure(
             )
 
     conflict_claim_ids = {
-        claim_id
-        for conflict in snapshot.conflicts
-        for claim_id in conflict.claim_ids
+        claim_id for conflict in snapshot.conflicts for claim_id in conflict.claim_ids
     }
 
     for claim in snapshot.claims:
