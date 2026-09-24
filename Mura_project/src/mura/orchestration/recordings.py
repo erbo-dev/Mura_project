@@ -63,7 +63,7 @@ class RecordingJobWorker:
         #: Operational identity only. Never a user, never exposed publicly.
         self.worker_id = worker_id or new_worker_id()
         self.ai_ledger = ai_ledger or AIUsageLedger(repository.database)
-        if hasattr(self.asr_client, "on_usage") and getattr(self.asr_client, "on_usage") is None:
+        if isinstance(self.asr_client, WhisperASRClient) and self.asr_client.on_usage is None:
             self.asr_client.on_usage = self._record_asr_usage
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
