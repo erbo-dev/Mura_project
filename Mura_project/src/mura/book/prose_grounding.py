@@ -119,7 +119,9 @@ _PAIR_QUOTES = (
     re.compile(r"„([^“\n]{5,})“"),
     re.compile(r"\"([^\"\n]{5,})\""),
 )
-_DASH_QUOTE = re.compile(r"(?m)(?:^|\n|:\s*)[ \t]*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)")
+_DASH_QUOTE = re.compile(
+    r"(?m)(?:^|\n|:\s*)[ \t]*[—–]\s*([^\n—–]{5,}?)(?=\s*,\s*[—–]|\s*$)"
+)
 
 _FOUR_DIGIT_YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
 _SHORT_YEAR = re.compile(r"\bв\s+(\d{2})(?:\s*-?\s*(?:м|ом))?\s+году\b", re.IGNORECASE)
@@ -540,30 +542,8 @@ def extract_direct_speech(text: str) -> tuple[str, ...]:
 
 
 _EVIDENCE_STOPWORDS = {
-    "и",
-    "в",
-    "во",
-    "на",
-    "с",
-    "со",
-    "к",
-    "по",
-    "что",
-    "это",
-    "он",
-    "она",
-    "мы",
-    "я",
-    "the",
-    "a",
-    "an",
-    "and",
-    "to",
-    "of",
-    "бұл",
-    "сол",
-    "ол",
-    "мен",
+    "и", "в", "во", "на", "с", "со", "к", "по", "что", "это", "он", "она",
+    "мы", "я", "the", "a", "an", "and", "to", "of", "бұл", "сол", "ол", "мен",
 }
 
 _NEGATION_MARKERS = (" не ", " никогда ", " емес ", " ешқашан ", " never ", " not ")
@@ -644,7 +624,11 @@ def _person_anchor_stems(snapshot: BookSourceSnapshot) -> set[str]:
     anchors: set[str] = set()
     for forms in _person_forms(snapshot).values():
         for form in forms:
-            anchors.update(_stem_token(part) for part in form.split() if len(part) >= 3)
+            anchors.update(
+                _stem_token(part)
+                for part in form.split()
+                if len(part) >= 3
+            )
     return anchors
 
 
