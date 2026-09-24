@@ -107,16 +107,31 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     INSUFFICIENT_FAMILY_ROLE: "This operation is not permitted for your role.",
     SOLE_OWNER_REQUIRED: "A family must always retain at least one owner.",
     BOOK_GENERATION_ALREADY_ACTIVE: "A book generation is already active for this family.",
-    BOOK_DAILY_LIMIT_REACHED: "The daily limit for book generation has been reached for this family.",
-    BOOK_SOURCE_SNAPSHOT_MISSING: "The original book source snapshot is unavailable; select sources explicitly to regenerate.",
+    BOOK_DAILY_LIMIT_REACHED: (
+        "The daily limit for book generation has been reached for this family."
+    ),
+    BOOK_SOURCE_SNAPSHOT_MISSING: (
+        "The original book source snapshot is unavailable; "
+        "select sources explicitly to regenerate."
+    ),
     BOOK_SOURCE_LIMIT_EXCEEDED: "Too many source recordings were selected for one book.",
-    BOOK_SOURCE_SNAPSHOT_TOO_LARGE: "The selected source material is too large for supported book generation.",
-    BOOK_SOURCE_SNAPSHOT_INVALID: "The selected source material has incomplete provenance and cannot be used safely.",
-    ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER: "Transfer ownership or delete sole-owned families before deleting this account.",
+    BOOK_SOURCE_SNAPSHOT_TOO_LARGE: (
+        "The selected source material is too large for supported book generation."
+    ),
+    BOOK_SOURCE_SNAPSHOT_INVALID: (
+        "The selected source material has incomplete provenance and cannot be used safely."
+    ),
+    ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER: (
+        "Transfer ownership or delete sole-owned families before deleting this account."
+    ),
     RECORDING_FAMILY_DAILY_LIMIT_REACHED: "This family has reached its recording creation limit.",
     RECORDING_USER_DAILY_LIMIT_REACHED: "This account has reached its recording upload limit.",
-    RECORDING_CONCURRENCY_LIMIT_REACHED: "Too many recordings are already processing for this family.",
-    FAMILY_AUDIO_STORAGE_LIMIT_REACHED: "This family has reached its configured audio storage limit.",
+    RECORDING_CONCURRENCY_LIMIT_REACHED: (
+        "Too many recordings are already processing for this family."
+    ),
+    FAMILY_AUDIO_STORAGE_LIMIT_REACHED: (
+        "This family has reached its configured audio storage limit."
+    ),
 }
 
 # Plain integers: Starlette renames several of these constants across versions,
