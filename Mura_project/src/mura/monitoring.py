@@ -38,8 +38,6 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(UTC)
 
 
-
-
 class BookQueueMetrics(StrictModel):
     queued: int = Field(ge=0)
     running: int = Field(ge=0)
@@ -58,6 +56,7 @@ class BookStuckJobItem(StrictModel):
     attempts: int
     reason: str
     age_seconds: float
+
 
 class StorageCleanupMetrics(StrictModel):
     queued: int = Field(ge=0)
@@ -343,7 +342,6 @@ class QueueHealthService:
                     )
 
         return stuck_items
-
 
     def get_book_queue_metrics(self, now: datetime | None = None) -> BookQueueMetrics:
         moment = now or utcnow()
