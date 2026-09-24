@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import timedelta
 from typing import Any
 
 from mura.book.blueprint_validation import BlueprintLimits
@@ -47,8 +48,8 @@ from mura.domain.book_models import (
     ReviewStatus,
 )
 from mura.leases import LeaseHeartbeat, LeaseOwnershipLost, new_worker_id
-from mura.reliability.failures import calculate_retry_delay, classify_failure
 from mura.logging import BookChapterContextManager, WorkerBookJobContextManager
+from mura.reliability.failures import calculate_retry_delay, classify_failure
 from mura.sentry import capture_exception
 from mura.storage.ai_usage import AIUsageLedger
 from mura.storage.book import (
@@ -63,8 +64,6 @@ from mura.storage.book import (
     BookSourceSnapshotRepository,
 )
 from mura.storage.book_artifacts import BookArtifactStorage
-from datetime import timedelta
-
 from mura.storage.database import Database, utcnow
 
 logger = logging.getLogger(__name__)
@@ -634,6 +633,7 @@ class BookJobWorker:
                     repair_prompt_version, repair_model = _require_repair_telemetry(
                         rep_telemetry
                     )
+
                     self.chapter_repo.update_chapter_draft(
                         book_id=book.book_id,
                         chapter_number=chapter.chapter_number,
@@ -811,9 +811,7 @@ class BookJobWorker:
 
         # 6. COMPLETED
         all_chapters = self.chapter_repo.list_chapters(book_id=book.book_id)
-        approved_chs = [
-            ch for ch in all_chapters if ch.status == ChapterStatus.APPROVED.value
-        ]
+        approved_chs = [ch for ch in all_chapters if ch.status == ChapterStatus.APPROVED.value]
         final_words = sum(ch.word_count for ch in approved_chs)
 
         self.job_repo.complete_book_and_job(
