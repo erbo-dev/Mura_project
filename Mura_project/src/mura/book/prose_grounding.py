@@ -14,7 +14,6 @@ from dataclasses import dataclass
 
 from mura.domain.book_models import BookSourceSnapshot
 
-
 _CYR = "A-Za-zА-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі"
 _CAPITALIZED_TOKEN = re.compile(
     rf"(?<![\w-])([A-ZА-ЯЁӘҒҚҢӨҰҮҺІ][{_CYR}'’-]{{2,}})"
