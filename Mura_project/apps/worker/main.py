@@ -27,7 +27,7 @@ from types import FrameType
 from typing import Any
 
 from mura.asr.factory import build_asr_client
-from mura.config import CoreSettings
+from mura.config import CoreSettings, WorkerQueue
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.logging import configure_logging
 from mura.orchestration import RecordingJobWorker, build_audio_storage
@@ -260,40 +260,50 @@ def build_worker(settings: CoreSettings) -> RecordingJobWorker:
 
 
 class WorkerSupervisor:
-    """Supervises all durable queue workers in one process."""
+    """Supervise the selected durable queue workers in one process."""
 
     def __init__(
         self,
-        recording_worker: RecordingJobWorker,
-        book_worker: BookJobWorker,
-        cleanup_worker: StorageCleanupWorker,
+        recording_worker: RecordingJobWorker | None,
+        book_worker: BookJobWorker | None,
+        cleanup_worker: StorageCleanupWorker | None,
     ) -> None:
         self.recording_worker = recording_worker
         self.book_worker = book_worker
         self.cleanup_worker = cleanup_worker
 
+    def _workers(self) -> list[RecordingJobWorker | BookJobWorker | StorageCleanupWorker]:
+        return [
+            worker
+            for worker in (
+                self.recording_worker,
+                self.book_worker,
+                self.cleanup_worker,
+            )
+            if worker is not None
+        ]
+
     def request_stop(self) -> None:
-        """Signal both workers to stop claiming new jobs."""
-        self.recording_worker.request_stop()
-        self.book_worker.request_stop()
-        self.cleanup_worker.request_stop()
+        """Signal selected workers to stop claiming new jobs."""
+        for worker in self._workers():
+            worker.request_stop()
 
     def stop(self, timeout_seconds: float = 5.0) -> None:
-        """Stop both workers gracefully."""
+        """Stop selected workers gracefully."""
         self.request_stop()
-        self.recording_worker.stop(timeout_seconds=timeout_seconds)
-        self.book_worker.stop(timeout_seconds=timeout_seconds)
-        self.cleanup_worker.stop(timeout_seconds=timeout_seconds)
+        for worker in self._workers():
+            worker.stop(timeout_seconds=timeout_seconds)
 
     def run_forever(self) -> None:
-        """Run both worker loops concurrently until stopped or until an unhandled exception occurs."""
+        """Run selected worker loops until stopped or one crashes."""
+        workers = self._workers()
+        if not workers:
+            raise RuntimeError("worker supervisor requires at least one queue")
+
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=3, thread_name_prefix="mura-worker"
+            max_workers=len(workers), thread_name_prefix="mura-worker"
         ) as executor:
-            future_rec = executor.submit(self.recording_worker.run_forever)
-            future_book = executor.submit(self.book_worker.run_forever)
-            future_cleanup = executor.submit(self.cleanup_worker.run_forever)
-            futures = [future_rec, future_book, future_cleanup]
+            futures = [executor.submit(worker.run_forever) for worker in workers]
 
             try:
                 while True:
@@ -319,7 +329,7 @@ class WorkerSupervisor:
 
 
 def build_worker_supervisor(settings: CoreSettings) -> WorkerSupervisor:
-    """Construct the supervisor managing both recording and book workers."""
+    """Construct only the queue workers selected for this process."""
     database = Database(
         settings.database_url,
         runtime=DatabaseRuntimeSettings(
@@ -330,10 +340,27 @@ def build_worker_supervisor(settings: CoreSettings) -> WorkerSupervisor:
             statement_timeout_seconds=settings.db_statement_timeout_seconds,
         ),
     )
-    ai_ledger = AIUsageLedger(database)
-    recording_worker = build_recording_worker(settings, database=database, ai_ledger=ai_ledger)
-    book_worker = build_book_worker(settings, database=database, ai_ledger=ai_ledger)
-    cleanup_worker = build_cleanup_worker(settings, database=database)
+    selected = set(settings.worker_queues)
+    ai_ledger = (
+        AIUsageLedger(database)
+        if selected & {WorkerQueue.RECORDING, WorkerQueue.BOOK}
+        else None
+    )
+    recording_worker = (
+        build_recording_worker(settings, database=database, ai_ledger=ai_ledger)
+        if WorkerQueue.RECORDING in selected
+        else None
+    )
+    book_worker = (
+        build_book_worker(settings, database=database, ai_ledger=ai_ledger)
+        if WorkerQueue.BOOK in selected
+        else None
+    )
+    cleanup_worker = (
+        build_cleanup_worker(settings, database=database)
+        if WorkerQueue.CLEANUP in selected
+        else None
+    )
     return WorkerSupervisor(
         recording_worker=recording_worker,
         book_worker=book_worker,
