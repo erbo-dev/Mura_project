@@ -250,7 +250,7 @@ class RecordingJobWorker:
                 # reaches an unpinned decoder.
                 declared = recording.audio_language
                 transcript = self.asr_client.transcribe(
-                    worker_url=worker_url,
+                    worker_url=worker_url or "",
                     audio_path=audio_file,
                     recording_id=recording.recording_id,
                     content_type=recording.content_type,
