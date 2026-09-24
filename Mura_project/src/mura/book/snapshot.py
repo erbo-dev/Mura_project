@@ -220,9 +220,7 @@ def compile_source_snapshot(
             recording_ids
             if recording_ids is not None
             else [
-                str(row.get("recording_id"))
-                for row in bundle.recordings
-                if row.get("recording_id")
+                str(row.get("recording_id")) for row in bundle.recordings if row.get("recording_id")
             ]
         )
     )
