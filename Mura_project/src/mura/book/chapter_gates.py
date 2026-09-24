@@ -37,25 +37,153 @@ _KZ_GRAPHEMES = set("әіңғүұқөһӘІҢҒҮҰҚӨҺ")
 
 _SOFT_TERMS: set[str] = {
     # Months & Days (Russian & Kazakh)
-    "январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь",
-    "октябрь", "ноябрь", "декабрь", "қаңтар", "ақпан", "наурыз", "сәуір", "мамыр",
-    "маусым", "шілде", "тамыз", "қыркүйек", "қазан", "қараша", "желтоқсан",
-    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
+    "қаңтар",
+    "ақпан",
+    "наурыз",
+    "сәуір",
+    "мамыр",
+    "маусым",
+    "шілде",
+    "тамыз",
+    "қыркүйек",
+    "қазан",
+    "қараша",
+    "желтоқсан",
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
     # Common kinship / titles
-    "ата", "әже", "әке", "шеше", "ана", "аға", "іні", "әпке", "сіңлі", "қарындас",
-    "бала", "қыз", "ұл", "немере", "шөбере", "баба", "келін", "күйеу", "жезде",
-    "дедушка", "бабушка", "отец", "мать", "папа", "мама", "брат", "сестра", "сын", "дочь",
-    "внук", "внучка", "дядя", "тётя", "тетя", "прадед", "прабабушка", "предок", "потомок",
+    "ата",
+    "әже",
+    "әке",
+    "шеше",
+    "ана",
+    "аға",
+    "іні",
+    "әпке",
+    "сіңлі",
+    "қарындас",
+    "бала",
+    "қыз",
+    "ұл",
+    "немере",
+    "шөбере",
+    "баба",
+    "келін",
+    "күйеу",
+    "жезде",
+    "дедушка",
+    "бабушка",
+    "отец",
+    "мать",
+    "папа",
+    "мама",
+    "брат",
+    "сестра",
+    "сын",
+    "дочь",
+    "внук",
+    "внучка",
+    "дядя",
+    "тётя",
+    "тетя",
+    "прадед",
+    "прабабушка",
+    "предок",
+    "потомок",
     # Cultural & historical terms
-    "совет", "ссср", "союз", "партия", "фронт", "война", "победа", "армия", "госпиталь",
-    "колхоз", "совхоз", "завод", "школа", "институт", "университет", "район", "область",
-    "ауыл", "аул", "күй", "домбыра", "домбра", "шапан", "бесік", "тұмар", "құран",
-    "бог", "алла", "құдай", "жаратқан", "жаным", "ботам", "жарығым", "күнім",
-    "батыр", "хан", "би", "болыс", "ақсақал", "ақын", "жырау",
+    "совет",
+    "ссср",
+    "союз",
+    "партия",
+    "фронт",
+    "война",
+    "победа",
+    "армия",
+    "госпиталь",
+    "колхоз",
+    "совхоз",
+    "завод",
+    "школа",
+    "институт",
+    "университет",
+    "район",
+    "область",
+    "ауыл",
+    "аул",
+    "күй",
+    "домбыра",
+    "домбра",
+    "шапан",
+    "бесік",
+    "тұмар",
+    "құран",
+    "бог",
+    "алла",
+    "құдай",
+    "жаратқан",
+    "жаным",
+    "ботам",
+    "жарығым",
+    "күнім",
+    "батыр",
+    "хан",
+    "би",
+    "болыс",
+    "ақсақал",
+    "ақын",
+    "жырау",
     # Pronouns & Demonstratives (Kazakh & Russian)
-    "бұл", "осы", "сол", "ол", "олар", "біз", "мен", "сен", "сіз", "бәрі", "барлығы",
-    "он", "она", "оно", "они", "мы", "вы", "я", "ты", "это", "этот", "эта", "тот", "та",
-    "все", "всё", "каждый", "никто", "ничто", "кто", "что", "где", "когда", "как",
+    "бұл",
+    "осы",
+    "сол",
+    "ол",
+    "олар",
+    "біз",
+    "мен",
+    "сен",
+    "сіз",
+    "бәрі",
+    "барлығы",
+    "он",
+    "она",
+    "оно",
+    "они",
+    "мы",
+    "вы",
+    "я",
+    "ты",
+    "это",
+    "этот",
+    "эта",
+    "тот",
+    "та",
+    "все",
+    "всё",
+    "каждый",
+    "никто",
+    "ничто",
+    "кто",
+    "что",
+    "где",
+    "когда",
+    "как",
 }
 
 _NORM_RELATIONS: dict[str, str] = {
@@ -154,9 +282,7 @@ def run_chapter_gates(
     # Gate 2: YEAR — includes normalized short/textual year forms when they can
     # be resolved deterministically against the snapshot.
     allowed_years_set = set(snapshot.allowed_years)
-    ungrounded_years = [
-        str(year) for year in analysis.years if year not in allowed_years_set
-    ]
+    ungrounded_years = [str(year) for year in analysis.years if year not in allowed_years_set]
     if ungrounded_years or analysis.ambiguous_short_years:
         blockers.append(
             GateIssue(
@@ -164,9 +290,7 @@ def run_chapter_gates(
                 severity=IssueSeverity.BLOCKER,
                 issue_type=GateCode.YEAR.issue_type,
                 detail="Chapter contains unsupported or ambiguous factual year expressions.",
-                offending=sorted(
-                    set(ungrounded_years) | set(analysis.ambiguous_short_years)
-                ),
+                offending=sorted(set(ungrounded_years) | set(analysis.ambiguous_short_years)),
             )
         )
 
@@ -225,10 +349,7 @@ def run_chapter_gates(
             grounded_relationships.add((o_pid, "child", s_pid))
 
     for assertion in analysis.relationships:
-        if (
-            assertion.subject_person_id is None
-            or assertion.object_person_id is None
-        ):
+        if assertion.subject_person_id is None or assertion.object_person_id is None:
             blockers.append(
                 GateIssue(
                     code=GateCode.RELATIONSHIP,
@@ -310,14 +431,11 @@ def run_chapter_gates(
     # years also block obvious short/textual paraphrases such as "24-м году".
     for cor in snapshot.corrections:
         wrong = cor.original_value.strip()
-        found_rejected = bool(
-            wrong and contains_rejected_correction(text, wrong)
-        )
+        found_rejected = bool(wrong and contains_rejected_correction(text, wrong))
         if wrong.isdigit() and len(wrong) == 4:
             normalized_prose = normalize_text(text)
             found_rejected = found_rejected or any(
-                pattern.search(normalized_prose)
-                for pattern in rejected_year_patterns(int(wrong))
+                pattern.search(normalized_prose) for pattern in rejected_year_patterns(int(wrong))
             )
         if found_rejected:
             blockers.append(
@@ -392,9 +510,7 @@ def run_chapter_gates(
                     severity=IssueSeverity.BLOCKER,
                     issue_type=GateCode.CONFLICT.issue_type,
                     detail="Chapter uses unresolved conflicting source claims without preserving disagreement.",
-                    offending=[
-                        conflict.conflict_id for conflict in relevant_open_conflicts
-                    ],
+                    offending=[conflict.conflict_id for conflict in relevant_open_conflicts],
                 )
             )
 
@@ -403,9 +519,7 @@ def run_chapter_gates(
     total_planned = len(chapter_plan.evidence_refs)
     if total_planned > 0:
         actual_evidence_ids = set(analysis.actual_evidence_ids)
-        covered = sum(
-            1 for eid in chapter_plan.evidence_refs if eid in actual_evidence_ids
-        )
+        covered = sum(1 for eid in chapter_plan.evidence_refs if eid in actual_evidence_ids)
         coverage_ratio = covered / total_planned
         if covered == 0:
             blockers.append(
@@ -430,9 +544,7 @@ def run_chapter_gates(
                         f"Evidence coverage {coverage_ratio:.2f} is below target 0.5 "
                         f"({covered}/{total_planned} planned evidence quotes used)."
                     ),
-                    offending=list(
-                        set(chapter_plan.evidence_refs) - actual_evidence_ids
-                    ),
+                    offending=list(set(chapter_plan.evidence_refs) - actual_evidence_ids),
                 )
             )
     else:
