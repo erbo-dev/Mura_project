@@ -82,8 +82,8 @@ def _before_send_sanitizer(event: dict[str, Any], hint: dict[str, Any]) -> dict[
             tags["worker_id"] = worker_id
 
     except Exception:
-        # Never crash inside before_send
-        pass
+        # Never crash inside before_send and never include event contents in logs.
+        logger.debug("Sentry before_send sanitization failed")
 
     return event
 
@@ -178,7 +178,7 @@ def capture_exception(
                     scope.set_extra(k, v)
             sentry_sdk.capture_exception(exc)
     except Exception:
-        pass
+        logger.debug("Sentry capture failed")
 
 
 def flush_sentry(timeout_seconds: float = 2.0) -> None:
@@ -190,4 +190,4 @@ def flush_sentry(timeout_seconds: float = 2.0) -> None:
 
         sentry_sdk.flush(timeout=timeout_seconds)
     except Exception:
-        pass
+        logger.debug("Sentry flush failed")
