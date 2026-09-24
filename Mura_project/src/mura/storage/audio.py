@@ -22,8 +22,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO, Protocol
-from typing import TYPE_CHECKING, BinaryIO, Protocol
+from typing import TYPE_CHECKING, BinaryIO, Protocol, cast
 
 import requests
 
@@ -534,7 +533,7 @@ class SupabaseAudioStorage:
             )
 
         response.raw.decode_content = True
-        return response.raw
+        return cast(BinaryIO, response.raw)
 
     @contextmanager
     def materialize(self, storage_key: str) -> Iterator[Path]:
