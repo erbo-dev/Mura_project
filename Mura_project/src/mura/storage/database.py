@@ -328,7 +328,9 @@ class RecordingRepository:
                 from mura.observability import ProcessingTraceRow
 
                 session.execute(
-                    delete(ProcessingTraceRow).where(ProcessingTraceRow.recording_id == recording_id)
+                    delete(ProcessingTraceRow).where(
+                        ProcessingTraceRow.recording_id == recording_id
+                    )
                 )
             except Exception:
                 pass
