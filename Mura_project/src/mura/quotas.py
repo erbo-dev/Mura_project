@@ -38,7 +38,9 @@ class BookQuotaService:
         """
         # 1. Exclusive row lock on the family row
         locked_family_id = session.scalar(
-            select(FamilyRow.family_id).where(FamilyRow.family_id == family_id).with_for_update()
+            select(FamilyRow.family_id)
+            .where(FamilyRow.family_id == family_id)
+            .with_for_update()
         )
         if locked_family_id is None:
             raise HTTPException(
@@ -109,8 +111,12 @@ class RecordingQuotaService:
             )
 
         max_active = getattr(settings, "recording_max_active_per_family", 4)
-        max_family_daily = getattr(settings, "recording_max_created_per_family_per_day", 100)
-        max_user_daily = getattr(settings, "recording_max_created_per_user_per_day", 25)
+        max_family_daily = getattr(
+            settings, "recording_max_created_per_family_per_day", 100
+        )
+        max_user_daily = getattr(
+            settings, "recording_max_created_per_user_per_day", 25
+        )
         max_storage_bytes = getattr(
             settings, "family_max_audio_storage_bytes", 10 * 1024 * 1024 * 1024
         )
@@ -170,9 +176,9 @@ class RecordingQuotaService:
 
         stored_bytes = int(
             session.scalar(
-                select(func.coalesce(func.sum(RecordingRow.audio_size_bytes), 0)).where(
-                    RecordingRow.family_id == family_id
-                )
+                select(
+                    func.coalesce(func.sum(RecordingRow.audio_size_bytes), 0)
+                ).where(RecordingRow.family_id == family_id)
             )
             or 0
         )
