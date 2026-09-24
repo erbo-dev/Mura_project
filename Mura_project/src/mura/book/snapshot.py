@@ -507,9 +507,7 @@ def compile_source_snapshot(
             )
             if not relationship_semantics_match(
                 left_type=str(
-                    relationship_payload.get("relationship_type")
-                    or claim.get("predicate")
-                    or ""
+                    relationship_payload.get("relationship_type") or claim.get("predicate") or ""
                 ),
                 left_subject_person_id=claim.get("subject_person_id"),
                 left_subject_role=str(relationship_payload.get("subject_role") or ""),
