@@ -416,9 +416,22 @@ def main() -> int:
         "worker_started",
         extra={
             "event": "worker_started",
-            "recording_worker_id": supervisor.recording_worker.worker_id,
-            "book_worker_id": supervisor.book_worker.worker_id,
-            "cleanup_worker_id": supervisor.cleanup_worker.worker_id,
+            "worker_queues": [queue.value for queue in settings.worker_queues],
+            "recording_worker_id": (
+                supervisor.recording_worker.worker_id
+                if supervisor.recording_worker is not None
+                else None
+            ),
+            "book_worker_id": (
+                supervisor.book_worker.worker_id
+                if supervisor.book_worker is not None
+                else None
+            ),
+            "cleanup_worker_id": (
+                supervisor.cleanup_worker.worker_id
+                if supervisor.cleanup_worker is not None
+                else None
+            ),
             "recording_lease_seconds": settings.job_lease_seconds,
             "book_lease_seconds": settings.book_job_lease_seconds,
             "recording_heartbeat_seconds": settings.job_heartbeat_seconds,
