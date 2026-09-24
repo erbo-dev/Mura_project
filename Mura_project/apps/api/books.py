@@ -30,8 +30,8 @@ from apps.api.errors import (
 )
 from mura.book.snapshot import compile_source_snapshot
 from mura.book.snapshot_validation import SnapshotClosureError, SnapshotSizeError
-from mura.quotas import BookQuotaService
 from mura.domain.book_models import (
+    MAX_BOOK_SOURCE_RECORDINGS,
     TERMINAL_BOOK_JOB_STATUSES,
     BookAccepted,
     BookChapterPageView,
@@ -41,8 +41,6 @@ from mura.domain.book_models import (
     BookDetailView,
     BookListPageView,
     BookProgressView,
-    MAX_BOOK_SOURCE_RECORDINGS,
-    NarrativeVoice,
     BookRegenerateRequest,
     BookSourceOptionView,
     BookSourceSnapshot,
@@ -52,8 +50,10 @@ from mura.domain.book_models import (
     ChapterStatus,
     ExportFormat,
     ExportStatus,
+    NarrativeVoice,
 )
 from mura.identity.context import AuthorizedFamilyContext
+from mura.quotas import BookQuotaService
 from mura.storage.book import (
     BookChapterRepository,
     BookCreationRepository,
@@ -131,7 +131,10 @@ def resolve_book_source_ids(
         if rec_id not in eligible_id_set:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more requested recordings are not eligible or do not exist in the family archive.",
+                detail=(
+                    "One or more requested recordings are not eligible or do not "
+                    "exist in the family archive."
+                ),
             )
 
     seen: set[str] = set()
