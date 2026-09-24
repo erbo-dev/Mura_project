@@ -351,8 +351,11 @@ def compile_source_snapshot(
         generic_is_fully_selected = (
             bool(generic_sources) and set(generic_sources) <= selected_recording_set
         )
-        raw_attribute_sources = (
-            p.get("attribute_sources") if isinstance(p.get("attribute_sources"), dict) else {}
+        raw_attribute_sources_value = p.get("attribute_sources")
+        raw_attribute_sources: dict[str, object] = (
+            raw_attribute_sources_value
+            if isinstance(raw_attribute_sources_value, dict)
+            else {}
         )
 
         def attribute_sources(
@@ -500,7 +503,8 @@ def compile_source_snapshot(
                 continue
             if claim.get("object_type") != "relationship":
                 continue
-            payload = claim.get("payload") if isinstance(claim.get("payload"), dict) else {}
+            raw_payload = claim.get("payload")
+            payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
             if not relationship_semantics_match(
                 left_type=str(payload.get("relationship_type") or claim.get("predicate") or ""),
                 left_subject_person_id=claim.get("subject_person_id"),
