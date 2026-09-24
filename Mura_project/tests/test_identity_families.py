@@ -10,6 +10,7 @@ from mura.identity.auth import VerifiedIdentity
 from mura.identity.policy import Capability, FamilyRole, capabilities_for, role_allows
 from mura.storage.database import Database
 from mura.storage.identity import (
+    AccountDeletionBlockedError,
     FamilyMembershipRow,
     FamilyRow,
     IdentityRepository,
@@ -288,6 +289,91 @@ def test_non_owner_removal_is_always_allowed(repository: IdentityRepository) -> 
     assert len(repository.list_members(family.family_id)) == 1
 
 
+
+# ------------------------------------------------------------ account deletion
+
+
+def test_delete_viewer_account_removes_membership_and_user(
+    repository: IdentityRepository,
+) -> None:
+    family, _, bob_id = _family_with_two(repository)
+
+    assert repository.delete_account(user_id=bob_id) is True
+
+    assert repository.get_user(bob_id) is None
+    assert repository.get_membership(family_id=family.family_id, user_id=bob_id) is None
+    assert repository.count_owners(family.family_id) == 1
+
+
+def test_delete_editor_account_removes_membership_and_user(
+    repository: IdentityRepository,
+) -> None:
+    family, _, bob_id = _family_with_two(repository)
+    repository.change_member_role(
+        family_id=family.family_id,
+        user_id=bob_id,
+        role=FamilyRole.EDITOR,
+    )
+
+    assert repository.delete_account(user_id=bob_id) is True
+    assert repository.get_user(bob_id) is None
+    assert repository.get_membership(family_id=family.family_id, user_id=bob_id) is None
+
+
+def test_delete_multi_owner_account_preserves_family(
+    repository: IdentityRepository,
+) -> None:
+    family, alice_id, bob_id = _family_with_two(repository)
+    repository.change_member_role(
+        family_id=family.family_id,
+        user_id=bob_id,
+        role=FamilyRole.OWNER,
+    )
+
+    assert repository.delete_account(user_id=alice_id) is True
+
+    assert repository.get_user(alice_id) is None
+    assert repository.get_family_for_member(
+        family_id=family.family_id,
+        user_id=bob_id,
+    ) is not None
+    assert repository.count_owners(family.family_id) == 1
+
+
+def test_delete_sole_owner_account_is_atomic_and_refused(
+    repository: IdentityRepository,
+) -> None:
+    family, alice_id, bob_id = _family_with_two(repository)
+
+    with pytest.raises(AccountDeletionBlockedError) as caught:
+        repository.delete_account(user_id=alice_id)
+
+    assert caught.value.family_ids == [family.family_id]
+    assert repository.get_user(alice_id) is not None
+    assert repository.get_membership(
+        family_id=family.family_id,
+        user_id=alice_id,
+    ) is not None
+    # A refusal must not partially remove unrelated non-owner memberships.
+    other = repository.create_family(name="Other", owner_user_id=bob_id)
+    with repository.database.session_factory.begin() as session:
+        session.add(
+            FamilyMembershipRow(
+                membership_id="membership_alice_other",
+                family_id=other.family_id,
+                user_id=alice_id,
+                role=FamilyRole.VIEWER.value,
+            )
+        )
+
+    with pytest.raises(AccountDeletionBlockedError):
+        repository.delete_account(user_id=alice_id)
+    assert repository.get_membership(
+        family_id=other.family_id,
+        user_id=alice_id,
+    ) is not None
+
+
 # ------------------------------------------------------- real PostgreSQL only
 
 
@@ -413,3 +499,70 @@ def test_postgres_family_listing_is_membership_isolated(
     listed = pg_repository.list_families_for_user(alice.user_id)
 
     assert [family.family_id for family, _ in listed] == [mine.family_id]
+
+
+@pg_only
+def test_postgres_account_delete_vs_owner_promotion_never_orphans_family(
+    pg_repository: IdentityRepository,
+) -> None:
+    alice = pg_repository.resolve_principal(ALICE)
+    bob = pg_repository.resolve_principal(BOB)
+    family = pg_repository.create_family(name="Delete Race", owner_user_id=alice.user_id)
+    with pg_repository.database.session_factory.begin() as session:
+        session.add(
+            FamilyMembershipRow(
+                membership_id="membership_bob_delete_race",
+                family_id=family.family_id,
+                user_id=bob.user_id,
+                role=FamilyRole.VIEWER.value,
+            )
+        )
+
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+
+    def promote() -> None:
+        try:
+            barrier.wait(timeout=10)
+            pg_repository.change_member_role(
+                family_id=family.family_id,
+                user_id=bob.user_id,
+                role=FamilyRole.OWNER,
+            )
+            outcomes.append("promoted")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def delete_alice() -> None:
+        try:
+            barrier.wait(timeout=10)
+            pg_repository.delete_account(user_id=alice.user_id)
+            outcomes.append("deleted")
+        except AccountDeletionBlockedError:
+            outcomes.append("blocked")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=promote), threading.Thread(target=delete_alice)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert not errors
+    assert "promoted" in outcomes
+    assert pg_repository.count_owners(family.family_id) >= 1
+
+    alice_membership = pg_repository.get_membership(
+        family_id=family.family_id,
+        user_id=alice.user_id,
+    )
+    alice_user = pg_repository.get_user(alice.user_id)
+    if "deleted" in outcomes:
+        assert alice_membership is None
+        assert alice_user is None
+    else:
+        assert outcomes == ["blocked", "promoted"] or sorted(outcomes) == ["blocked", "promoted"]
+        assert alice_membership is not None
+        assert alice_user is not None

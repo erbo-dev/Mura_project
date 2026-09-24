@@ -15,12 +15,16 @@ from typing import cast
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import Field
 
-from apps.api.errors import SOLE_OWNER_REQUIRED
+from apps.api.errors import (
+    ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER,
+    SOLE_OWNER_REQUIRED,
+)
 from mura.domain.models import StrictModel
 from mura.identity.auth import Principal
 from mura.identity.context import AuthorizedFamilyContext
 from mura.identity.policy import Capability, FamilyRole, capabilities_for
 from mura.storage.identity import (
+    AccountDeletionBlockedError,
     FamilyDeleteAuthorizationError,
     IdentityRepository,
     MembershipNotFoundError,
@@ -56,6 +60,12 @@ class CreateFamilyRequest(StrictModel):
     name: str = Field(min_length=1, max_length=256)
 
 
+class AccountDeletionResult(StrictModel):
+    mura_data_deleted: bool
+    identity_provider_account_deleted: bool = False
+    requires_provider_sign_out: bool = True
+
+
 def _not_found() -> HTTPException:
     # A private family and a nonexistent one are the same answer.
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
@@ -80,6 +90,27 @@ def register_identity_routes(
             user_id=principal.user_id,
             email=principal.email,
             display_name=principal.display_name,
+        )
+
+    @app.delete("/v1/me", response_model=AccountDeletionResult)
+    def delete_me(
+        principal: Principal = Depends(principal_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> AccountDeletionResult:
+        identity = _repository(repository)
+        try:
+            identity.delete_account(user_id=principal.user_id)
+        except AccountDeletionBlockedError as exc:
+            # The stable code is enough for the client to explain what action
+            # is required; family ids stay private server-side metadata.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER,
+            ) from exc
+        return AccountDeletionResult(
+            mura_data_deleted=True,
+            identity_provider_account_deleted=False,
+            requires_provider_sign_out=True,
         )
 
     @app.post("/v1/families", response_model=FamilyView, status_code=201)
@@ -282,6 +313,7 @@ def sole_owner_error() -> HTTPException:
 
 
 __all__ = [
+    "AccountDeletionResult",
     "CreateFamilyRequest",
     "DeleteFamilyRequest",
     "FamilyView",

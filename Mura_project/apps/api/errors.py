@@ -57,6 +57,11 @@ BOOK_SOURCE_SNAPSHOT_MISSING = "book_source_snapshot_missing"
 BOOK_SOURCE_LIMIT_EXCEEDED = "book_source_limit_exceeded"
 BOOK_SOURCE_SNAPSHOT_TOO_LARGE = "book_source_snapshot_too_large"
 BOOK_SOURCE_SNAPSHOT_INVALID = "book_source_snapshot_invalid"
+ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER = "account_deletion_requires_owner_transfer"
+RECORDING_FAMILY_DAILY_LIMIT_REACHED = "recording_family_daily_limit_reached"
+RECORDING_USER_DAILY_LIMIT_REACHED = "recording_user_daily_limit_reached"
+RECORDING_CONCURRENCY_LIMIT_REACHED = "recording_concurrency_limit_reached"
+FAMILY_AUDIO_STORAGE_LIMIT_REACHED = "family_audio_storage_limit_reached"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -72,6 +77,11 @@ SELECTABLE_CODES = frozenset(
         BOOK_SOURCE_LIMIT_EXCEEDED,
         BOOK_SOURCE_SNAPSHOT_TOO_LARGE,
         BOOK_SOURCE_SNAPSHOT_INVALID,
+        ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER,
+        RECORDING_FAMILY_DAILY_LIMIT_REACHED,
+        RECORDING_USER_DAILY_LIMIT_REACHED,
+        RECORDING_CONCURRENCY_LIMIT_REACHED,
+        FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
     }
 )
 
@@ -102,6 +112,11 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     BOOK_SOURCE_LIMIT_EXCEEDED: "Too many source recordings were selected for one book.",
     BOOK_SOURCE_SNAPSHOT_TOO_LARGE: "The selected source material is too large for supported book generation.",
     BOOK_SOURCE_SNAPSHOT_INVALID: "The selected source material has incomplete provenance and cannot be used safely.",
+    ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER: "Transfer ownership or delete sole-owned families before deleting this account.",
+    RECORDING_FAMILY_DAILY_LIMIT_REACHED: "This family has reached its recording creation limit.",
+    RECORDING_USER_DAILY_LIMIT_REACHED: "This account has reached its recording upload limit.",
+    RECORDING_CONCURRENCY_LIMIT_REACHED: "Too many recordings are already processing for this family.",
+    FAMILY_AUDIO_STORAGE_LIMIT_REACHED: "This family has reached its configured audio storage limit.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,
@@ -134,6 +149,10 @@ _RETRYABLE_CODES = frozenset(
         SERVICE_UNAVAILABLE,
         UPSTREAM_TIMEOUT,
         BOOK_DAILY_LIMIT_REACHED,
+        RECORDING_FAMILY_DAILY_LIMIT_REACHED,
+        RECORDING_USER_DAILY_LIMIT_REACHED,
+        RECORDING_CONCURRENCY_LIMIT_REACHED,
+        FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
     }
 )
 

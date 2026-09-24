@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
-from threading import Event, Thread
+from threading import Barrier, Event, Thread
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -21,7 +22,7 @@ from mura.domain.models import (
 from mura.identity.policy import FamilyRole
 from mura.jobs import JobStatus
 from mura.observability import ProcessingTrace, TraceOutcome, TraceRepository
-from mura.quotas import BookQuotaService
+from mura.quotas import BookQuotaService, RecordingQuotaService
 from mura.release_control import (
     CURRENT_RELEASE_ID,
     RELEASE_CONTROL_KEY,
@@ -42,7 +43,13 @@ from mura.storage.cleanup import (
     StorageCleanupStatus,
     StorageKind,
 )
-from mura.storage.database import Database, RecordingRepository, utcnow
+from mura.storage.database import (
+    Database,
+    ProcessingJobRow,
+    RecordingRepository,
+    RecordingRow,
+    utcnow,
+)
 from mura.storage.identity import (
     FamilyMembershipRow,
     FamilyRow,
@@ -682,3 +689,119 @@ def test_postgres_family_delete_rechecks_owner_count_after_membership_race() -> 
             session.execute(
                 delete(UserRow).where(UserRow.user_id.in_([owner_id, member_id]))
             )
+
+
+
+def test_postgres_concurrent_recording_creation_respects_family_daily_limit() -> None:
+    assert POSTGRES_URL is not None
+    suffix = uuid.uuid4().hex[:12]
+    db = Database(POSTGRES_URL)
+    user_id = f"user_quota_{suffix}"
+    family_id = f"family_quota_{suffix}"
+    barrier = Barrier(2)
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    with db.session_factory.begin() as session:
+        session.add(
+            UserRow(
+                user_id=user_id,
+                auth_issuer="https://auth.mura.test",
+                auth_subject=f"quota-{suffix}",
+                email=None,
+                display_name="Quota User",
+            )
+        )
+        session.flush()
+        session.add(
+            FamilyRow(
+                family_id=family_id,
+                name="Quota Race",
+                created_by_user_id=user_id,
+            )
+        )
+
+    settings = SimpleNamespace(
+        recording_max_active_per_family=10,
+        recording_max_created_per_family_per_day=1,
+        recording_max_created_per_user_per_day=10,
+        family_max_audio_storage_bytes=10_000_000,
+    )
+
+    def create_one(index: int) -> None:
+        recording_id = f"rec_quota_{suffix}_{index}"
+        try:
+            barrier.wait(timeout=10)
+            with db.session_factory.begin() as session:
+                RecordingQuotaService.check_creation_allowed(
+                    session,
+                    family_id=family_id,
+                    user_id=user_id,
+                    incoming_size_bytes=100,
+                    settings=settings,
+                )
+                session.add(
+                    RecordingRow(
+                        recording_id=recording_id,
+                        family_id=family_id,
+                        created_by_user_id=user_id,
+                        speaker_id=f"narrator_{recording_id}",
+                        speaker_name="Narrator",
+                        original_filename="fixture.wav",
+                        content_type="audio/wav",
+                        audio_path=f"{family_id}/{recording_id}/fixture.wav",
+                        audio_size_bytes=100,
+                    )
+                )
+                session.flush()
+                session.add(
+                    ProcessingJobRow(
+                        job_id=f"job_{recording_id}",
+                        recording_id=recording_id,
+                        status=JobStatus.QUEUED.value,
+                        stage="queued",
+                    )
+                )
+            results.append("created")
+        except HTTPException as exc:
+            results.append(str(exc.detail))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [Thread(target=create_one, args=(1,)), Thread(target=create_one, args=(2,))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    try:
+        assert not errors
+        assert results.count("created") == 1
+        assert results.count("recording_family_daily_limit_reached") == 1
+        with db.session_factory() as session:
+            count = session.scalar(
+                select(func.count(RecordingRow.recording_id)).where(
+                    RecordingRow.family_id == family_id
+                )
+            )
+            assert count == 1
+    finally:
+        with db.session_factory.begin() as session:
+            recording_ids = list(
+                session.scalars(
+                    select(RecordingRow.recording_id).where(
+                        RecordingRow.family_id == family_id
+                    )
+                ).all()
+            )
+            if recording_ids:
+                session.execute(
+                    delete(ProcessingJobRow).where(
+                        ProcessingJobRow.recording_id.in_(recording_ids)
+                    )
+                )
+                session.execute(
+                    delete(RecordingRow).where(RecordingRow.recording_id.in_(recording_ids))
+                )
+            session.execute(delete(FamilyRow).where(FamilyRow.family_id == family_id))
+            session.execute(delete(UserRow).where(UserRow.user_id == user_id))
