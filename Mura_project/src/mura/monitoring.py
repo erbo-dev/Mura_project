@@ -213,11 +213,13 @@ class QueueHealthService:
             )
 
             # Expired leases: non-terminal jobs whose lease_expires_at is in the past
-            expired_leases = session.scalar(
-                select(func.count(ProcessingJobRow.job_id)).where(
-                    ProcessingJobRow.status.notin_(TERMINAL_JOB_STATUSES),
-                    ProcessingJobRow.lease_expires_at.is_not(None),
-                    ProcessingJobRow.lease_expires_at <= moment,
+            expired_leases = (
+                session.scalar(
+                    select(func.count(ProcessingJobRow.job_id)).where(
+                        ProcessingJobRow.status.notin_(TERMINAL_JOB_STATUSES),
+                        ProcessingJobRow.lease_expires_at.is_not(None),
+                        ProcessingJobRow.lease_expires_at <= moment,
+                    )
                 )
             ) or 0
 
@@ -234,17 +236,21 @@ class QueueHealthService:
         since = moment - timedelta(hours=24)
 
         with self.database.session_factory() as session:
-            completed_24h = session.scalar(
-                select(func.count(ProcessingJobRow.job_id)).where(
-                    ProcessingJobRow.status == JobStatus.COMPLETED.value,
-                    ProcessingJobRow.completed_at >= since,
+            completed_24h = (
+                session.scalar(
+                    select(func.count(ProcessingJobRow.job_id)).where(
+                        ProcessingJobRow.status == JobStatus.COMPLETED.value,
+                        ProcessingJobRow.completed_at >= since,
+                    )
                 )
             ) or 0
 
-            failed_24h = session.scalar(
-                select(func.count(ProcessingJobRow.job_id)).where(
-                    ProcessingJobRow.status == JobStatus.FAILED.value,
-                    ProcessingJobRow.completed_at >= since,
+            failed_24h = (
+                session.scalar(
+                    select(func.count(ProcessingJobRow.job_id)).where(
+                        ProcessingJobRow.status == JobStatus.FAILED.value,
+                        ProcessingJobRow.completed_at >= since,
+                    )
                 )
             ) or 0
 
@@ -368,11 +374,13 @@ class QueueHealthService:
                 else None
             )
 
-            expired_leases = session.scalar(
-                select(func.count(BookJobRow.job_id)).where(
-                    BookJobRow.status.notin_(TERMINAL_BOOK_JOB_STATUSES),
-                    BookJobRow.lease_expires_at.is_not(None),
-                    BookJobRow.lease_expires_at <= moment,
+            expired_leases = (
+                session.scalar(
+                    select(func.count(BookJobRow.job_id)).where(
+                        BookJobRow.status.notin_(TERMINAL_BOOK_JOB_STATUSES),
+                        BookJobRow.lease_expires_at.is_not(None),
+                        BookJobRow.lease_expires_at <= moment,
+                    )
                 )
             ) or 0
 
@@ -478,31 +486,40 @@ class QueueHealthService:
 
         return stuck_items
 
-    def get_storage_cleanup_metrics(
-        self, now: datetime | None = None
-    ) -> StorageCleanupMetrics:
+    def get_storage_cleanup_metrics(self, now: datetime | None = None) -> StorageCleanupMetrics:
         moment = now or utcnow()
         with self.database.session_factory() as session:
-            queued = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
-                    StorageCleanupJobRow.next_attempt_at <= moment,
+            queued = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
+                        StorageCleanupJobRow.next_attempt_at <= moment,
+                    )
                 )
-            ) or 0
-            retry_waiting = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
-                    StorageCleanupJobRow.next_attempt_at > moment,
+                or 0
+            )
+            retry_waiting = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.QUEUED.value,
+                        StorageCleanupJobRow.next_attempt_at > moment,
+                    )
                 )
-            ) or 0
-            running = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value
+                or 0
+            )
+            running = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value
+                    )
                 )
-            ) or 0
-            failed = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.FAILED.value
+                or 0
+            )
+            failed = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.FAILED.value
+                    )
                 )
             ) or 0
             oldest = session.scalar(
@@ -510,23 +527,26 @@ class QueueHealthService:
                     StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES)
                 )
             )
-            expired = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value,
-                    StorageCleanupJobRow.lease_expires_at.is_not(None),
-                    StorageCleanupJobRow.lease_expires_at <= moment,
+            expired = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status == StorageCleanupStatus.RUNNING.value,
+                        StorageCleanupJobRow.lease_expires_at.is_not(None),
+                        StorageCleanupJobRow.lease_expires_at <= moment,
+                    )
                 )
-            ) or 0
-            exhausted = session.scalar(
-                select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
-                    StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
-                    StorageCleanupJobRow.attempts >= StorageCleanupJobRow.max_attempts,
+                or 0
+            )
+            exhausted = (
+                session.scalar(
+                    select(func.count(StorageCleanupJobRow.cleanup_job_id)).where(
+                        StorageCleanupJobRow.status.notin_(TERMINAL_CLEANUP_STATUSES),
+                        StorageCleanupJobRow.attempts >= StorageCleanupJobRow.max_attempts,
+                    )
                 )
             ) or 0
             oldest_age = (
-                round((moment - _as_utc(oldest)).total_seconds(), 2)
-                if oldest is not None
-                else None
+                round((moment - _as_utc(oldest)).total_seconds(), 2) if oldest is not None else None
             )
             return StorageCleanupMetrics(
                 queued=queued,
@@ -545,9 +565,7 @@ class QueueHealthService:
         pending_cutoff = moment - timedelta(
             seconds=self.thresholds.cleanup_pending_threshold_seconds
         )
-        lease_cutoff = moment - timedelta(
-            seconds=self.thresholds.cleanup_lease_grace_seconds
-        )
+        lease_cutoff = moment - timedelta(seconds=self.thresholds.cleanup_lease_grace_seconds)
         reasons: dict[str, str] = {}
         with self.database.session_factory() as session:
             for row in session.scalars(
@@ -592,9 +610,7 @@ class QueueHealthService:
                     status=row.status,
                     attempts=row.attempts,
                     reason=reasons[row.cleanup_job_id],
-                    age_seconds=round(
-                        (moment - _as_utc(row.created_at)).total_seconds(), 2
-                    ),
+                    age_seconds=round((moment - _as_utc(row.created_at)).total_seconds(), 2),
                 )
                 for row in rows
             ]
