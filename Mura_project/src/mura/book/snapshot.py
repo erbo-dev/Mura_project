@@ -353,9 +353,7 @@ def compile_source_snapshot(
         )
         raw_attribute_sources_value = p.get("attribute_sources")
         raw_attribute_sources: dict[str, object] = (
-            raw_attribute_sources_value
-            if isinstance(raw_attribute_sources_value, dict)
-            else {}
+            raw_attribute_sources_value if isinstance(raw_attribute_sources_value, dict) else {}
         )
 
         def attribute_sources(
