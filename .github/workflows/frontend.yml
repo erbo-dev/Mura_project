@@ -35,6 +35,18 @@ jobs:
           cache: "npm"
           cache-dependency-path: "MURA-app/package-lock.json"
 
+      - name: Refresh security lockfile
+        run: |
+          npm install --package-lock-only
+          npm audit fix --package-lock-only --omit=dev
+
+      - name: Save refreshed lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: refreshed-frontend-lock
+          path: MURA-app/package-lock.json
+          if-no-files-found: error
+
       - name: Install dependencies
         run: npm ci
 
