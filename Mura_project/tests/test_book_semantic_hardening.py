@@ -201,7 +201,7 @@ def _snapshot_relationship(
     people = [
         SnapshotPerson(
             person_id="p_a",
-            display_name="А",
+            display_name="А",  # noqa: RUF001
             source_recording_ids=["rec_a"],
             attribute_sources={"display_name": ["rec_a"]},
         ),
@@ -587,7 +587,7 @@ def test_compiler_relationship_support_rejects_semantic_parent_reversal() -> Non
             "rec_a": {
                 "extraction": {
                     "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "А — родитель Б."}
+                        {"evidence_id": "ev_a", "text": "А — родитель Б."}  # noqa: RUF001
                     ]
                 }
             }
