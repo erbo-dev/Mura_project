@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -8,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+logger = logging.getLogger("mura.deepseek.client")
 
 
 class DeepSeekError(RuntimeError):
@@ -220,7 +223,7 @@ class DeepSeekClient:
                     try:
                         self.on_usage(result_usage, True, operation, None, attempt)
                     except Exception:
-                        pass
+                        logger.debug("DeepSeek usage callback failed")
                 return parsed, result_usage
             except (requests.Timeout, requests.ConnectionError, DeepSeekError) as exc:
                 last_error = exc
@@ -239,7 +242,7 @@ class DeepSeekClient:
                         )
                         self.on_usage(failed_usage, False, operation, err_code, attempt)
                     except Exception:
-                        pass
+                        logger.debug("DeepSeek usage callback failed")
                 if attempt < attempts:
                     time.sleep(min(2**attempt, 10))
 
