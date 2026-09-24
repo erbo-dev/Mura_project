@@ -463,7 +463,8 @@ class CoreSettings(BaseSettings):
             )
         if production_like and self.forwarded_allow_ips.strip() in {"", "*"}:
             raise ValueError(
-                "FORWARDED_ALLOW_IPS must name trusted reverse-proxy addresses in staging and production"
+                "FORWARDED_ALLOW_IPS must name trusted reverse-proxy addresses "
+                "in staging and production"
             )
 
         for origin in self.cors_allowed_origins:
