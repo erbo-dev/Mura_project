@@ -325,11 +325,11 @@ class RecordingRepository:
                 delete(PipelineResultRow).where(PipelineResultRow.recording_id == recording_id)
             )
             try:
-                from mura.observability import ProcessingTraceRow
+                from mura.observability import ProcessingTraceEventRow
 
                 session.execute(
-                    delete(ProcessingTraceRow).where(
-                        ProcessingTraceRow.recording_id == recording_id
+                    delete(ProcessingTraceEventRow).where(
+                        ProcessingTraceEventRow.recording_id == recording_id
                     )
                 )
             except Exception:
