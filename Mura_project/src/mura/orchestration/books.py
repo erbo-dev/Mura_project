@@ -70,6 +70,17 @@ from mura.storage.database import Database, utcnow
 logger = logging.getLogger(__name__)
 
 
+def _require_repair_telemetry(telemetry: dict[str, Any]) -> tuple[str, str]:
+    """Validate repair metadata before it can be persisted as durable Book state."""
+    prompt_version = telemetry.get("prompt_version")
+    model = telemetry.get("model")
+    if not isinstance(prompt_version, str) or not prompt_version:
+        raise RuntimeError("book repair telemetry is missing prompt_version")
+    if not isinstance(model, str) or not model:
+        raise RuntimeError("book repair telemetry is missing model")
+    return prompt_version, model
+
+
 class BookJobWorker:
     def __init__(
         self,
@@ -620,14 +631,17 @@ class BookJobWorker:
                         continuity=continuity,
                         output_language=out_lang,
                     )
+                    repair_prompt_version, repair_model = _require_repair_telemetry(
+                        rep_telemetry
+                    )
                     self.chapter_repo.update_chapter_draft(
                         book_id=book.book_id,
                         chapter_number=chapter.chapter_number,
                         draft_text=draft.text,
                         draft_payload=draft.model_dump(mode="json"),
                         word_count=len(draft.text.split()),
-                        writer_prompt_version=rep_telemetry.get("prompt_version"),
-                        writer_model=rep_telemetry.get("model"),
+                        writer_prompt_version=repair_prompt_version,
+                        writer_model=repair_model,
                         repair_attempts=repair_count,
                         job_id=job.job_id,
                         lease_owner=self.worker_id,
