@@ -620,14 +620,21 @@ class BookJobWorker:
                         continuity=continuity,
                         output_language=out_lang,
                     )
+                    repair_prompt_version = rep_telemetry.get("prompt_version")
+                    repair_model = rep_telemetry.get("model")
+                    if not isinstance(repair_prompt_version, str) or not repair_prompt_version:
+                        raise RuntimeError("book repair telemetry is missing prompt_version")
+                    if not isinstance(repair_model, str) or not repair_model:
+                        raise RuntimeError("book repair telemetry is missing model")
+
                     self.chapter_repo.update_chapter_draft(
                         book_id=book.book_id,
                         chapter_number=chapter.chapter_number,
                         draft_text=draft.text,
                         draft_payload=draft.model_dump(mode="json"),
                         word_count=len(draft.text.split()),
-                        writer_prompt_version=rep_telemetry.get("prompt_version"),
-                        writer_model=rep_telemetry.get("model"),
+                        writer_prompt_version=repair_prompt_version,
+                        writer_model=repair_model,
                         repair_attempts=repair_count,
                         job_id=job.job_id,
                         lease_owner=self.worker_id,
