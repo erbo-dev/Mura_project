@@ -580,7 +580,9 @@ def test_compiler_relationship_support_rejects_semantic_parent_reversal() -> Non
 
     bundle = GroundingBundle(
         family_id="fam_a",
-        recordings=[{"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}],
+        recordings=[
+            {"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}
+        ],
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
@@ -661,7 +663,9 @@ def test_compiler_relationship_support_accepts_equivalent_parent_representation(
 
     bundle = GroundingBundle(
         family_id="fam_a",
-        recordings=[{"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}],
+        recordings=[
+            {"recording_id": "rec_a", "family_id": "fam_a", "speaker_name": "N"}
+        ],
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
