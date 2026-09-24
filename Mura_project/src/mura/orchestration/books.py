@@ -803,9 +803,7 @@ class BookJobWorker:
 
         # 6. COMPLETED
         all_chapters = self.chapter_repo.list_chapters(book_id=book.book_id)
-        approved_chs = [
-            ch for ch in all_chapters if ch.status == ChapterStatus.APPROVED.value
-        ]
+        approved_chs = [ch for ch in all_chapters if ch.status == ChapterStatus.APPROVED.value]
         final_words = sum(ch.word_count for ch in approved_chs)
 
         self.job_repo.complete_book_and_job(
