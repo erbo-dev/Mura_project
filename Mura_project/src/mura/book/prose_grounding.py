@@ -8,9 +8,9 @@ against the immutable selected-source snapshot.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import unicodedata
+from dataclasses import dataclass
 
 from mura.domain.book_models import BookSourceSnapshot
 
