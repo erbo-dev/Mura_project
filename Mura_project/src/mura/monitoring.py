@@ -183,14 +183,15 @@ class QueueHealthService:
         moment = now or utcnow()
         with self.database.session_factory() as session:
             # Aggregate status counts using existing index ix_processing_jobs_status
-            counts = dict(
-                session.execute(
+            counts: dict[str, int] = {
+                str(row[0]): int(row[1])
+                for row in session.execute(
                     select(
                         ProcessingJobRow.status,
                         func.count(ProcessingJobRow.job_id),
                     ).group_by(ProcessingJobRow.status)
-                ).all()
-            )
+                )
+            }
 
             pending = counts.get(JobStatus.QUEUED.value, 0)
             failed = counts.get(JobStatus.FAILED.value, 0)
@@ -342,14 +343,15 @@ class QueueHealthService:
     def get_book_queue_metrics(self, now: datetime | None = None) -> BookQueueMetrics:
         moment = now or utcnow()
         with self.database.session_factory() as session:
-            counts = dict(
-                session.execute(
+            counts: dict[str, int] = {
+                str(row[0]): int(row[1])
+                for row in session.execute(
                     select(
                         BookJobRow.status,
                         func.count(BookJobRow.job_id),
                     ).group_by(BookJobRow.status)
-                ).all()
-            )
+                )
+            }
 
             queued = counts.get(BookJobStatus.QUEUED.value, 0)
             failed = counts.get(BookJobStatus.FAILED.value, 0)
