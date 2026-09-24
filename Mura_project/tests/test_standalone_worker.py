@@ -309,6 +309,7 @@ def test_supervisor_request_stop_stops_all_workers() -> None:
     assert supervisor.book_worker._stop_event.is_set()
     assert supervisor.cleanup_worker._stop_event.is_set()
 
+
 def test_supervisor_runs_all_workers_concurrently_and_stops_on_request() -> None:
     supervisor = build_worker_supervisor(_settings())
     rec_polled = threading.Event()
