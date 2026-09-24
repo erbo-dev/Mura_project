@@ -11,7 +11,6 @@ from mura.quotas import RecordingQuotaService
 from mura.storage.database import Database, ProcessingJobRow, RecordingRow, utcnow
 from mura.storage.identity import FamilyRow, UserRow
 
-
 FAMILY = "family_recording_quota"
 USER_A = "user_recording_quota_a"
 USER_B = "user_recording_quota_b"
