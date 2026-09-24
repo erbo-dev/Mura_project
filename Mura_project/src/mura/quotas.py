@@ -19,8 +19,8 @@ from apps.api.errors import (
     RECORDING_USER_DAILY_LIMIT_REACHED,
 )
 from mura.domain.book_models import TERMINAL_BOOK_STATUSES
-from mura.storage.book import BookRow
 from mura.jobs import JobStatus
+from mura.storage.book import BookRow
 from mura.storage.database import ProcessingJobRow, RecordingRow, utcnow
 from mura.storage.identity import FamilyRow
 
@@ -32,9 +32,9 @@ class BookQuotaService:
         family_id: str,
         settings: Any,
     ) -> None:
-        """Atomically verifies that a family has not exceeded active or daily book generation limits.
+        """Verify active and daily Book limits under the family row lock.
 
-        Locks the family row using `FOR UPDATE` to serialize concurrent creation requests.
+        The `FOR UPDATE` lock serializes concurrent creation requests.
         """
         # 1. Exclusive row lock on the family row
         locked_family_id = session.scalar(
