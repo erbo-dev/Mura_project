@@ -576,4 +576,3 @@ def build_audio_storage(settings: CoreSettings) -> AudioStorage:
             timeout_seconds=settings.supabase_storage_timeout_seconds,
         )
     raise ValueError(f"unsupported audio storage backend: {settings.audio_storage_backend}")
-
