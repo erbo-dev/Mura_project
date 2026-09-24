@@ -13,6 +13,7 @@ from mura.domain.book_models import (
     BookLanguage,
     ChapterDraft,
     ChapterPlan,
+    ChapterRelationshipAssertion,
     GateCode,
     ReviewResult,
     ReviewStatus,
@@ -422,3 +423,82 @@ def test_gate_evidence_coverage_partial_is_warning():
     assert report.passed is True
     assert GateCode.EVIDENCE_COVERAGE not in [b.code for b in report.blockers]
     assert GateCode.EVIDENCE_COVERAGE in [w.code for w in report.warnings]
+
+def _draft_with_reported_relationship(
+    *, subject_person_id: str | None, object_person_id: str | None
+) -> ChapterDraft:
+    # Normal Pydantic validation rejects null endpoints. model_construct simulates
+    # a partial/corrupt Writer object reaching this defensive truth boundary.
+    assertion = ChapterRelationshipAssertion.model_construct(
+        subject_person_id=subject_person_id,
+        relation="parent",
+        object_person_id=object_person_id,
+        text_span="",
+    )
+    return ChapterDraft.model_construct(
+        chapter_number=1,
+        title="Соғыс жылдары",
+        text=_valid_text(750),
+        evidence_usage=["ev_001"],
+        person_ids_used=["per_kanat"],
+        relationship_assertions=[assertion],
+        uncertainty_notes=[],
+        conflict_notes=[],
+    )
+
+
+def test_reported_relationship_with_missing_subject_fails_closed() -> None:
+    report = run_chapter_gates(
+        _draft_with_reported_relationship(
+            subject_person_id=None,
+            object_person_id="per_kanat",
+        ),
+        _sample_plan(),
+        _sample_snapshot(),
+        BookLanguage.KK,
+    )
+    assert report.passed is False
+    assert GateCode.RELATIONSHIP in [issue.code for issue in report.blockers]
+
+
+def test_reported_relationship_with_missing_object_fails_closed() -> None:
+    report = run_chapter_gates(
+        _draft_with_reported_relationship(
+            subject_person_id="per_kanat",
+            object_person_id=None,
+        ),
+        _sample_plan(),
+        _sample_snapshot(),
+        BookLanguage.KK,
+    )
+    assert report.passed is False
+    assert GateCode.RELATIONSHIP in [issue.code for issue in report.blockers]
+
+
+def test_reported_relationship_with_unknown_subject_fails_closed() -> None:
+    report = run_chapter_gates(
+        _draft_with_reported_relationship(
+            subject_person_id="per_unknown",
+            object_person_id="per_kanat",
+        ),
+        _sample_plan(),
+        _sample_snapshot(),
+        BookLanguage.KK,
+    )
+    assert report.passed is False
+    assert GateCode.RELATIONSHIP in [issue.code for issue in report.blockers]
+
+
+def test_reported_relationship_with_unknown_object_fails_closed() -> None:
+    report = run_chapter_gates(
+        _draft_with_reported_relationship(
+            subject_person_id="per_kanat",
+            object_person_id="per_unknown",
+        ),
+        _sample_plan(),
+        _sample_snapshot(),
+        BookLanguage.KK,
+    )
+    assert report.passed is False
+    assert GateCode.RELATIONSHIP in [issue.code for issue in report.blockers]
+
