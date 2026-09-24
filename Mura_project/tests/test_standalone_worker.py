@@ -280,13 +280,16 @@ def test_build_worker_supervisor_constructs_all_workers() -> None:
     assert isinstance(supervisor.recording_worker, RecordingJobWorker)
     assert isinstance(supervisor.book_worker, BookJobWorker)
     assert isinstance(supervisor.cleanup_worker, StorageCleanupWorker)
-    assert len(
-        {
-            supervisor.recording_worker.worker_id,
-            supervisor.book_worker.worker_id,
-            supervisor.cleanup_worker.worker_id,
-        }
-    ) == 3
+    assert (
+        len(
+            {
+                supervisor.recording_worker.worker_id,
+                supervisor.book_worker.worker_id,
+                supervisor.cleanup_worker.worker_id,
+            }
+        )
+        == 3
+    )
     assert supervisor.recording_worker.repository.database is supervisor.book_worker.db
     assert (
         supervisor.cleanup_worker.repository.database
@@ -305,7 +308,6 @@ def test_supervisor_request_stop_stops_all_workers() -> None:
     assert supervisor.recording_worker._stop_event.is_set()
     assert supervisor.book_worker._stop_event.is_set()
     assert supervisor.cleanup_worker._stop_event.is_set()
-
 
 def test_supervisor_runs_all_workers_concurrently_and_stops_on_request() -> None:
     supervisor = build_worker_supervisor(_settings())
