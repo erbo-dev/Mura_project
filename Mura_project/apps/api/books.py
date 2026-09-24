@@ -42,6 +42,7 @@ from mura.domain.book_models import (
     BookListPageView,
     BookProgressView,
     MAX_BOOK_SOURCE_RECORDINGS,
+    NarrativeVoice,
     BookRegenerateRequest,
     BookSourceOptionView,
     BookSourceSnapshot,
@@ -255,7 +256,11 @@ def _build_detail_view(
 
     plan = plan_repo.get_plan(book.book_id)
     central_theme = plan.central_theme if plan else None
-    narrative_voice = plan.narrative_voice if plan else None
+    narrative_voice = (
+        NarrativeVoice(plan.narrative_voice)
+        if plan is not None and plan.narrative_voice is not None
+        else None
+    )
     material_anchor = plan.material_anchor if plan else None
 
     exports = export_repo.list_exports(book.book_id)
@@ -263,7 +268,7 @@ def _build_detail_view(
     for exp in exports:
         if exp.status == ExportStatus.READY.value:
             try:
-                available_formats.append(ExportFormat(exp.export_format))
+                available_formats.append(ExportFormat(exp.format))
             except ValueError:
                 pass
 
