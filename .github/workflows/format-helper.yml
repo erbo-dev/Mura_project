@@ -1,0 +1,55 @@
+name: Temporary Ruff Format Helper
+
+on:
+  push:
+    branches:
+      - fix/post-hardening-ci-followup
+    paths:
+      - ".github/workflows/format-helper.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install ruff==0.16.3
+      - name: Format exact changed Python set
+        working-directory: Mura_project
+        run: |
+          ruff format \
+            apps/api/errors.py \
+            src/mura/book/prose_grounding.py \
+            src/mura/book/snapshot.py \
+            src/mura/book/snapshot_validation.py \
+            src/mura/book/truth_eligibility.py \
+            src/mura/config.py \
+            src/mura/quotas.py \
+            src/mura/storage/book.py \
+            src/mura/storage/database.py \
+            src/mura/storage/identity.py \
+            tests/test_book_semantic_hardening.py \
+            tests/test_book_worker_resume.py \
+            tests/test_postgres_atomicity.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruff-formatted-files
+          path: |
+            Mura_project/apps/api/errors.py
+            Mura_project/src/mura/book/prose_grounding.py
+            Mura_project/src/mura/book/snapshot.py
+            Mura_project/src/mura/book/snapshot_validation.py
+            Mura_project/src/mura/book/truth_eligibility.py
+            Mura_project/src/mura/config.py
+            Mura_project/src/mura/quotas.py
+            Mura_project/src/mura/storage/book.py
+            Mura_project/src/mura/storage/database.py
+            Mura_project/src/mura/storage/identity.py
+            Mura_project/tests/test_book_semantic_hardening.py
+            Mura_project/tests/test_book_worker_resume.py
+            Mura_project/tests/test_postgres_atomicity.py
