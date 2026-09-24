@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from mura.book.relationship_semantics import relationship_semantics_match
+from mura.book.truth_eligibility import book_truth_fields_eligible
 from mura.domain.book_models import SNAPSHOT_SCHEMA_VERSION, BookSourceSnapshot
 
 
@@ -122,7 +124,29 @@ def validate_snapshot_closure(
                 f"evidence {evidence.evidence_id} has dangling people refs: {missing_people}"
             )
 
+    conflict_claim_ids = {
+        claim_id
+        for conflict in snapshot.conflicts
+        for claim_id in conflict.claim_ids
+    }
+
     for claim in snapshot.claims:
+        if not book_truth_fields_eligible(
+            recording_id=claim.recording_id,
+            selected_recording_ids=selected,
+            archive_status=claim.archive_status,
+            evidence_ids=claim.evidence_ids,
+            evidence_class=claim.evidence_class,
+            verification_status=claim.verification_status,
+            assertion_mode=claim.assertion_mode,
+            allow_disputed=(
+                claim.archive_status == "disputed"
+                and claim.claim_id in conflict_claim_ids
+            ),
+        ):
+            raise SnapshotClosureError(
+                f"claim {claim.claim_id} is not eligible for Book truth"
+            )
         if claim.recording_id not in selected:
             raise SnapshotClosureError(
                 f"claim {claim.claim_id} is outside selected recordings"
@@ -201,16 +225,20 @@ def validate_snapshot_closure(
                 raise SnapshotClosureError(
                     f"relationship {relationship.edge_id} support {claim_id} is not a relationship claim"
                 )
-            if claim.predicate != relationship.relationship_type:
+            if not relationship_semantics_match(
+                left_type=claim.predicate,
+                left_subject_person_id=claim.subject_person_id,
+                left_subject_role=claim.subject_role,
+                left_object_person_id=claim.object_person_id,
+                left_object_role=claim.object_role,
+                right_type=relationship.relationship_type,
+                right_subject_person_id=relationship.subject_person_id,
+                right_subject_role=relationship.subject_role,
+                right_object_person_id=relationship.object_person_id,
+                right_object_role=relationship.object_role,
+            ):
                 raise SnapshotClosureError(
-                    f"relationship {relationship.edge_id} support {claim_id} has different relationship type"
-                )
-            if {claim.subject_person_id, claim.object_person_id} != {
-                relationship.subject_person_id,
-                relationship.object_person_id,
-            }:
-                raise SnapshotClosureError(
-                    f"relationship {relationship.edge_id} support {claim_id} has different endpoints"
+                    f"relationship {relationship.edge_id} support {claim_id} has incompatible direction or roles"
                 )
             if claim.recording_id not in selected:
                 raise SnapshotClosureError(

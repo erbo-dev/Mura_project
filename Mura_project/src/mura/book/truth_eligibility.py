@@ -1,0 +1,140 @@
+"""Central truth-eligibility policy for Family Book source claims.
+
+Existence in archive_claims is not enough to make a claim usable as Book truth.
+This module is intentionally pure so archive projection, snapshot validation,
+and tests can share the same policy.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from mura.domain.models import (
+    AssertionMode,
+    ClaimObjectType,
+    EvidenceClass,
+    RelationshipState,
+    VerificationStatus,
+)
+from mura.book.relationship_semantics import canonical_relationship
+
+
+_BOOK_GROUNDED_EVIDENCE_CLASSES = {
+    EvidenceClass.A_EXPLICIT.value.casefold(),
+    EvidenceClass.B_MORPHOLOGICALLY_EXPLICIT.value.casefold(),
+    EvidenceClass.C_SPEAKER_ANCHORED.value.casefold(),
+}
+
+
+def _normalized_evidence_class(value: str) -> str:
+    # Historical/synthetic fixtures used enum-name casing (A_EXPLICIT) while
+    # production rows use enum values (A_explicit). They carry the same
+    # evidence strength; normalize spelling, not semantics.
+    return str(value or "").strip().casefold()
+
+
+class BookClaimLike(Protocol):
+    recording_id: str
+    object_type: str
+    predicate: str
+    subject_person_id: str | None
+    object_person_id: str | None
+    evidence_ids: list[str]
+    evidence_class: str
+    verification_status: str
+    assertion_mode: str | None
+    status: str
+    payload: dict[str, Any]
+
+
+def book_truth_fields_eligible(
+    *,
+    recording_id: str,
+    selected_recording_ids: set[str],
+    archive_status: str,
+    evidence_ids: list[str],
+    evidence_class: str,
+    verification_status: str,
+    assertion_mode: str | None,
+    allow_disputed: bool = False,
+) -> bool:
+    if recording_id not in selected_recording_ids:
+        return False
+
+    allowed_statuses = {"active", "accepted"}
+    if allow_disputed:
+        allowed_statuses.add("disputed")
+    if archive_status not in allowed_statuses:
+        return False
+
+    if verification_status == VerificationStatus.REJECTED.value:
+        return False
+    if assertion_mode not in (None, AssertionMode.EXPLICIT.value):
+        return False
+    if _normalized_evidence_class(evidence_class) not in _BOOK_GROUNDED_EVIDENCE_CLASSES:
+        return False
+    return bool(evidence_ids)
+
+
+def is_book_truth_eligible(
+    claim: BookClaimLike,
+    *,
+    selected_recording_ids: set[str],
+    allow_disputed: bool = False,
+) -> bool:
+    """Return whether a persisted claim may enter the immutable Book truth set."""
+
+    if not book_truth_fields_eligible(
+        recording_id=claim.recording_id,
+        selected_recording_ids=selected_recording_ids,
+        archive_status=claim.status,
+        evidence_ids=list(claim.evidence_ids or []),
+        evidence_class=claim.evidence_class,
+        verification_status=claim.verification_status,
+        assertion_mode=claim.assertion_mode,
+        allow_disputed=allow_disputed,
+    ):
+        return False
+
+    if claim.object_type == ClaimObjectType.QUESTION.value:
+        # Open questions are preserved as uncertainty context, never promoted
+        # into the factual claim set.
+        return False
+
+    if claim.object_type == ClaimObjectType.PERSON_MENTION.value:
+        return claim.subject_person_id is not None
+
+    if claim.object_type == ClaimObjectType.RELATIONSHIP.value:
+        payload = claim.payload if isinstance(claim.payload, dict) else {}
+        state = str(payload.get("relationship_state") or RelationshipState.CURRENT.value)
+        if state != RelationshipState.CURRENT.value or payload.get("uncertainty") is not None:
+            return False
+        return (
+            canonical_relationship(
+                relationship_type=str(payload.get("relationship_type") or claim.predicate or ""),
+                subject_person_id=claim.subject_person_id,
+                subject_role=str(payload.get("subject_role") or ""),
+                object_person_id=claim.object_person_id,
+                object_role=str(payload.get("object_role") or ""),
+            )
+            is not None
+        )
+
+    return True
+
+
+
+def is_book_uncertainty_context_eligible(
+    claim: BookClaimLike,
+    *,
+    selected_recording_ids: set[str],
+) -> bool:
+    """Allow selected open-question context without treating it as factual truth."""
+
+    return (
+        claim.object_type == ClaimObjectType.QUESTION.value
+        and claim.recording_id in selected_recording_ids
+        and claim.status in {"active", "accepted", "disputed"}
+        and claim.verification_status != VerificationStatus.REJECTED.value
+        and bool(claim.evidence_ids)
+    )

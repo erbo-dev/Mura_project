@@ -1,14 +1,9 @@
 """Deterministic chapter verification gates.
 
-Applies 8 mechanical verification gates to a chapter draft before acceptance:
-1. GateCode.NAMED_PERSON: every proper name must be grounded in canonical people or places.
-2. GateCode.YEAR: every 4-digit year must be in snapshot.allowed_years.
-3. GateCode.RELATIONSHIP: kinship references must be grounded.
-4. GateCode.CORRECTION: superseded values from self-corrections are strictly forbidden.
-5. GateCode.QUOTE: direct quotations must be verbatim substrings of evidence spans.
-6. GateCode.EVIDENCE_COVERAGE: checks coverage of planned evidence.
-7. GateCode.WORD_COUNT: word count must fall within [min_words, max_words].
-8. GateCode.LANGUAGE: text must match designated output language.
+The current pipeline applies eleven independent checks before acceptance:
+named people, years, locations, relationships, corrections, direct speech,
+unsupported factual assertions, unresolved conflicts, evidence coverage, word
+count, and output language. Writer self-reported metadata is never authoritative.
 """
 # ruff: noqa: E501, RUF001
 
@@ -19,6 +14,7 @@ import unicodedata
 
 from mura.book.prose_grounding import (
     analyze_prose,
+    contains_rejected_correction,
     normalize_text,
     rejected_year_patterns,
 )
@@ -307,12 +303,7 @@ def run_chapter_gates(
     for cor in snapshot.corrections:
         wrong = cor.original_value.strip()
         found_rejected = bool(
-            wrong
-            and re.search(
-                r"(?<![\w])" + re.escape(wrong) + r"(?![\w])",
-                text,
-                re.IGNORECASE,
-            )
+            wrong and contains_rejected_correction(text, wrong)
         )
         if wrong.isdigit() and len(wrong) == 4:
             normalized_prose = normalize_text(text)

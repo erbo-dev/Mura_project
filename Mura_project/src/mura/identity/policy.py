@@ -27,11 +27,14 @@ class Capability(StrEnum):
     READ_BOOKS = "read_books"
 
     CREATE_RECORDING = "create_recording"
+    DELETE_RECORDING = "delete_recording"
     RESOLVE_CONFLICTS = "resolve_conflicts"
     CREATE_BOOK = "create_book"
+    DELETE_BOOK = "delete_book"
 
     UPDATE_FAMILY = "update_family"
     MANAGE_MEMBERS = "manage_members"
+    DELETE_FAMILY = "delete_family"
 
 
 _VIEWER: frozenset[Capability] = frozenset(
@@ -50,14 +53,17 @@ _VIEWER: frozenset[Capability] = frozenset(
 #: An editor adds archive mutation but never governance.
 _EDITOR: frozenset[Capability] = _VIEWER | {
     Capability.CREATE_RECORDING,
+    Capability.DELETE_RECORDING,
     Capability.RESOLVE_CONFLICTS,
     Capability.CREATE_BOOK,
+    Capability.DELETE_BOOK,
 }
 
 #: An owner adds governance: family metadata and membership.
 _OWNER: frozenset[Capability] = _EDITOR | {
     Capability.UPDATE_FAMILY,
     Capability.MANAGE_MEMBERS,
+    Capability.DELETE_FAMILY,
 }
 
 CAPABILITIES_BY_ROLE: dict[FamilyRole, frozenset[Capability]] = {

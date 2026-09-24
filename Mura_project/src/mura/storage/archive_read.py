@@ -30,6 +30,11 @@ from pydantic import Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from mura.book.relationship_semantics import relationship_semantics_match
+from mura.book.truth_eligibility import (
+    is_book_truth_eligible,
+    is_book_uncertainty_context_eligible,
+)
 from mura.domain.models import ClaimObjectType, StrictModel
 from mura.storage.archive import (
     ArchiveClaimRow,
@@ -781,18 +786,53 @@ class ArchiveReadRepository:
             for row in pipeline_rows
         }
 
-        claims = list(
+        candidate_claims = list(
             session.scalars(
                 select(ArchiveClaimRow).where(
                     ArchiveClaimRow.family_id == family_id,
                     ArchiveClaimRow.recording_id.in_(rec_ids),
-                    # Open conflicts deliberately mark their competing claims
-                    # "disputed". Resolved conflicts keep only the accepted
-                    # claim; rejected claims stay outside the Book truth set.
                     ArchiveClaimRow.status.in_(("active", "accepted", "disputed")),
                 ).order_by(ArchiveClaimRow.created_at.asc(), ArchiveClaimRow.claim_id)
             )
         )
+        candidate_claim_by_id = {claim.claim_id: claim for claim in candidate_claims}
+
+        # Disputed claims are Book-eligible only when the complete conflict is
+        # representable inside the exact selected source universe. Otherwise a
+        # family-wide conflict caused by excluded recording C would change the
+        # truth semantics of a Book intentionally scoped to A+B.
+        conflict_rows = list(
+            session.scalars(
+                select(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id)
+            )
+        )
+        selected_conflict_claim_ids: set[str] = set()
+        for conflict in conflict_rows:
+            conflict_claim_ids = list(conflict.claim_ids or [])
+            if (
+                conflict_claim_ids
+                and all(claim_id in candidate_claim_by_id for claim_id in conflict_claim_ids)
+            ):
+                selected_conflict_claim_ids.update(conflict_claim_ids)
+
+        selected_recording_ids = set(rec_ids)
+        claims = [
+            claim
+            for claim in candidate_claims
+            if is_book_truth_eligible(
+                claim,
+                selected_recording_ids=selected_recording_ids,
+                allow_disputed=claim.claim_id in selected_conflict_claim_ids,
+            )
+        ]
+        uncertainty_claims = [
+            claim
+            for claim in candidate_claims
+            if is_book_uncertainty_context_eligible(
+                claim,
+                selected_recording_ids=selected_recording_ids,
+            )
+        ]
 
         resolved_tuples = resolve_mentions(
             session,
@@ -808,7 +848,7 @@ class ArchiveReadRepository:
         questions: list[dict[str, Any]] = []
         general_claims: list[dict[str, Any]] = []
 
-        for c in claims:
+        for c in [*claims, *uncertainty_claims]:
             c_dict = {
                 "claim_id": c.claim_id,
                 "family_id": c.family_id,
@@ -985,17 +1025,23 @@ class ArchiveReadRepository:
                     or source_claim.object_type != ClaimObjectType.RELATIONSHIP.value
                 ):
                     continue
-                if {
-                    source_claim.subject_person_id,
-                    source_claim.object_person_id,
-                } != {edge.subject_person_id, edge.object_person_id}:
-                    continue
                 payload = (
                     source_claim.payload
                     if isinstance(source_claim.payload, dict)
                     else {}
                 )
-                if str(payload.get("relationship_type") or "") != edge.relationship_type:
+                if not relationship_semantics_match(
+                    left_type=str(payload.get("relationship_type") or source_claim.predicate),
+                    left_subject_person_id=source_claim.subject_person_id,
+                    left_subject_role=str(payload.get("subject_role") or ""),
+                    left_object_person_id=source_claim.object_person_id,
+                    left_object_role=str(payload.get("object_role") or ""),
+                    right_type=edge.relationship_type,
+                    right_subject_person_id=edge.subject_person_id,
+                    right_subject_role=edge.subject_role,
+                    right_object_person_id=edge.object_person_id,
+                    right_object_role=edge.object_role,
+                ):
                     continue
                 supporting_claim_ids.append(claim_id)
 
@@ -1042,11 +1088,6 @@ class ArchiveReadRepository:
             for cor in correction_rows
         ]
 
-        conflict_rows = list(
-            session.scalars(
-                select(ArchiveConflictRow).where(ArchiveConflictRow.family_id == family_id)
-            )
-        )
         snapshot_claim_ids = {claim["claim_id"] for claim in general_claims}
         conflicts: list[dict[str, Any]] = []
         for conf in conflict_rows:

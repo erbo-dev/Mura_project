@@ -154,13 +154,23 @@ def test_member_of_another_family_cannot_cross_over(world: dict[str, Any]) -> No
         (FamilyRole.VIEWER, Capability.READ_RECORDINGS, True),
         (FamilyRole.VIEWER, Capability.READ_CONFLICTS, True),
         (FamilyRole.VIEWER, Capability.CREATE_RECORDING, False),
+        (FamilyRole.VIEWER, Capability.DELETE_RECORDING, False),
+        (FamilyRole.VIEWER, Capability.DELETE_BOOK, False),
+        (FamilyRole.VIEWER, Capability.DELETE_FAMILY, False),
         (FamilyRole.VIEWER, Capability.RESOLVE_CONFLICTS, False),
         (FamilyRole.VIEWER, Capability.MANAGE_MEMBERS, False),
         (FamilyRole.EDITOR, Capability.READ_RECORDINGS, True),
         (FamilyRole.EDITOR, Capability.CREATE_RECORDING, True),
+        (FamilyRole.EDITOR, Capability.DELETE_RECORDING, True),
+        (FamilyRole.EDITOR, Capability.CREATE_BOOK, True),
+        (FamilyRole.EDITOR, Capability.DELETE_BOOK, True),
+        (FamilyRole.EDITOR, Capability.DELETE_FAMILY, False),
         (FamilyRole.EDITOR, Capability.RESOLVE_CONFLICTS, True),
         (FamilyRole.EDITOR, Capability.MANAGE_MEMBERS, False),
         (FamilyRole.OWNER, Capability.CREATE_RECORDING, True),
+        (FamilyRole.OWNER, Capability.DELETE_RECORDING, True),
+        (FamilyRole.OWNER, Capability.DELETE_BOOK, True),
+        (FamilyRole.OWNER, Capability.DELETE_FAMILY, True),
         (FamilyRole.OWNER, Capability.RESOLVE_CONFLICTS, True),
         (FamilyRole.OWNER, Capability.MANAGE_MEMBERS, True),
     ],
@@ -198,6 +208,42 @@ def test_dependency_builders_are_reusable() -> None:
 
     assert callable(context_dependency)
     assert callable(guard)
+
+
+
+# ---------------------------------------------------------- account deletion HTTP
+
+
+def test_delete_me_removes_non_owner_mura_account(world: dict[str, Any]) -> None:
+    viewer = world["viewer_a"]
+    response = world["client"].delete("/v1/me", headers=viewer.headers)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mura_data_deleted": True,
+        "identity_provider_account_deleted": False,
+        "requires_provider_sign_out": True,
+    }
+    assert world["identity"].get_user(viewer.user_id) is None
+    assert world["identity"].get_membership(
+        family_id=world["family_a"],
+        user_id=viewer.user_id,
+    ) is None
+
+
+def test_delete_me_refuses_sole_owner_without_partial_changes(
+    world: dict[str, Any],
+) -> None:
+    owner = world["owner_a"]
+    response = world["client"].delete("/v1/me", headers=owner.headers)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "account_deletion_requires_owner_transfer"
+    assert world["identity"].get_user(owner.user_id) is not None
+    assert world["identity"].get_membership(
+        family_id=world["family_a"],
+        user_id=owner.user_id,
+    ) is not None
 
 
 # ----------------------------------------------------- membership admin HTTP

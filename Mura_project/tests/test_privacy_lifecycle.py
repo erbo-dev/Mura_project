@@ -32,7 +32,6 @@ from mura.storage.book import (
     BookChapterRepository,
     BookChapterRow,
     BookExportRepository,
-    BookJobRepository,
     BookRepository,
 )
 from mura.storage.book_artifacts import LocalBookArtifactStorage
@@ -49,7 +48,7 @@ from mura.storage.database import (
     RecordingRepository,
     RecordingRow,
 )
-from mura.storage.identity import FamilyMembershipRow, FamilyRow, IdentityRepository, UserRow
+from mura.storage.identity import FamilyRow, IdentityRepository
 from tests.authz_factories import (
     FakePrincipalVerifier,
     TestIdentity,
@@ -274,7 +273,6 @@ def test_delete_book_success_and_artifacts_cleanup(test_setup: dict[str, object]
 
     book_repo = BookRepository(db)
     export_repo = BookExportRepository(db)
-    chapter_repo = BookChapterRepository(db)
 
     # Create book and chapter
     book = book_repo.create_book(
@@ -604,7 +602,17 @@ def test_privacy_export_success(test_setup: dict[str, object]) -> None:
     assert any(r["recording_id"] == "rec_export_1" for r in data["recordings"])
     assert any(p["person_id"] == "p_exp_1" for p in data["people"])
     assert any(s["story_id"] == "st_exp" for s in data["stories"])
+    assert any(claim["claim_id"] == "st_exp" for claim in data["claims"])
+    assert data["schema_version"] == "mura-family-export-v2"
+    assert data["binary_objects_included"] is False
+    assert "object_manifest" in data
     assert "exported_at" in data
+
+    serialized = resp.text
+    assert "auth_subject" not in serialized
+    assert "auth_issuer" not in serialized
+    # Legacy filesystem locators are implementation details, not portable data.
+    assert "fam_alpha/rec_export_1/rec.mp3" not in serialized
 
 
 def test_privacy_export_non_member_404(test_setup: dict[str, object]) -> None:

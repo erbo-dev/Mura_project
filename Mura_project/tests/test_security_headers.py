@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app, get_settings
-from apps.api.security_headers import SECURITY_HEADERS
-from mura.config import CoreSettings
+from apps.api.security_headers import HSTS_HEADER
+from mura.config import CoreSettings, Environment
 
 
 def _settings() -> CoreSettings:
@@ -66,3 +66,22 @@ def test_cors_allows_delete_and_options() -> None:
     allow_methods = response.headers.get("Access-Control-Allow-Methods", "")
     assert "DELETE" in allow_methods
 
+
+
+def test_hsts_is_absent_outside_production() -> None:
+    settings = _settings()
+    app = create_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+    response = TestClient(app).get("/health")
+    assert "strict-transport-security" not in response.headers
+
+
+def test_hsts_is_present_in_production() -> None:
+    # model_copy is deliberate: _settings() is a test-safe local configuration,
+    # and this test exercises middleware selection rather than all production
+    # startup validators.
+    settings = _settings().model_copy(update={"environment": Environment.PRODUCTION})
+    app = create_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+    response = TestClient(app).get("/health")
+    assert response.headers["strict-transport-security"] == HSTS_HEADER

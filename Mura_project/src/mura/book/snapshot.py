@@ -47,6 +47,7 @@ from mura.storage.archive_read import (
     grounding_bundle,
 )
 from mura.storage.database import Database, utcnow
+from mura.book.relationship_semantics import relationship_semantics_match
 from mura.book.snapshot_validation import (
     SnapshotClosureError,
     SnapshotSizeError,
@@ -359,8 +360,13 @@ def compile_source_snapshot(
             else {}
         )
 
-        def attribute_sources(key: str) -> list[str]:
-            raw = raw_attribute_sources.get(key)
+        def attribute_sources(
+            key: str,
+            raw_sources: dict[str, object] = raw_attribute_sources,
+            fallback_sources: list[str] = generic_sources,
+            fallback_allowed: bool = generic_is_fully_selected,
+        ) -> list[str]:
+            raw = raw_sources.get(key)
             if isinstance(raw, list):
                 values = sorted(
                     {str(value) for value in raw if isinstance(value, str) and value}
@@ -370,7 +376,7 @@ def compile_source_snapshot(
             # that every contributing recording is selected. If an excluded
             # recording appears in the aggregate provenance, optional
             # attributes need their own explicit provenance or are omitted.
-            return generic_sources if generic_is_fully_selected else []
+            return fallback_sources if fallback_allowed else []
 
         display_sources = attribute_sources("display_name")
         display_name = str(p.get("canonical_name") or "").strip()
@@ -511,12 +517,19 @@ def compile_source_snapshot(
                 continue
             if claim.get("object_type") != "relationship":
                 continue
-            if str(claim.get("predicate") or "") != str(r.get("relationship_type") or ""):
-                continue
-            if {claim.get("subject_person_id"), claim.get("object_person_id")} != {
-                sub_id,
-                obj_id,
-            }:
+            payload = claim.get("payload") if isinstance(claim.get("payload"), dict) else {}
+            if not relationship_semantics_match(
+                left_type=str(payload.get("relationship_type") or claim.get("predicate") or ""),
+                left_subject_person_id=claim.get("subject_person_id"),
+                left_subject_role=str(payload.get("subject_role") or ""),
+                left_object_person_id=claim.get("object_person_id"),
+                left_object_role=str(payload.get("object_role") or ""),
+                right_type=str(r.get("relationship_type") or ""),
+                right_subject_person_id=sub_id,
+                right_subject_role=str(r.get("subject_role") or ""),
+                right_object_person_id=obj_id,
+                right_object_role=str(r.get("object_role") or ""),
+            ):
                 continue
             support_ids.append(str(claim_id))
 
@@ -627,7 +640,17 @@ def compile_source_snapshot(
                 object_type=c["object_type"],
                 predicate=c["predicate"],
                 subject_person_id=sub_pid if sub_pid in known_person_ids else None,
+                subject_role=(
+                    str(payload.get("subject_role"))
+                    if c.get("object_type") == "relationship" and payload.get("subject_role")
+                    else None
+                ),
                 object_person_id=obj_pid if obj_pid in known_person_ids else None,
+                object_role=(
+                    str(payload.get("object_role"))
+                    if c.get("object_type") == "relationship" and payload.get("object_role")
+                    else None
+                ),
                 evidence_class=c.get("evidence_class", "D_UNSPECIFIED"),
                 assertion_mode=c.get("assertion_mode"),
                 verification_status=c.get("verification_status", "unreviewed"),

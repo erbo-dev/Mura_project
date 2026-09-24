@@ -14,6 +14,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+HSTS_HEADER = "max-age=31536000; includeSubDomains"
+
 SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -23,9 +25,15 @@ SECURITY_HEADERS: dict[str, str] = {
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: object, *, hsts_enabled: bool = False) -> None:
+        super().__init__(app)
+        self.hsts_enabled = hsts_enabled
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         for header_name, header_value in SECURITY_HEADERS.items():
             response.headers.setdefault(header_name, header_value)
+        if self.hsts_enabled:
+            response.headers.setdefault("Strict-Transport-Security", HSTS_HEADER)
         return response
 

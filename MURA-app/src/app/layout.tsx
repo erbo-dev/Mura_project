@@ -2,9 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppShell } from "@/components/shell/app-shell";
 import { MuraI18nProvider } from "@/lib/i18n";
-import { isClerkConfigured } from "@/lib/auth/providers/clerk/config";
-import { isSupabaseAuthConfigured } from "@/lib/auth/providers/supabase/config";
-import { isDevAuthAllowed } from "@/lib/auth/providers/dev/config";
+import { selectAuthProvider } from "@/lib/auth/provider-selection";
 import {
   MuraSessionProvider,
   type AuthProviderKind,
@@ -32,13 +30,9 @@ export const viewport: Viewport = {
  * rather than quietly acquiring an issuer that mints identities on request.
  */
 function authProvider(): AuthProviderKind {
-  if (isDevAuthAllowed()) return "dev";
-  // Same order as `server-session.ts`. If this disagreed with the seam the
-  // client would report a provider the proxy does not use, and a signed-in
-  // user would keep being told sign-in is not connected.
-  if (isSupabaseAuthConfigured()) return "supabase";
-  if (isClerkConfigured()) return "clerk";
-  return "none";
+  // Shared with server-session.ts so the UI and proxy cannot silently choose
+  // different providers from the same deployment environment.
+  return selectAuthProvider();
 }
 
 function Shell({
