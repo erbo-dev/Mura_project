@@ -125,6 +125,23 @@ jobs:
             --cov-report=term-missing \
             --cov-report=xml
 
+  containers:
+    name: Build production containers
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Mura_project
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build --file Dockerfile --tag mura-api:ci .
+
+      - name: Build worker image
+        run: docker build --file Dockerfile.worker --tag mura-worker:ci .
+
   compatibility:
     name: Python 3.13 — compatibility
     runs-on: ubuntu-latest

@@ -17,10 +17,13 @@
     "clsx": "^2.1.1",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.25.0",
-    "next": "15.5.20",
+    "next": "15.5.26",
     "react": "^19.1.4",
     "react-dom": "^19.1.4",
     "tailwind-merge": "^3.6.0"
+  },
+  "overrides": {
+    "postcss": "8.5.23"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
