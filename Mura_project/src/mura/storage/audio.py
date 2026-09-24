@@ -445,9 +445,17 @@ class SupabaseAudioStorage:
 
         try:
             try:
-                from mura.testing.fault_injection import FAULT_STORAGE_503, consume_fault, is_fault_injection_enabled
+                from mura.testing.fault_injection import (
+                    FAULT_STORAGE_503,
+                    consume_fault,
+                    is_fault_injection_enabled,
+                )
+
                 if is_fault_injection_enabled() and consume_fault(FAULT_STORAGE_503):
-                    raise AudioStorageError("Supabase Storage rejected upload with HTTP 503: Service Unavailable")
+                    raise AudioStorageError(
+                        "Supabase Storage rejected upload with HTTP 503: "
+                        "Service Unavailable"
+                    )
             except ImportError:
                 pass
             response = self.session.post(
@@ -461,7 +469,8 @@ class SupabaseAudioStorage:
 
         if response.status_code >= 400:
             raise AudioStorageError(
-                f"Supabase Storage rejected upload with HTTP {response.status_code}: {response.text}"
+                "Supabase Storage rejected upload with HTTP "
+                f"{response.status_code}: {response.text}"
             )
 
         return StoredAudio(
@@ -523,7 +532,9 @@ class SupabaseAudioStorage:
                 timeout=(10.0, self.timeout_seconds),
             )
         except Exception as exc:
-            raise AudioStorageError(f"failed to retrieve audio from Supabase Storage: {exc}") from exc
+            raise AudioStorageError(
+                f"failed to retrieve audio from Supabase Storage: {exc}"
+            ) from exc
 
         if response.status_code == 404:
             raise FileNotFoundError(f"recording audio {storage_key} not found in Supabase Storage")
