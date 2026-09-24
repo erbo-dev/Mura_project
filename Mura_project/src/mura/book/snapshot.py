@@ -22,11 +22,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from mura.book.relationship_semantics import relationship_semantics_match
+from mura.book.snapshot_validation import (
+    SnapshotClosureError,
+    SnapshotSizeError,
+    validate_snapshot_closure,
+)
 from mura.domain.book_models import (
-    SNAPSHOT_SCHEMA_VERSION,
     MAX_BOOK_EVIDENCE_QUOTES,
     MAX_BOOK_SNAPSHOT_BYTES,
     MAX_BOOK_SOURCE_RECORDINGS,
+    SNAPSHOT_SCHEMA_VERSION,
     BookSourceSnapshot,
     CompiledSnapshot,
     SnapshotClaim,
@@ -47,12 +53,6 @@ from mura.storage.archive_read import (
     grounding_bundle,
 )
 from mura.storage.database import Database, utcnow
-from mura.book.relationship_semantics import relationship_semantics_match
-from mura.book.snapshot_validation import (
-    SnapshotClosureError,
-    SnapshotSizeError,
-    validate_snapshot_closure,
-)
 
 COMPILER_VERSION = "mura-book-snapshot-compiler-v1"
 
@@ -353,7 +353,10 @@ def compile_source_snapshot(
                 if isinstance(value, str) and value
             }
         )
-        generic_is_fully_selected = bool(generic_sources) and set(generic_sources) <= selected_recording_set
+        generic_is_fully_selected = (
+            bool(generic_sources)
+            and set(generic_sources) <= selected_recording_set
+        )
         raw_attribute_sources = (
             p.get("attribute_sources")
             if isinstance(p.get("attribute_sources"), dict)
