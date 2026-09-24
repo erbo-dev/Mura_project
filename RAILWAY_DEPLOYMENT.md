@@ -1,5 +1,5 @@
 # MURA (Мұра) — Production Deployment Runbook
-### Target Platforms: Supabase (PostgreSQL + OIDC) · Railway (API + Worker) · Vercel (Next.js)
+### Target Platforms: Supabase (PostgreSQL + Storage) · Clerk (OIDC) · Railway (API + Worker) · Vercel (Next.js)
 
 This runbook provides complete, step-by-step instructions for deploying the MURA production infrastructure from scratch.
 
@@ -22,14 +22,17 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 [ Railway: Worker ] ─────────▶ [ Supabase: PostgreSQL 16 ]
 (Mura_project/Dockerfile.worker)  │
                                   ▼
-                            [ Supabase Auth (OIDC) ]
+                           [ Supabase Storage ]
+
+[ Browser / Vercel ] ─────────▶ [ Clerk OIDC ]
 ```
 
 - **Frontend (Vercel):** Serves UI, manages client session, and proxies requests to Core API via `MURA_API_URL`.
 - **Backend API (Railway):** FastAPI handling HTTP requests, authorization policies, job queueing, and capabilities. Runs as non-root user `mura` (UID `10001`).
 - **Worker (Railway):** Standalone `mura-worker` process claiming jobs from PostgreSQL via `SELECT ... FOR UPDATE SKIP LOCKED` with heartbeats and leases.
 - **Database (Supabase):** PostgreSQL with linear Alembic migrations. Single source of truth for all family archives, relationships, and durable job states.
-- **Identity (Supabase Auth):** OIDC provider signing tokens with `ES256`. Core validates tokens against Supabase's JWKS endpoint.
+- **Object Storage (Supabase):** Private audio and generated Book artifact buckets accessed only by server-side service-role credentials.
+- **Identity (Clerk):** Frontend session provider. The server-side frontend forwards a Clerk JWT template token; Core validates it as standards-based OIDC/JWT using the configured issuer, audience, JWKS URL, and asymmetric algorithm allowlist.
 
 ---
 
@@ -37,6 +40,7 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 
 1. **Accounts:**
    - [Supabase](https://supabase.com)
+   - [Clerk](https://clerk.com)
    - [Railway](https://railway.com)
    - [Vercel](https://vercel.com)
 2. **AI Provider Credentials:**
@@ -64,19 +68,17 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
    > [!IMPORTANT]
    > Do **not** use the Transaction Pooler (Port `6543`) for Alembic migrations or Core API, as startup parameters (`statement_timeout`) and DDL migrations require direct session mode.
 
-### 1.3 Configure Supabase Authentication
-1. Go to **Authentication** → **URL Configuration**.
-2. Set **Site URL** to your future Vercel domain:
-   ```text
-   https://your-mura-app.vercel.app
-   ```
-3. Under **Redirect URLs**, add:
-   ```text
-   https://your-mura-app.vercel.app/api/auth/callback
-   ```
-4. Note your public credentials from **Project Settings** → **API**:
-   - `Project URL`: `https://[PROJECT-REF].supabase.co`
-   - `Project API anon key`: `eyJh...`
+### 1.3 Configure Clerk OIDC
+1. Create or select the Clerk application used by `MURA-app`.
+2. Configure the production frontend domain in Clerk.
+3. Create the JWT template referenced by `CLERK_JWT_TEMPLATE` (the repository default is `mura-core`).
+4. Configure the template so the token audience matches Core's `AUTH_AUDIENCE` exactly.
+5. Record:
+   - the Clerk publishable key for the browser;
+   - the Clerk secret key for the Next.js server;
+   - the Clerk issuer URL for the environment;
+   - the issuer JWKS URL.
+6. Keep Core provider-agnostic: it validates issuer, audience, time claims and asymmetric signatures from the configured JWKS endpoint; it does not use a Clerk SDK.
 
 ---
 
@@ -117,12 +119,13 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 | `WORKER_REGISTRATION_TOKEN` | *(Generate 32+ chars)* | Service-to-service token |
 | `KAGGLE_ASR_API_KEY` | *(Generate 32+ chars)* | Internal token |
 | `AUTH_MODE` | `oidc` | Production requires OIDC |
-| `AUTH_ISSUER` | `https://[PROJECT-REF].supabase.co/auth/v1` | Supabase Auth issuer |
-| `AUTH_AUDIENCE` | `authenticated` | Supabase default JWT audience |
-| `AUTH_JWKS_URL` | `https://[PROJECT-REF].supabase.co/auth/v1/.well-known/jwks.json` | JWKS public keys |
-| `AUTH_ALLOWED_ALGORITHMS` | `ES256` | Supabase uses ES256 |
+| `AUTH_ISSUER` | `https://<your-clerk-issuer>` | Exact Clerk issuer for this environment |
+| `AUTH_AUDIENCE` | `mura-core` | Must match the Clerk JWT template `aud` claim |
+| `AUTH_JWKS_URL` | `https://<your-clerk-issuer>/.well-known/jwks.json` | Trusted JWKS endpoint configured by deployment, never from the token |
+| `AUTH_ALLOWED_ALGORITHMS` | `RS256` | Keep asymmetric verification only; match the keys issued by your Clerk instance |
 | `CORS_ALLOWED_ORIGINS` | `https://your-mura-app.vercel.app` | Exact Vercel domain without trailing slash |
-| `TRUSTED_HOSTS` | `mura-api-production.up.railway.app,api.mura.kz` | Comma-separated list of allowed HTTP Host headers |
+| `ALLOWED_HOSTS` | `mura-api-production.up.railway.app,api.mura.kz` | Comma-separated HTTP Host allowlist read by Core |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` unless a trusted ingress range is known | Uvicorn ignores forwarded headers from untrusted peers; never use `*` in production-like config |
 | `AUDIO_STORAGE_BACKEND` | `supabase` | Production Object Storage (`supabase` for prod, `local` for dev) |
 | `BOOK_STORAGE_BACKEND` | `supabase` | Production Book Artifact Storage (`supabase` for prod, `local` for dev) |
 | `SUPABASE_URL` | `https://[PROJECT-REF].supabase.co` | Supabase Project URL |
@@ -212,8 +215,11 @@ Add the following variables in the Vercel Project Settings:
 | Variable | Value | Description |
 | :--- | :--- | :--- |
 | `MURA_API_URL` | `https://mura-api-production.up.railway.app` | Railway public URL of `mura-api` (no trailing slash) |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://[PROJECT-REF].supabase.co` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJh...` | Supabase public anon key |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | *(Clerk publishable key)* | Public browser credential |
+| `CLERK_SECRET_KEY` | *(Clerk secret key)* | Server-only; never expose through `NEXT_PUBLIC_*` |
+| `CLERK_JWT_TEMPLATE` | `mura-core` | JWT template whose audience matches `AUTH_AUDIENCE` |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` | Sign-in route |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` | Sign-up route |
 | `NEXT_PUBLIC_SENTRY_DSN` | *(Optional)* | Frontend Sentry DSN for error boundary tracking |
 | `SENTRY_ENVIRONMENT` | `production` | Sentry environment tag |
 
@@ -257,7 +263,7 @@ Verify startup (formatted in single-line JSON):
 
 ### 6.4 Check Frontend & Auth Flow
 1. Open `https://your-mura-app.vercel.app` in your browser.
-2. Sign in via Supabase Auth.
+2. Sign in via Clerk.
 3. Verify that `/home` loads your archive and family context without 401 or 403 errors.
 
 ---
@@ -288,7 +294,7 @@ Verify startup (formatted in single-line JSON):
 | Symptom | Cause | Resolution |
 | :--- | :--- | :--- |
 | `503 Service Unavailable` on `/ready` | Supabase connection failed | Check `DATABASE_URL` credentials; ensure port `5432` is used rather than `6543`. |
-| `401 Unauthorized` (`invalid_token`) | Auth mismatch between Frontend & Core | Verify `AUTH_ISSUER` equals `https://[PROJECT-REF].supabase.co/auth/v1` and `AUTH_ALLOWED_ALGORITHMS=ES256`. |
+| `401 Unauthorized` (`invalid_token`) | Auth mismatch between Frontend & Core | Verify the Clerk JWT template audience matches `AUTH_AUDIENCE`, and that `AUTH_ISSUER`, `AUTH_JWKS_URL`, and `AUTH_ALLOWED_ALGORITHMS` match the configured Clerk instance. |
 | `CORS Error` in Browser Console | `CORS_ALLOWED_ORIGINS` mismatch | Ensure `CORS_ALLOWED_ORIGINS` on `mura-api` matches Vercel URL exactly (no trailing slash). |
 | Jobs stay in `queued` status | `mura-worker` stopped or cannot reach DB | Check `mura-worker` logs in Railway for crash or connection timeout. |
 | Railway API fails to bind port | Hardcoded port in Dockerfile | Ensure `Mura_project/Dockerfile` uses `CMD ["sh", "-c", "exec uvicorn ... --port \"${PORT:-8000}\""]`. |
