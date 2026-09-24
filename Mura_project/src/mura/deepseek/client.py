@@ -86,9 +86,7 @@ class DeepSeekClient:
             models.append(self.fallback_model)
 
         resolved_op = (
-            operation
-            if operation != "llm_chat"
-            else self._detect_operation(system_prompt)
+            operation if operation != "llm_chat" else self._detect_operation(system_prompt)
         )
         for model in models:
             try:
