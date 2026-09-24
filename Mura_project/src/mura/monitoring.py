@@ -9,15 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
-
 from pydantic import Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 
+from mura.domain.book_models import TERMINAL_BOOK_JOB_STATUSES, BookJobStatus
 from mura.domain.models import StrictModel
 from mura.jobs import JobStatus
 from mura.storage.ai_usage import AIUsageLedger
-from mura.domain.book_models import BookJobStatus, TERMINAL_BOOK_JOB_STATUSES
 from mura.storage.book import BookJobRow
 from mura.storage.cleanup import (
     StorageCleanupJobRow,
@@ -388,7 +386,9 @@ class QueueHealthService:
 
     def get_book_stuck_jobs(self, now: datetime | None = None) -> list[BookStuckJobItem]:
         moment = now or utcnow()
-        pending_cutoff = moment - timedelta(seconds=self.thresholds.stuck_book_pending_threshold_seconds)
+        pending_cutoff = moment - timedelta(
+            seconds=self.thresholds.stuck_book_pending_threshold_seconds
+        )
         lease_cutoff = moment - timedelta(seconds=self.thresholds.book_lease_grace_seconds)
 
         stuck_items: list[BookStuckJobItem] = []
