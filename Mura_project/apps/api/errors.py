@@ -47,7 +47,7 @@ UPSTREAM_TIMEOUT = "upstream_timeout"
 # distinguish "log in" from "ask an owner"; the message still comes from the
 # table below, so no exception text ever escapes.
 AUTHENTICATION_REQUIRED = "authentication_required"
-INVALID_TOKEN = "invalid_token"
+INVALID_TOKEN = "invalid_token"  # nosec B105 -- public API error code, not a credential
 FAMILY_NOT_FOUND = "family_not_found"
 INSUFFICIENT_FAMILY_ROLE = "insufficient_family_role"
 SOLE_OWNER_REQUIRED = "sole_owner_required"
