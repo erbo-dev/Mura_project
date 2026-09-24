@@ -291,9 +291,7 @@ def test_build_worker_supervisor_can_isolate_cleanup_queue() -> None:
 
 
 def test_build_worker_supervisor_accepts_explicit_all_queues() -> None:
-    supervisor = build_worker_supervisor(
-        _settings(WORKER_QUEUES="recording,book,cleanup")
-    )
+    supervisor = build_worker_supervisor(_settings(WORKER_QUEUES="recording,book,cleanup"))
 
     assert isinstance(supervisor.recording_worker, RecordingJobWorker)
     assert isinstance(supervisor.book_worker, BookJobWorker)
