@@ -406,9 +406,7 @@ def extract_relationships(
         for match in regex.finditer(text):
             person_surface = match.group("person")
             person_id = resolve_person_surface(person_surface, snapshot)
-            unresolved_surfaces = [
-                surface for surface in [person_surface] if person_id is None
-            ]
+            unresolved_surfaces = [surface for surface in [person_surface] if person_id is None]
             unresolved_surfaces.append("<coreference>")
             found.append(
                 ProseRelationship(
