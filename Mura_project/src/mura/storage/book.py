@@ -20,9 +20,9 @@ written from work that has not finished grounding itself.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import (
@@ -44,29 +44,21 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from mura.domain.book_models import (
     TERMINAL_BOOK_JOB_STATUSES,
     TERMINAL_BOOK_STATUSES,
+    BookJobStatus as BookJobStatusEnum,
+    BookStage as BookStageEnum,
+    BookStatus as BookStatusEnum,
+    ChapterStatus as ChapterStatusEnum,
     CompiledSnapshot,
     ExportFormat,
 )
-from mura.domain.book_models import (
-    BookJobStatus as BookJobStatusEnum,
-)
-from mura.domain.book_models import (
-    BookStage as BookStageEnum,
-)
-from mura.domain.book_models import (
-    BookStatus as BookStatusEnum,
-)
-from mura.domain.book_models import (
-    ChapterStatus as ChapterStatusEnum,
-)
 from mura.jobs import JobStatus
+from mura.leases import LeaseOwnershipLost
+from mura.storage.book_artifacts import build_book_storage_key
 from mura.storage.cleanup import (
     StorageCleanupRepository,
     StorageCleanupResourceType,
     StorageKind,
 )
-from mura.leases import LeaseOwnershipLost
-from mura.storage.book_artifacts import build_book_storage_key
 from mura.storage.database import (
     JSON_VALUE,
     Base,
@@ -687,7 +679,7 @@ class QueuedBookResult:
 
 
 class BookCreationRepository:
-    """Atomic transaction manager for creating a book, its source snapshot, and its execution job."""
+    """Create a Book, immutable source snapshot, and execution job atomically."""
 
     def __init__(self, database: Database) -> None:
         self.database = database
