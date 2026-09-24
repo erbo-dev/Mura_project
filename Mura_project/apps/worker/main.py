@@ -389,7 +389,7 @@ def install_signal_handlers(
 
 def main() -> int:
     try:
-        settings = CoreSettings()  # type: ignore[call-arg]
+        settings = CoreSettings()
     except Exception:
         # Never echo the validation error: it can quote supplied secrets.
         logger.error("worker is not configured; refusing to start")
