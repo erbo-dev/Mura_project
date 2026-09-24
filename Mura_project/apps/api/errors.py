@@ -111,7 +111,8 @@ _MESSAGE_BY_CODE: dict[str, str] = {
         "The daily limit for book generation has been reached for this family."
     ),
     BOOK_SOURCE_SNAPSHOT_MISSING: (
-        "The original book source snapshot is unavailable; select sources explicitly to regenerate."
+        "The original book source snapshot is unavailable; "
+        "select sources explicitly to regenerate."
     ),
     BOOK_SOURCE_LIMIT_EXCEEDED: "Too many source recordings were selected for one book.",
     BOOK_SOURCE_SNAPSHOT_TOO_LARGE: (
