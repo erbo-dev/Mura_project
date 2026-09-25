@@ -40,7 +40,7 @@ MURA achieves production-grade monitoring without introducing heavy observabilit
 Railway provides built-in metrics collection and alerting directly in the project dashboard (`Settings -> Metrics`).
 
 ### 2.1 Monitored Metrics
-- **CPU Saturation (%)**: Tracked per container (`mura-api` and `mura-worker`).
+- **CPU Saturation (%)**: Tracked per container (`mura-api` and each isolated worker).
 - **Memory RSS (MB / %)**: Tracked against provisioned container RAM.
 - **Restarts / CrashLoopBackOff**: Tracked per replica.
 - **Network Egress**: Tracked for audio download/upload and external API calls.
@@ -50,10 +50,10 @@ Configure notifications via Slack, PagerDuty, or Webhook in Railway dashboard:
 
 | Alert Name | Service | Metric & Condition | Evaluation Window | Severity | Action |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Worker High Memory** | `mura-worker` | Memory > 85% of limit | Sustained 5m | Warning | Check for huge audio files or memory leak |
-| **Worker OOM / Restarts** | `mura-worker` | Restart count > 2 | 10m window | Critical | Check worker logs `@event:"job_started"` before crash |
+| **Worker High Memory** | each isolated worker | Memory > 85% of limit | Sustained 5m | Warning | Check for huge audio files or memory leak |
+| **Worker OOM / Restarts** | each isolated worker | Restart count > 2 | 10m window | Critical | Check worker logs `@event:"job_started"` before crash |
 | **API High Latency / CPU** | `mura-api` | CPU > 90% | Sustained 5m | Warning | Evaluate horizontal scaling or slow upstream requests |
-| **Container Disk Warning** | `mura-worker` | Ephemeral disk > 80% | Sustained 5m | Warning | Check `/tmp` audio materialization cleanup |
+| **Container Disk Warning** | each isolated worker | Ephemeral disk > 80% | Sustained 5m | Warning | Check `/tmp` audio materialization cleanup |
 
 ---
 
@@ -69,7 +69,7 @@ Sentry captures operational exceptions and tracks transaction durations across b
    - **Triage**: Filter by `@route` and inspect the correlated `@request_id`.
 
 2. **Terminal Worker Failure (`job_failed`)**:
-   - **Condition**: Event tagged with `event:job_failed` occurs on `mura-worker`.
+   - **Condition**: Event tagged with `event:job_failed` occurs on any isolated worker.
    - **Action**: Alert to engineering on-call channel.
    - **Triage**: Extract `job_id`, `recording_id`, and `attempt` from Sentry tags and query `/v1/jobs/{job_id}/trace`.
 
@@ -279,11 +279,11 @@ GET /v1/operations/monitoring/summary
 ### Playbook 3: "Worker crashes or enters OOM crash loop"
 
 1. **Check Railway Metrics**:
-   Open Railway Dashboard -> `mura-worker` -> Metrics tab. Check Memory graph to see if memory spikes to 100% (OOM).
+   Open Railway Dashboard -> the affected worker service -> Metrics tab. Check Memory graph for OOM spikes.
 2. **Identify Offending Recording**:
    Look at the last log lines before the crash:
    ```text
-   @service:"mura-worker" @event:"job_started"
+   @event:"job_started"
    ```
    Check the `recording_id` of the last claimed job.
 3. **Verify Audio Duration & Size**:
@@ -322,5 +322,4 @@ GET /v1/operations/monitoring/summary
    - `next_attempt_at > NOW()`: Job is under deliberate exponential backoff / `Retry-After` delay due to transient provider rate limit. No action required unless delayed for >30 minutes.
    - `status = 'running'` and `lease_expires_at < NOW()`: Worker holding lease terminated ungracefully. Lease will automatically be reclaimed on next claim cycle.
    - `status = 'failed'`: Book was terminally rejected (e.g. content policy, quota violation, or kinship grounding blocker). Inspect `error_code` and `error_detail` on `books` table.
-
 

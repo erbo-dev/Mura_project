@@ -62,6 +62,10 @@ services:
       OPERATIONS_API_KEY: ${OPERATIONS_API_KEY}
       KAGGLE_ASR_API_KEY: ${KAGGLE_ASR_API_KEY}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      ASR_PROVIDER: ${ASR_PROVIDER:-whisper}
+      WHISPER_API_KEY: ${WHISPER_API_KEY:-}
+      WHISPER_BASE_URL: ${WHISPER_BASE_URL:-https://api.openai.com/v1}
+      WHISPER_MODEL: ${WHISPER_MODEL:-whisper-1}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
       DEEPSEEK_FALLBACK_MODEL: ${DEEPSEEK_FALLBACK_MODEL:-deepseek-v4-pro}
@@ -96,8 +100,7 @@ services:
       - mura-network
 
   # ============================================================================
-  # Worker: Standalone Recording Job Worker
-  # Worker: Standalone Recording & Book Job Worker
+  # Worker: combined local Recording, Book and Cleanup worker
   # Claims background jobs via SELECT FOR UPDATE SKIP LOCKED with lease/heartbeat
   # ============================================================================
   worker:
@@ -110,15 +113,13 @@ services:
     environment:
       MURA_ENVIRONMENT: ${MURA_ENVIRONMENT:-local}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mura}:${POSTGRES_PASSWORD:-mura_secret_change_me}@postgres:5432/${POSTGRES_DB:-mura}
-      CORE_API_KEY: ${CORE_API_KEY}
-      WORKER_REGISTRATION_TOKEN: ${WORKER_REGISTRATION_TOKEN}
-      OPERATIONS_API_KEY: ${OPERATIONS_API_KEY}
       KAGGLE_ASR_API_KEY: ${KAGGLE_ASR_API_KEY}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
       DEEPSEEK_FALLBACK_MODEL: ${DEEPSEEK_FALLBACK_MODEL:-deepseek-v4-pro}
       ASR_PROVIDER: ${ASR_PROVIDER:-whisper}
+      WORKER_QUEUES: ${WORKER_QUEUES:-recording,book,cleanup}
       WHISPER_API_KEY: ${WHISPER_API_KEY:-}
       WHISPER_BASE_URL: ${WHISPER_BASE_URL:-https://api.openai.com/v1}
       WHISPER_MODEL: ${WHISPER_MODEL:-whisper-1}

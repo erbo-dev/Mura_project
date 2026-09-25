@@ -94,9 +94,8 @@ def verify_storage_integrity(db: Database, storage) -> None:
    - If database is corrupted, initiate PITR restore to 10 minutes prior to corruption incident.
 2. **Environment Variable Cutover**:
    - Update Railway `DATABASE_URL` to point to the restored cluster.
-   - Restart `mura-api` and `mura-worker`.
+   - Restart `mura-api`, `mura-recording-worker`, `mura-book-worker`, and `mura-cleanup-worker`.
 3. **Health & Readiness Verification**:
    - Execute `/health` and `/ready` probes.
    - Run deterministic staging test suite: `python -m pytest tests/staging/` to verify zero regression.
 4. **Notify Stakeholders**: Post incident summary to status monitoring channel.
-

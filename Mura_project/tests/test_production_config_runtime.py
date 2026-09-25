@@ -13,15 +13,16 @@ from apps.api.main import (
     get_settings,
     resolve_request_id,
 )
-from mura.config import CoreSettings, Environment
+from mura.config import CoreSettings, Environment, StandaloneWorkerSettings
 from mura.storage.database import Database, DatabaseRuntimeSettings, postgres_connect_args
+from scripts.check_staging_config import check_staging_configuration
 
 DEEPSEEK_KEY = "sk-" + "d" * 40
 REGISTRATION_TOKEN = "r" * 40
 ASR_TOKEN = "a" * 40
 CORE_TOKEN = "c" * 40
 
-POSTGRES_URL = "postgresql+psycopg://mura:mura@db.internal:5432/mura"
+POSTGRES_URL = "postgresql+psycopg://mura:mura@db.internal:5432/mura?sslmode=require"
 SQLITE_MEMORY_URL = "sqlite+pysqlite:///:memory:"
 
 
@@ -43,6 +44,9 @@ def _production_payload(**overrides: Any) -> dict[str, Any]:
         MURA_ENVIRONMENT="production",
         DATABASE_URL=POSTGRES_URL,
         CORS_ALLOWED_ORIGINS="https://app.example.com",
+        ALLOWED_HOSTS="api.example.com",
+        ASR_PROVIDER="whisper",
+        WHISPER_API_KEY="whisper-test-secret",
         # Production must not depend on a CWD-relative storage directory.
         AUDIO_STORAGE_DIR="/srv/mura/audio",
         BOOK_STORAGE_DIR="/srv/mura/books",
@@ -92,6 +96,92 @@ def test_production_like_rejects_sqlite(environment: str) -> None:
         CoreSettings.model_validate(
             _production_payload(MURA_ENVIRONMENT=environment, DATABASE_URL=SQLITE_MEMORY_URL)
         )
+
+
+@pytest.mark.parametrize("sslmode", ["", "disable", "allow", "prefer", "verify-unknown"])
+def test_production_like_rejects_plaintext_or_unspecified_database_tls(sslmode: str) -> None:
+    database_url = "postgresql+psycopg://mura:secret@db.internal:5432/mura"
+    if sslmode:
+        database_url += f"?sslmode={sslmode}"
+    with pytest.raises(ValidationError, match="PostgreSQL TLS"):
+        CoreSettings.model_validate(_production_payload(DATABASE_URL=database_url))
+
+
+@pytest.mark.parametrize("sslmode", ["require", "verify-ca", "verify-full"])
+def test_production_like_accepts_explicit_database_tls(sslmode: str) -> None:
+    settings = CoreSettings.model_validate(
+        _production_payload(DATABASE_URL=f"{POSTGRES_URL.split('?')[0]}?sslmode={sslmode}")
+    )
+    assert settings.database_url.endswith(f"sslmode={sslmode}")
+
+
+@pytest.mark.parametrize("hosts", ["", "*", "api.example.com,*", "api.example.com/*"])
+def test_production_like_rejects_empty_or_wildcard_hosts(hosts: str) -> None:
+    with pytest.raises(ValidationError, match="ALLOWED_HOSTS"):
+        CoreSettings.model_validate(_production_payload(ALLOWED_HOSTS=hosts))
+
+
+@pytest.mark.parametrize("ips", ["", "*", "127.0.0.1,*", "127.0.0.1,"])
+def test_production_like_rejects_untrusted_forwarded_ips(ips: str) -> None:
+    with pytest.raises(ValidationError, match="FORWARDED_ALLOW_IPS"):
+        CoreSettings.model_validate(_production_payload(FORWARDED_ALLOW_IPS=ips))
+
+
+def test_production_like_requires_explicit_asr_provider() -> None:
+    payload = _production_payload()
+    del payload["ASR_PROVIDER"]
+    with pytest.raises(ValidationError, match="ASR_PROVIDER"):
+        CoreSettings.model_validate(payload)
+
+
+@pytest.mark.parametrize("queues", ["", "recording,unknown", "recording,recording"])
+def test_worker_rejects_invalid_queue_selection(queues: str) -> None:
+    with pytest.raises(ValidationError, match=r"WORKER_QUEUES|worker_queues"):
+        StandaloneWorkerSettings.model_validate(_production_payload(WORKER_QUEUES=queues))
+
+
+def test_worker_does_not_require_api_credentials() -> None:
+    payload = _production_payload(WORKER_QUEUES="recording")
+    for key in ("CORE_API_KEY", "OPERATIONS_API_KEY", "WORKER_REGISTRATION_TOKEN", "AUTH_MODE"):
+        payload.pop(key)
+    worker = StandaloneWorkerSettings.model_validate(payload)
+    assert worker.worker_queues == ["recording"]
+
+
+def test_cleanup_worker_needs_no_ai_credentials() -> None:
+    payload = _production_payload(WORKER_QUEUES="cleanup")
+    for key in ("DEEPSEEK_API_KEY", "WHISPER_API_KEY", "KAGGLE_ASR_API_KEY"):
+        payload.pop(key)
+    assert StandaloneWorkerSettings.model_validate(payload).worker_queues == ["cleanup"]
+
+
+def test_recording_worker_requires_matching_asr_secret() -> None:
+    with pytest.raises(ValidationError, match="WHISPER_API_KEY"):
+        StandaloneWorkerSettings.model_validate(
+            _production_payload(WORKER_QUEUES="recording", WHISPER_API_KEY="")
+        )
+
+
+def test_api_requires_api_secrets_and_oidc() -> None:
+    payload = _production_payload()
+    payload.pop("CORE_API_KEY")
+    with pytest.raises(ValidationError, match="CORE_API_KEY"):
+        CoreSettings.model_validate(payload)
+    with pytest.raises(ValidationError, match="AUTH_MODE"):
+        CoreSettings.model_validate(_production_payload(AUTH_MODE="disabled"))
+
+
+def test_staging_validator_uses_runtime_models_and_hides_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _production_payload(MURA_ENVIRONMENT="staging")
+    assert check_staging_configuration(payload, role="api")
+    assert check_staging_configuration(payload, role="worker")
+    payload["DATABASE_URL"] = "postgresql+psycopg://private-user:private-password@db.internal/mura"
+    assert not check_staging_configuration(payload, role="api")
+    output = capsys.readouterr().out
+    assert "private-password" not in output
+    assert "PostgreSQL TLS" not in output
 
 
 @pytest.mark.parametrize("environment", ["staging", "production"])
@@ -312,9 +402,10 @@ def test_docs_are_served_locally() -> None:
 def test_docs_are_disabled_in_production() -> None:
     client = TestClient(create_app(CoreSettings.model_validate(_production_payload())))
 
-    assert client.get("/docs").status_code == 404
-    assert client.get("/redoc").status_code == 404
-    assert client.get("/openapi.json").status_code == 404
+    headers = {"Host": "api.example.com"}
+    assert client.get("/docs", headers=headers).status_code == 404
+    assert client.get("/redoc", headers=headers).status_code == 404
+    assert client.get("/openapi.json", headers=headers).status_code == 404
 
 
 def test_configured_origin_is_echoed_and_others_are_not() -> None:

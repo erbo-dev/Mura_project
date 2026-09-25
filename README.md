@@ -108,7 +108,7 @@ npm run dev
 | `AUTH_MODE` | `oidc` in production; `disabled` is local/test only |
 | `AUTH_ISSUER` / `AUTH_AUDIENCE` | Must match the provider's tokens exactly |
 | `AUTH_JWKS_URL` | Server configuration only — a token never picks it |
-| `AUTH_ALLOWED_ALGORITHMS` | Asymmetric only. `ES256` for Supabase |
+| `AUTH_ALLOWED_ALGORITHMS` | Asymmetric only; match the configured Clerk JWT template signing algorithm |
 | `ASR_PROVIDER` | `whisper` or `kaggle` |
 | `WHISPER_API_KEY` / `WHISPER_BASE_URL` / `WHISPER_MODEL` | Any OpenAI-compatible transcription host |
 | `DEEPSEEK_API_KEY` | Structured extraction |
@@ -120,8 +120,9 @@ npm run dev
 | Variable | Notes |
 | --- | --- |
 | `MURA_API_URL` | Core's base URL |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://<ref>.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public by design; authorises nothing alone |
+| `MURA_AUTH_PROVIDER` | Set explicitly to `clerk` for production and preview |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Public Clerk key |
+| `CLERK_SECRET_KEY` / `CLERK_JWT_TEMPLATE` | Server-only key and template whose `aud` equals Core `AUTH_AUDIENCE` |
 
 There is deliberately no service credential in the frontend. The bearer token
 exists only server-side, and the proxy discards any `Authorization` header a
