@@ -201,14 +201,14 @@ def test_worker_refuses_to_start_without_configuration(
 ) -> None:
     for name in ("DEEPSEEK_API_KEY", "CORE_API_KEY", "DATABASE_URL"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr("apps.worker.main.CoreSettings", _raising_settings)
+    monkeypatch.setattr("apps.worker.main.StandaloneWorkerSettings", _raising_settings)
 
     assert main() == 2
 
 
 class _raising_settings:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise ValueError("CORE_API_KEY too short: leaky-secret-value")
+        raise ValueError("DEEPSEEK_API_KEY too short: leaky-secret-value")
 
 
 def test_main_runs_only_the_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,7 +236,7 @@ def test_main_runs_only_the_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
 
     supervisor = FakeSupervisor()
 
-    monkeypatch.setattr("apps.worker.main.CoreSettings", lambda: settings)
+    monkeypatch.setattr("apps.worker.main.StandaloneWorkerSettings", lambda: settings)
     monkeypatch.setattr(
         "apps.worker.main.build_worker",
         lambda _settings: (_ for _ in ()).throw(AssertionError("legacy worker must not be built")),

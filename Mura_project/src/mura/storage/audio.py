@@ -29,7 +29,7 @@ import requests
 from mura.storage.storage_errors import StorageDeleteError, storage_delete_http_error
 
 if TYPE_CHECKING:
-    from mura.config import CoreSettings
+    from mura.config import RuntimeSettings
 
 #: Read size for streaming. Audio is never loaded into memory whole.
 CHUNK_BYTES = 1024 * 1024
@@ -561,7 +561,7 @@ class SupabaseAudioStorage:
             temp_path.unlink(missing_ok=True)
 
 
-def build_audio_storage(settings: CoreSettings) -> AudioStorage:
+def build_audio_storage(settings: RuntimeSettings) -> AudioStorage:
     if settings.audio_storage_backend == AudioStorageBackend.LOCAL:
         return LocalAudioStorage(
             settings.audio_storage_dir,

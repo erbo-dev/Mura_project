@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -85,27 +85,19 @@ def _validate_origin(origin: str) -> None:
         raise ValueError(f"CORS origin must not contain a path or query: {origin!r}")
 
 
-class CoreSettings(BaseSettings):
+class RuntimeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     environment: Environment = Field(default=Environment.LOCAL, alias="MURA_ENVIRONMENT")
 
-    deepseek_api_key: str = Field(alias="DEEPSEEK_API_KEY", min_length=8)
+    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY", min_length=8)
     deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
     deepseek_model: str = Field(default="deepseek-v4-flash", alias="DEEPSEEK_MODEL")
     deepseek_fallback_model: str = Field(
         default="deepseek-v4-pro",
         alias="DEEPSEEK_FALLBACK_MODEL",
     )
-    core_api_key: str = Field(alias="CORE_API_KEY", min_length=32)
-    worker_registration_token: str = Field(
-        alias="WORKER_REGISTRATION_TOKEN",
-        min_length=32,
-    )
-    #: Destructive operator routes use their own credential: a leaked frontend
-    #: token must not be able to activate a release or apply retention.
-    operations_api_key: str = Field(alias="OPERATIONS_API_KEY", min_length=32)
-    kaggle_asr_api_key: str = Field(alias="KAGGLE_ASR_API_KEY", min_length=32)
+    kaggle_asr_api_key: str | None = Field(default=None, alias="KAGGLE_ASR_API_KEY", min_length=32)
     asr_provider: ASRProvider = Field(default=ASRProvider.KAGGLE, alias="ASR_PROVIDER")
     whisper_api_key: str | None = Field(default=None, alias="WHISPER_API_KEY")
     whisper_base_url: str = Field(default="https://api.openai.com/v1", alias="WHISPER_BASE_URL")
@@ -273,30 +265,6 @@ class CoreSettings(BaseSettings):
         alias="FAMILY_MAX_AUDIO_STORAGE_BYTES",
         ge=1,
     )
-    auth_mode: AuthMode = Field(default=AuthMode.DISABLED, alias="AUTH_MODE")
-    auth_issuer: str | None = Field(default=None, alias="AUTH_ISSUER")
-    auth_audience: str | None = Field(default=None, alias="AUTH_AUDIENCE")
-    auth_jwks_url: str | None = Field(default=None, alias="AUTH_JWKS_URL")
-    auth_allowed_algorithms: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: list(DEFAULT_ALLOWED_ALGORITHMS),
-        alias="AUTH_ALLOWED_ALGORITHMS",
-    )
-    auth_clock_skew_seconds: int = Field(default=30, alias="AUTH_CLOCK_SKEW_SECONDS", ge=0, le=300)
-    auth_jwks_cache_seconds: int = Field(
-        default=300, alias="AUTH_JWKS_CACHE_SECONDS", ge=30, le=86_400
-    )
-
-    cors_allowed_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=list,
-        alias="CORS_ALLOWED_ORIGINS",
-    )
-    allowed_hosts: Annotated[list[str], NoDecode] = Field(
-        default_factory=list,
-        alias="ALLOWED_HOSTS",
-    )
-    expose_api_docs: bool | None = Field(default=None, alias="EXPOSE_API_DOCS")
-    forwarded_allow_ips: str = Field(default="127.0.0.1", alias="FORWARDED_ALLOW_IPS")
-
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE", ge=1, le=50)
     db_max_overflow: int = Field(default=5, alias="DB_MAX_OVERFLOW", ge=0, le=50)
     db_pool_recycle_seconds: int = Field(
@@ -327,9 +295,6 @@ class CoreSettings(BaseSettings):
     mura_fault_injection: bool = Field(default=False, alias="MURA_FAULT_INJECTION")
 
     @field_validator(
-        "cors_allowed_origins",
-        "allowed_hosts",
-        "auth_allowed_algorithms",
         "worker_queues",
         mode="before",
     )
@@ -337,51 +302,10 @@ class CoreSettings(BaseSettings):
     def accept_delimited_values(cls, value: object) -> object:
         return _split_delimited(value)
 
-    @property
-    def api_docs_enabled(self) -> bool:
-        """Docs default to on for local/test and off everywhere else unless set explicitly."""
-
-        if self.expose_api_docs is not None:
-            return self.expose_api_docs
-        return self.environment in {Environment.LOCAL, Environment.TEST}
-
     @model_validator(mode="after")
-    def validate_auth_invariants(self) -> CoreSettings:
-        if self.environment == Environment.PRODUCTION and self.mura_fault_injection:
-            raise ValueError("Fault injection cannot be enabled in production.")
-        production_like = self.environment.is_production_like
-        if production_like and self.auth_mode is not AuthMode.OIDC:
-            raise ValueError(
-                "AUTH_MODE must be 'oidc' in staging and production; the disabled "
-                "mode exists only for local development and tests"
-            )
-        if self.auth_mode is AuthMode.OIDC:
-            missing = [
-                name
-                for name, value in (
-                    ("AUTH_ISSUER", self.auth_issuer),
-                    ("AUTH_AUDIENCE", self.auth_audience),
-                    ("AUTH_JWKS_URL", self.auth_jwks_url),
-                )
-                if not value
-            ]
-            if missing:
-                raise ValueError(f"{', '.join(missing)} required when AUTH_MODE is oidc")
-            assert self.auth_jwks_url is not None
-            # The JWKS endpoint is trusted configuration; a token never picks it.
-            validate_jwks_url(self.auth_jwks_url, require_https=production_like)
-            symmetric = [a for a in self.auth_allowed_algorithms if a.upper().startswith("HS")]
-            if symmetric:
-                raise ValueError(
-                    "AUTH_ALLOWED_ALGORITHMS must not mix symmetric HS* with "
-                    "public-key verification"
-                )
-            if "none" in {a.lower() for a in self.auth_allowed_algorithms}:
-                raise ValueError("AUTH_ALLOWED_ALGORITHMS must never include 'none'")
-        return self
-
-    @model_validator(mode="after")
-    def validate_lease_invariants(self) -> CoreSettings:
+    def validate_lease_invariants(self) -> RuntimeSettings:
+        if len(self.worker_queues) != len(set(self.worker_queues)):
+            raise ValueError("WORKER_QUEUES must not contain duplicates")
         # A heartbeat at or beyond the lease could never renew in time, so the
         # job would be recovered from under a perfectly healthy worker.
         if self.job_heartbeat_seconds >= self.job_lease_seconds:
@@ -410,8 +334,11 @@ class CoreSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def validate_environment_invariants(self) -> CoreSettings:
+    def validate_environment_invariants(self) -> RuntimeSettings:
         production_like = self.environment.is_production_like
+
+        if self.environment == Environment.PRODUCTION and self.mura_fault_injection:
+            raise ValueError("Fault injection cannot be enabled in production.")
 
         if production_like and self.database_auto_create:
             raise ValueError(
@@ -422,11 +349,12 @@ class CoreSettings(BaseSettings):
             raise ValueError("DATABASE_URL must target PostgreSQL in staging and production")
         if production_like and _is_sqlite_url(self.database_url):
             raise ValueError("SQLite is not a supported database in staging and production")
-        if production_like and self.operations_api_key == self.core_api_key:
-            raise ValueError(
-                "OPERATIONS_API_KEY must differ from CORE_API_KEY so a leaked "
-                "application token cannot reach destructive operator routes"
-            )
+        if production_like:
+            ssl_modes = parse_qs(urlparse(self.database_url).query).get("sslmode", [])
+            if len(ssl_modes) != 1 or ssl_modes[0] not in {"require", "verify-ca", "verify-full"}:
+                raise ValueError("DATABASE_URL must explicitly require PostgreSQL TLS (sslmode)")
+            if "asr_provider" not in self.model_fields_set:
+                raise ValueError("ASR_PROVIDER must be explicit in staging and production")
         if self.audio_storage_backend == AudioStorageBackend.SUPABASE:
             missing = [
                 name
@@ -468,25 +396,116 @@ class CoreSettings(BaseSettings):
                 "BOOK_STORAGE_DIR must be an absolute path outside staging and "
                 "production working directories"
             )
-        if production_like and not self.cors_allowed_origins:
-            raise ValueError(
-                "CORS_ALLOWED_ORIGINS must list at least one origin in staging and production"
-            )
-        if production_like and self.forwarded_allow_ips.strip() in {"", "*"}:
-            raise ValueError(
-                "FORWARDED_ALLOW_IPS must name trusted reverse-proxy addresses "
-                "in staging and production"
-            )
+        return self
 
+
+class CoreSettings(RuntimeSettings):
+    deepseek_api_key: str = Field(alias="DEEPSEEK_API_KEY", min_length=8)
+    core_api_key: str = Field(alias="CORE_API_KEY", min_length=32)
+    worker_registration_token: str = Field(alias="WORKER_REGISTRATION_TOKEN", min_length=32)
+    operations_api_key: str = Field(alias="OPERATIONS_API_KEY", min_length=32)
+    auth_mode: AuthMode = Field(default=AuthMode.DISABLED, alias="AUTH_MODE")
+    auth_issuer: str | None = Field(default=None, alias="AUTH_ISSUER")
+    auth_audience: str | None = Field(default=None, alias="AUTH_AUDIENCE")
+    auth_jwks_url: str | None = Field(default=None, alias="AUTH_JWKS_URL")
+    auth_allowed_algorithms: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_ALGORITHMS), alias="AUTH_ALLOWED_ALGORITHMS"
+    )
+    auth_clock_skew_seconds: int = Field(default=30, alias="AUTH_CLOCK_SKEW_SECONDS", ge=0, le=300)
+    auth_jwks_cache_seconds: int = Field(
+        default=300, alias="AUTH_JWKS_CACHE_SECONDS", ge=30, le=86_400
+    )
+    cors_allowed_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="CORS_ALLOWED_ORIGINS"
+    )
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ALLOWED_HOSTS"
+    )
+    expose_api_docs: bool | None = Field(default=None, alias="EXPOSE_API_DOCS")
+    forwarded_allow_ips: str = Field(default="127.0.0.1", alias="FORWARDED_ALLOW_IPS")
+
+    @field_validator(
+        "cors_allowed_origins", "allowed_hosts", "auth_allowed_algorithms", mode="before"
+    )
+    @classmethod
+    def accept_api_delimited_values(cls, value: object) -> object:
+        return _split_delimited(value)
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.expose_api_docs is not None:
+            return self.expose_api_docs
+        return self.environment in {Environment.LOCAL, Environment.TEST}
+
+    @model_validator(mode="after")
+    def validate_api_invariants(self) -> CoreSettings:
+        production_like = self.environment.is_production_like
+        if production_like and self.auth_mode is not AuthMode.OIDC:
+            raise ValueError("AUTH_MODE must be 'oidc' in staging and production")
+        if self.auth_mode is AuthMode.OIDC:
+            missing = [
+                name
+                for name, value in (
+                    ("AUTH_ISSUER", self.auth_issuer),
+                    ("AUTH_AUDIENCE", self.auth_audience),
+                    ("AUTH_JWKS_URL", self.auth_jwks_url),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(f"{', '.join(missing)} required when AUTH_MODE is oidc")
+            assert self.auth_jwks_url is not None
+            validate_jwks_url(self.auth_jwks_url, require_https=production_like)
+            if any(a.upper().startswith("HS") for a in self.auth_allowed_algorithms):
+                raise ValueError(
+                    "AUTH_ALLOWED_ALGORITHMS must not include symmetric HS* algorithms"
+                )
+            if "none" in {a.lower() for a in self.auth_allowed_algorithms}:
+                raise ValueError("AUTH_ALLOWED_ALGORITHMS must never include 'none'")
+        if production_like:
+            if self.operations_api_key == self.core_api_key:
+                raise ValueError("OPERATIONS_API_KEY must differ from CORE_API_KEY")
+            if not self.allowed_hosts or any(
+                not host or "*" in host or "/" in host for host in self.allowed_hosts
+            ):
+                raise ValueError("ALLOWED_HOSTS must list explicit hosts in staging and production")
+            if not self.cors_allowed_origins:
+                raise ValueError(
+                    "CORS_ALLOWED_ORIGINS must list at least one origin in staging and production"
+                )
+            if not self.forwarded_allow_ips.strip() or any(
+                address.strip() in {"", "*"} for address in self.forwarded_allow_ips.split(",")
+            ):
+                raise ValueError(
+                    "FORWARDED_ALLOW_IPS must name trusted reverse-proxy addresses "
+                    "in staging and production"
+                )
+            if self.asr_provider is ASRProvider.WHISPER and not self.whisper_api_key:
+                raise ValueError("WHISPER_API_KEY is required for configured ASR_PROVIDER")
+            if self.asr_provider is ASRProvider.KAGGLE and not self.kaggle_asr_api_key:
+                raise ValueError("KAGGLE_ASR_API_KEY is required for configured ASR_PROVIDER")
         for origin in self.cors_allowed_origins:
-            if origin == "*":
-                if production_like:
-                    raise ValueError(
-                        'CORS_ALLOWED_ORIGINS must not contain "*" in staging and production'
-                    )
+            if origin == "*" and not production_like:
                 continue
+            if origin == "*":
+                raise ValueError(
+                    'CORS_ALLOWED_ORIGINS must not contain "*" in staging and production'
+                )
             _validate_origin(origin)
+        return self
 
+
+class StandaloneWorkerSettings(RuntimeSettings):
+    @model_validator(mode="after")
+    def validate_selected_queues(self) -> StandaloneWorkerSettings:
+        selected = set(self.worker_queues)
+        if selected & {WorkerQueue.RECORDING, WorkerQueue.BOOK} and not self.deepseek_api_key:
+            raise ValueError("DEEPSEEK_API_KEY required for recording and book queues")
+        if WorkerQueue.RECORDING in selected:
+            if self.asr_provider is ASRProvider.WHISPER and not self.whisper_api_key:
+                raise ValueError("WHISPER_API_KEY required for recording queue")
+            if self.asr_provider is ASRProvider.KAGGLE and not self.kaggle_asr_api_key:
+                raise ValueError("KAGGLE_ASR_API_KEY required for recording queue")
         return self
 
 

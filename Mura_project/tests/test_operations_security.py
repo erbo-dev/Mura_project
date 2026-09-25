@@ -109,9 +109,12 @@ def test_production_rejects_reusing_the_core_token_for_operations() -> None:
         _settings(
             MURA_ENVIRONMENT="production",
             OPERATIONS_API_KEY=CORE_TOKEN,
-            DATABASE_URL="postgresql+psycopg://mura:mura@db.internal:5432/mura",
+            DATABASE_URL="postgresql+psycopg://mura:mura@db.internal:5432/mura?sslmode=require",
+            ASR_PROVIDER="kaggle",
+            ALLOWED_HOSTS="api.example.com",
             CORS_ALLOWED_ORIGINS="https://app.example.com",
             AUDIO_STORAGE_DIR="/srv/mura/audio",
+            BOOK_STORAGE_DIR="/srv/mura/books",
             DATABASE_AUTO_CREATE=False,
             AUTH_MODE="oidc",
             AUTH_ISSUER="https://issuer.example.com/",

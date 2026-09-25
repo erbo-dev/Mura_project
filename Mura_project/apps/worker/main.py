@@ -27,7 +27,7 @@ from types import FrameType
 from typing import Any, cast
 
 from mura.asr.factory import build_asr_client
-from mura.config import CoreSettings, WorkerQueue
+from mura.config import RuntimeSettings, StandaloneWorkerSettings, WorkerQueue
 from mura.deepseek import DeepSeekClient, DeepSeekPipelineService
 from mura.logging import configure_logging
 from mura.orchestration import RecordingJobWorker, build_audio_storage
@@ -55,7 +55,7 @@ logger = logging.getLogger("mura.worker")
 
 
 def build_recording_worker(
-    settings: CoreSettings,
+    settings: RuntimeSettings,
     database: Database | None = None,
     ai_ledger: AIUsageLedger | None = None,
 ) -> RecordingJobWorker:
@@ -97,6 +97,7 @@ def build_recording_worker(
         except Exception as exc:
             logger.warning("failed to record deepseek usage event: %s", exc)
 
+    assert settings.deepseek_api_key is not None
     pipeline = MuraPipeline(
         DeepSeekPipelineService(
             DeepSeekClient(
@@ -123,7 +124,7 @@ def build_recording_worker(
 
 
 def build_book_worker(
-    settings: CoreSettings,
+    settings: RuntimeSettings,
     database: Database | None = None,
     ai_ledger: AIUsageLedger | None = None,
 ) -> BookJobWorker:
@@ -165,6 +166,7 @@ def build_book_worker(
         except Exception as exc:
             logger.warning("failed to record deepseek book usage event: %s", exc)
 
+    assert settings.deepseek_api_key is not None
     deepseek_client = DeepSeekClient(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
@@ -189,7 +191,7 @@ def build_book_worker(
 
 
 def build_cleanup_worker(
-    settings: CoreSettings,
+    settings: RuntimeSettings,
     database: Database | None = None,
 ) -> StorageCleanupWorker:
     if database is None:
@@ -254,7 +256,7 @@ def build_cleanup_worker(
     )
 
 
-def build_worker(settings: CoreSettings) -> RecordingJobWorker:
+def build_worker(settings: RuntimeSettings) -> RecordingJobWorker:
     """Legacy helper returning RecordingJobWorker for backwards compatibility."""
     return build_recording_worker(settings)
 
@@ -328,7 +330,7 @@ class WorkerSupervisor:
                 future.result()
 
 
-def build_worker_supervisor(settings: CoreSettings) -> WorkerSupervisor:
+def build_worker_supervisor(settings: RuntimeSettings) -> WorkerSupervisor:
     """Construct only the queue workers selected for this process."""
     database = Database(
         settings.database_url,
@@ -389,7 +391,7 @@ def install_signal_handlers(
 
 def main() -> int:
     try:
-        settings = cast(Any, CoreSettings)()
+        settings = cast(Any, StandaloneWorkerSettings)()
     except Exception:
         # Never echo the validation error: it can quote supplied secrets.
         logger.error("worker is not configured; refusing to start")
