@@ -1,5 +1,7 @@
 # MURA (Мұра) — Production Launch Checklist (Phase 2.5 Pre-Flight)
 
+> **HISTORICAL — DO NOT USE FOR CURRENT DEPLOYMENT.** This Phase 2.5 checklist predates the Clerk/Whisper/DeepSeek production contract and contains obsolete Supabase Auth, bucket and worker settings. Use [docs/PRODUCTION.md](docs/PRODUCTION.md) and the current deployment runbook instead. Kept for historical evidence only.
+
 This pre-flight checklist establishes the required operational and security validations before promoting the system from `RELEASE CANDIDATE` to `PRODUCTION READY` in Phase 2.5.
 
 ---
@@ -78,4 +80,3 @@ This pre-flight checklist establishes the required operational and security vali
   - Provider auth failures (HTTP 401 alerts on-call immediately).
   - Worker lease reclamation spikes (indicating worker instability).
   - High memory usage (> 80% container RAM).
-

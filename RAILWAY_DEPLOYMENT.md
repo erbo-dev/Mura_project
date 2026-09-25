@@ -51,7 +51,7 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 
 ---
 
-## 3. Step 1: Provision Supabase (Database & Auth)
+## 3. Step 1: Provision Supabase (Database & Private Storage)
 
 ### 1.1 Create Supabase Project
 1. Go to the Supabase Dashboard and click **New project**.
@@ -63,10 +63,11 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 2. Select the **URI** tab. Choose **Direct connection** (Port `5432`) or **Session Pooler** (Port `5432`).
 3. Replace the protocol scheme with SQLAlchemy's `postgresql+psycopg://`:
    ```text
-   postgresql+psycopg://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
+   postgresql+psycopg://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require
    ```
    > [!IMPORTANT]
    > Do **not** use the Transaction Pooler (Port `6543`) for Alembic migrations or Core API, as startup parameters (`statement_timeout`) and DDL migrations require direct session mode.
+   > Staging/production startup rejects URLs lacking an explicit TLS mode (`require`, `verify-ca`, or `verify-full`). `require` prevents plaintext; prefer `verify-full` with a trusted `sslrootcert` where the selected Supabase connection endpoint supports certificate/hostname verification. Keep credentials URL-encoded and never print the connection string.
 
 ### 1.3 Configure Clerk OIDC
 1. Create or select the Clerk application used by `MURA-app`.
@@ -112,12 +113,15 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 | Variable | Recommended Value | Notes |
 | :--- | :--- | :--- |
 | `MURA_ENVIRONMENT` | `production` | Enables strict fail-closed security |
-| `DATABASE_URL` | `postgresql+psycopg://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres` | Supabase Direct connection string |
+| `DATABASE_URL` | `postgresql+psycopg://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require` | Supabase Direct connection with mandatory TLS |
 | `DATABASE_AUTO_CREATE` | `false` | Migrations are owned by Alembic |
 | `CORE_API_KEY` | *(Generate 32+ chars)* | `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `OPERATIONS_API_KEY` | *(Generate 32+ chars)* | Must differ from `CORE_API_KEY` |
 | `WORKER_REGISTRATION_TOKEN` | *(Generate 32+ chars)* | Service-to-service token |
-| `KAGGLE_ASR_API_KEY` | *(Generate 32+ chars)* | Internal token |
+| `ASR_PROVIDER` | `whisper` | Must match every recording worker or capabilities will misreport processing |
+| `WHISPER_API_KEY` | *(Provider key)* | API must validate capability configuration; server-only |
+| `WHISPER_BASE_URL` | `https://api.openai.com/v1` | Must match worker |
+| `WHISPER_MODEL` | `whisper-1` | Must match worker |
 | `AUTH_MODE` | `oidc` | Production requires OIDC |
 | `AUTH_ISSUER` | `https://<your-clerk-issuer>` | Exact Clerk issuer for this environment |
 | `AUTH_AUDIENCE` | `mura-core` | Must match the Clerk JWT template `aud` claim |
@@ -125,12 +129,11 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 | `AUTH_ALLOWED_ALGORITHMS` | `RS256` | Keep asymmetric verification only; match the keys issued by your Clerk instance |
 | `CORS_ALLOWED_ORIGINS` | `https://your-mura-app.vercel.app` | Exact Vercel domain without trailing slash |
 | `ALLOWED_HOSTS` | `mura-api-production.up.railway.app,api.mura.kz` | Comma-separated HTTP Host allowlist read by Core |
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` unless a trusted ingress range is known | Uvicorn ignores forwarded headers from untrusted peers; never use `*` in production-like config |
+| `FORWARDED_ALLOW_IPS` | deployment-verified trusted ingress IPs/CIDRs only | Uvicorn ignores forwarded headers from untrusted peers. `127.0.0.1` alone is only correct if ingress is local. BLOCKED pending Railway-side ingress verification; never use `*` |
 | `AUDIO_STORAGE_BACKEND` | `supabase` | Production Object Storage (`supabase` for prod, `local` for dev) |
 | `BOOK_STORAGE_BACKEND` | `supabase` | Production Book Artifact Storage (`supabase` for prod, `local` for dev) |
 | `SUPABASE_URL` | `https://[PROJECT-REF].supabase.co` | Supabase Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | *(Secret Service Role Key)* | From Supabase Project Settings → API |
-| `SUPABASE_STORAGE_BUCKET` | `mura-audio` | Private storage bucket |
 | `SUPABASE_STORAGE_BUCKET` | `mura-audio` | Private audio storage bucket |
 | `SUPABASE_BOOKS_BUCKET` | `mura-books` | Private book artifacts bucket (PDF/EPUB) |
 | `BOOK_MAX_ACTIVE_PER_FAMILY` | `1` | At most 1 active book job per family |
@@ -149,10 +152,10 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 
 ---
 
-### 2.3 Configure Service 2: `mura-worker` (Standalone Worker)
+### 2.3 Configure Worker Services (Standalone)
 
 1. In the same Railway project, click **New Service** → **GitHub Repo** (select the same repository).
-2. Rename the service to `mura-worker`.
+2. Create three services from the same image: `mura-recording-worker`, `mura-book-worker`, and `mura-cleanup-worker`.
 3. Go to **Settings**:
    - **Source:**
      - Root Directory: `Mura_project`
@@ -169,17 +172,14 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 | Variable | Value | Notes |
 | :--- | :--- | :--- |
 | `MURA_ENVIRONMENT` | `production` | Strict production mode |
-| `DATABASE_URL` | `postgresql+psycopg://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres` | Same Supabase URL |
-| `CORE_API_KEY` | *(Same as mura-api)* | Shared secret |
-| `OPERATIONS_API_KEY` | *(Same as mura-api)* | Shared secret |
-| `WORKER_REGISTRATION_TOKEN` | *(Same as mura-api)* | Shared secret |
-| `KAGGLE_ASR_API_KEY` | *(Same as mura-api)* | Shared secret |
-| `DEEPSEEK_API_KEY` | `sk-...` | Real DeepSeek key |
+| `DATABASE_URL` | `postgresql+psycopg://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require` | Same TLS-enforced Supabase URL |
+| `WORKER_QUEUES` | `recording`, `book`, or `cleanup` | Set one queue per production service; local compose may use `recording,book,cleanup` |
+| `DEEPSEEK_API_KEY` | `sk-...` | Only for recording/book services; not required by cleanup |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek endpoint |
 | `DEEPSEEK_MODEL` | `deepseek-v4-flash` | Primary model |
 | `DEEPSEEK_FALLBACK_MODEL` | `deepseek-v4-pro` | Fallback model |
 | `ASR_PROVIDER` | `whisper` | Primary ASR |
-| `WHISPER_API_KEY` | `sk-...` | OpenAI or Whisper API key |
+| `WHISPER_API_KEY` | `sk-...` | Only for recording service; must match API configuration |
 | `WHISPER_BASE_URL` | `https://api.openai.com/v1` | Whisper API endpoint |
 | `WHISPER_MODEL` | `whisper-1` | Model name |
 | `AUDIO_STORAGE_BACKEND` | `supabase` | Matches API |
@@ -195,6 +195,8 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 | `LOG_FORMAT` | `json` | Single-line structured JSON logs for Railway |
 | `SENTRY_DSN` | *(Optional)* | Sentry DSN for worker error capture |
 | `SENTRY_ENVIRONMENT` | `production` | Sentry environment tag |
+
+The API alone requires `CORE_API_KEY`, `OPERATIONS_API_KEY`, `WORKER_REGISTRATION_TOKEN`, OIDC and CORS/host controls. Do not copy these API-only credentials into worker services. Align `ASR_PROVIDER`, Whisper endpoint/model, database, and private buckets across API and recording worker. The `book` worker does not need the Whisper secret; the `cleanup` worker needs neither Whisper nor DeepSeek secrets.
 
 ---
 
@@ -215,6 +217,7 @@ Add the following variables in the Vercel Project Settings:
 | Variable | Value | Description |
 | :--- | :--- | :--- |
 | `MURA_API_URL` | `https://mura-api-production.up.railway.app` | Railway public URL of `mura-api` (no trailing slash) |
+| `MURA_AUTH_PROVIDER` | `clerk` | Explicit selection required; missing value fails closed in production/preview |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | *(Clerk publishable key)* | Public browser credential |
 | `CLERK_SECRET_KEY` | *(Clerk secret key)* | Server-only; never expose through `NEXT_PUBLIC_*` |
 | `CLERK_JWT_TEMPLATE` | `mura-core` | JWT template whose audience matches `AUTH_AUDIENCE` |
@@ -274,18 +277,18 @@ Verify startup (formatted in single-line JSON):
 - In production Railway deployments, `mura-api` and `mura-worker` run as separate services with independent filesystems.
 - Production storage uses **Supabase Storage** (`AUDIO_STORAGE_BACKEND=supabase`) via a private bucket (`mura-audio`).
 - The API streams uploads directly to the private bucket; the Worker materializes temporary audio files during Whisper transcription and automatically cleans them up in a `finally` block.
-- For complete setup instructions, bucket configuration, and security models, see [`STORAGE_DEPLOYMENT.md`](file:///d:/Mura_production/STORAGE_DEPLOYMENT.md).
+- For complete setup instructions, bucket configuration, and security models, see [`STORAGE_DEPLOYMENT.md`](STORAGE_DEPLOYMENT.md).
 
 ### Structured Logging & Sentry Observability
 - All services emit structured JSON logs (`LOG_FORMAT=json`) with request correlation (`request_id`, `X-Request-ID`) and worker job context (`job_id`, `recording_id`, `family_id`).
 - Sentry captures 500+ unhandled server errors and frontend React error boundaries without logging transcripts, audio, bearer tokens, or PII.
-- For complete details, log examples, and test runbooks, see [`OBSERVABILITY.md`](file:///d:/Mura_production/OBSERVABILITY.md).
+- For complete details, log examples, and test runbooks, see [`OBSERVABILITY.md`](OBSERVABILITY.md).
 
 ### Monitoring, Queue Health & AI Cost Ledger
 - Three-tier production monitoring: Railway native container metrics, Sentry error alerts, and Supabase PostgreSQL durable queue health.
 - Stuck-job detection engine and durable AI usage ledger with deterministic `Decimal` cost calculations.
 - Privileged operator monitoring endpoint: `GET /v1/operations/monitoring/summary`.
-- For complete details, alert thresholds, and incident playbooks, see [`MONITORING.md`](file:///d:/Mura_production/MONITORING.md).
+- For complete details, alert thresholds, and incident playbooks, see [`MONITORING.md`](MONITORING.md).
 
 ---
 

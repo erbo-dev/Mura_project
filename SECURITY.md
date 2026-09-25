@@ -39,7 +39,7 @@ This document defines the security architecture, defensive controls, and abuse p
 ## 2. Authentication & Authorization Boundaries
 
 ### 2.1 Identity Verification (JWKS & JWT)
-- **OIDC Provider**: Supabase Auth issues cryptographically signed JWTs (`ES256`).
+- **OIDC Provider**: Clerk supplies signed JWT-template tokens; Core verifies the configured issuer, audience, JWKS signature and asymmetric algorithm allowlist.
 - **Cryptographic Trust Boundary**: PyJWT is pinned to exact versions (`PyJWT[crypto]==2.13.0`) in `pyproject.toml` to guard against supply chain manipulation.
 - **JWKS Cache & Re-verification**: Keys are retrieved from the configured JWKS URI and cached with automatic rollover.
 
@@ -130,4 +130,3 @@ In production (`ENVIRONMENT != "development"`):
     "request_id": "req_5f8a9e2c1d"
   }
   ```
-

@@ -68,16 +68,14 @@ This runbook covers the architecture, setup, security, and operational lifecycle
 
 ## 3. Required Environment Variables
 
-For both `mura-api` and `mura-worker` on Railway:
+For `mura-api` and each of the three isolated production workers on Railway:
 
 | Variable | Value | Description |
 | :--- | :--- | :--- |
-| `AUDIO_STORAGE_BACKEND` | `supabase` | Selects `SupabaseAudioStorage` |
 | `AUDIO_STORAGE_BACKEND` | `supabase` | Selects `SupabaseAudioStorage` (`supabase` or `local`) |
 | `BOOK_STORAGE_BACKEND` | `supabase` | Selects `SupabaseBookArtifactStorage` (`supabase` or `local`) |
 | `SUPABASE_URL` | `https://[PROJECT-REF].supabase.co` | Supabase Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJhbGciOi...` | Supabase **Service Role** secret key (Project Settings → API) |
-| `SUPABASE_STORAGE_BUCKET` | `mura-audio` | Private storage bucket name |
 | `SUPABASE_STORAGE_BUCKET` | `mura-audio` | Private audio storage bucket name |
 | `SUPABASE_BOOKS_BUCKET` | `mura-books` | Private book artifacts storage bucket name |
 | `SUPABASE_STORAGE_TIMEOUT_SECONDS`| `60.0` | HTTP timeout for storage operations |
@@ -103,8 +101,8 @@ For both `mura-api` and `mura-worker` on Railway:
    ```
 3. Redeploy `mura-api`.
 
-### 4.2 Railway Worker (`mura-worker`)
-1. Go to Railway Project → `mura-worker` → **Variables**.
+### 4.2 Railway Workers (`mura-recording-worker`, `mura-book-worker`, `mura-cleanup-worker`)
+1. Configure each worker service in Railway with the same private storage settings.
 2. Set the identical variables:
    ```env
    AUDIO_STORAGE_BACKEND=supabase
@@ -114,7 +112,7 @@ For both `mura-api` and `mura-worker` on Railway:
    SUPABASE_STORAGE_BUCKET=mura-audio
    SUPABASE_BOOKS_BUCKET=mura-books
    ```
-3. Redeploy `mura-worker`.
+3. Deploy each worker with its corresponding `WORKER_QUEUES` value as documented in [the production runbook](RAILWAY_DEPLOYMENT.md).
 
 ---
 
@@ -201,4 +199,3 @@ For existing deployments with audio in a local directory (`.mura/audio`):
 | `AudioStorageError: HTTP 404` | Bucket does not exist | Verify bucket `mura-audio` is created in Supabase Storage. |
 | Upload fails with `HTTP 413` | Audio exceeds size limit | Increase `CORE_MAX_UPLOAD_MB` and Supabase bucket upload size limit. |
 | Worker fails with `FileNotFoundError` | Object deleted or key corrupted | Verify that `storage_key` matches the object in Supabase Storage. |
-
