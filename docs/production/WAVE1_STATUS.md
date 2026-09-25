@@ -6,12 +6,12 @@
 - Active root workflows: backend.yml, frontend.yml only.
 
 ## Milestone A - Runtime contract
-- Status: IN PROGRESS; branch fix/production-runtime-contract from verified main; no PR or deployment.
+- Status: COMPLETE; branch fix/production-runtime-contract from verified main; PR #58 open and unmerged; implementation HEAD 78fc6971ed68f0afb92bd8528321471998efea3a; no deployment.
 - Confirmed: staging validator uses APP_ENV and CORS_ORIGINS; production hosts and PostgreSQL TLS not enforced; deployment example omits MURA_AUTH_PROVIDER and WORKER_QUEUES.
 - HANDOFF CLAIM DISPROVEN: a legacy WorkerSettings class exists, but standalone worker uses CoreSettings. SQLite, wildcard CORS, and wildcard forwarded IPs already fail closed in production.
 - Python 3.11 full pytest with coverage on isolated PostgreSQL: PASS (89.55% coverage). Python 3.13 suite: PASS. Explicit cross-family recording quota PostgreSQL race: PASS. Single Alembic head and fresh upgrade: PASS.
 - Changed-file Ruff lint/format, production-source mypy, Bandit, pip-audit, compileall: PASS. API and worker Docker builds: PASS. Frontend Vitest: PASS (502 tests); frontend npm audit: PASS (zero vulnerabilities); frontend production build: PASS.
-- GitHub PR CI: NOT EXECUTED until branch push and PR creation.
+- GitHub PR CI on implementation HEAD: PASS (Backend CI run 36145207520 and Frontend CI run 36145207312, both concluded success). The initial CI attempt exposed an AI usage aggregate mypy error, fixed in the final implementation commit.
 - External API/worker runtime and cloud verification: BLOCKED without staging credentials; no deployment attempted.
 
 ## Milestone B - CI/security
@@ -26,7 +26,7 @@
 ## Blocked external checks
 - Railway trusted ingress CIDRs: BLOCKED - deployment evidence unavailable.
 - Cloud staging: BLOCKED - credentials unavailable.
-- Branch protection: BLOCKED pending API evidence.
+- Branch protection: BLOCKED - GitHub rulesets returned an empty list and classic branch-protection API returned 403; administrator must verify and configure required checks/reviews.
 
 ## Decisions
 - Separate independent branches; no merges, force-pushes, or production deployments.
