@@ -21,7 +21,7 @@ This runbook covers the architecture, setup, security, and operational lifecycle
        ▲
        │ (3) Stream download / Materialize to tempfile
        │     with SUPABASE_SERVICE_ROLE_KEY
-[ Railway: mura-worker ] (apps.worker.main)
+[ Railway: mura-recording-worker ] (apps.worker.main)
        │
        ▼ (4) Transcribe audio (Whisper) -> DeepSeek extraction
        │
@@ -151,7 +151,7 @@ For `mura-api` and each of the three isolated production workers on Railway:
 
 ## 7. Processing Lifecycle (Worker)
 
-1. `mura-worker` polls PostgreSQL and claims next job:
+1. `mura-recording-worker` polls PostgreSQL and claims the next recording job:
    ```sql
    SELECT ... FOR UPDATE SKIP LOCKED
    ```

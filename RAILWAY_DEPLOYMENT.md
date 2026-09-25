@@ -29,7 +29,7 @@ This runbook provides complete, step-by-step instructions for deploying the MURA
 
 - **Frontend (Vercel):** Serves UI, manages client session, and proxies requests to Core API via `MURA_API_URL`.
 - **Backend API (Railway):** FastAPI handling HTTP requests, authorization policies, job queueing, and capabilities. Runs as non-root user `mura` (UID `10001`).
-- **Worker (Railway):** Standalone `mura-worker` process claiming jobs from PostgreSQL via `SELECT ... FOR UPDATE SKIP LOCKED` with heartbeats and leases.
+- **Workers (Railway):** Three isolated `mura-worker` processes (`mura-recording-worker`, `mura-book-worker`, `mura-cleanup-worker`) claiming their selected queues via `SELECT ... FOR UPDATE SKIP LOCKED` with heartbeats and leases.
 - **Database (Supabase):** PostgreSQL with linear Alembic migrations. Single source of truth for all family archives, relationships, and durable job states.
 - **Object Storage (Supabase):** Private audio and generated Book artifact buckets accessed only by server-side service-role credentials.
 - **Identity (Clerk):** Frontend session provider. The server-side frontend forwards a Clerk JWT template token; Core validates it as standards-based OIDC/JWT using the configured issuer, audience, JWKS URL, and asymmetric algorithm allowlist.
@@ -258,7 +258,7 @@ Content-Type: application/json
 ```
 
 ### 6.3 Check Worker Logs
-In Railway, open the `mura-worker` service and click **View Logs**.
+In Railway, open each of `mura-recording-worker`, `mura-book-worker`, and `mura-cleanup-worker` and click **View Logs**.
 Verify startup (formatted in single-line JSON):
 ```json
 {"timestamp":"2026-09-17T15:00:00.000Z","level":"INFO","logger":"mura.worker","message":"worker starting worker_id=worker_... lease=300.0s heartbeat=60.0s","service":"mura-worker"}
@@ -274,7 +274,7 @@ Verify startup (formatted in single-line JSON):
 ## 7. Storage & Observability Architecture
 
 ### Production Object Storage (Supabase Storage)
-- In production Railway deployments, `mura-api` and `mura-worker` run as separate services with independent filesystems.
+- In production Railway deployments, `mura-api` and the three isolated workers run as separate services with independent filesystems.
 - Production storage uses **Supabase Storage** (`AUDIO_STORAGE_BACKEND=supabase`) via a private bucket (`mura-audio`).
 - The API streams uploads directly to the private bucket; the Worker materializes temporary audio files during Whisper transcription and automatically cleans them up in a `finally` block.
 - For complete setup instructions, bucket configuration, and security models, see [`STORAGE_DEPLOYMENT.md`](STORAGE_DEPLOYMENT.md).
@@ -299,6 +299,6 @@ Verify startup (formatted in single-line JSON):
 | `503 Service Unavailable` on `/ready` | Supabase connection failed | Check `DATABASE_URL` credentials; ensure port `5432` is used rather than `6543`. |
 | `401 Unauthorized` (`invalid_token`) | Auth mismatch between Frontend & Core | Verify the Clerk JWT template audience matches `AUTH_AUDIENCE`, and that `AUTH_ISSUER`, `AUTH_JWKS_URL`, and `AUTH_ALLOWED_ALGORITHMS` match the configured Clerk instance. |
 | `CORS Error` in Browser Console | `CORS_ALLOWED_ORIGINS` mismatch | Ensure `CORS_ALLOWED_ORIGINS` on `mura-api` matches Vercel URL exactly (no trailing slash). |
-| Jobs stay in `queued` status | `mura-worker` stopped or cannot reach DB | Check `mura-worker` logs in Railway for crash or connection timeout. |
+| Jobs stay in `queued` status | Worker for that queue stopped or cannot reach DB | Check the corresponding recording, book, or cleanup worker logs in Railway for crash or connection timeout. |
 | Railway API fails to bind port | Hardcoded port in Dockerfile | Ensure `Mura_project/Dockerfile` uses `CMD ["sh", "-c", "exec uvicorn ... --port \"${PORT:-8000}\""]`. |
 
