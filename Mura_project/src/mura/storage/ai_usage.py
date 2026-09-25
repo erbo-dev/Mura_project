@@ -116,16 +116,10 @@ class AIUsageLedger:
             chapter_number if chapter_number is not None else chapter_number_ctx.get()
         )
         resolved_fam_id = family_id if family_id is not None else family_id_ctx.get()
-        resolved_attempt = (
-            attempt
-            if attempt is not None
-            else (attempt_ctx.get() or 1)
-        )
+        resolved_attempt = attempt if attempt is not None else (attempt_ctx.get() or 1)
 
         audio_sec_dec = (
-            Decimal(str(round(float(audio_seconds), 3)))
-            if audio_seconds is not None
-            else None
+            Decimal(str(round(float(audio_seconds), 3))) if audio_seconds is not None else None
         )
 
         cost, pricing_version = calculate_ai_cost(
@@ -212,10 +206,9 @@ class AIUsageLedger:
 
             return {
                 "requests_count": int(req_count),
-                "input_tokens": int(in_tok),
-                "output_tokens": int(out_tok),
-                "cached_input_tokens": int(cached_tok),
-                "audio_seconds": float(audio_sec),
+                "input_tokens": int(in_tok or 0),
+                "output_tokens": int(out_tok or 0),
+                "cached_input_tokens": int(cached_tok or 0),
+                "audio_seconds": float(audio_sec or 0),
                 "estimated_cost_usd": str(Decimal(str(total_cost)).quantize(Decimal("0.000001"))),
             }
-
