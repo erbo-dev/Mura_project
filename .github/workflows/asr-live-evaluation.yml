@@ -1,0 +1,65 @@
+name: ASR live evaluation (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_name:
+        description: Approved manifest filename in the protected runner manifest directory
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, gpu]
+    environment: staging-ml-evaluation
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: Mura_project
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LIVE_MANIFEST_ROOT: ${{ vars.LIVE_MANIFEST_ROOT }}
+      MANIFEST_NAME: ${{ inputs.manifest_name }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Install live ASR evaluator
+        run: python -m pip install -e ".[dev,kaggle]"
+      - name: Validate workflow policy
+        run: python scripts/ci/check_workflow_policy.py
+      - name: Resolve approved local manifest
+        run: python scripts/ci/resolve_live_manifest.py >> "$GITHUB_ENV"
+      - name: Evaluate live ASR against release gates
+        run: |
+          set -Eeuo pipefail
+          test -n "$HF_TOKEN" || { echo 'BLOCKED: HF_TOKEN unavailable'; exit 1; }
+          mkdir -p artifacts
+          private_log="$(mktemp)"
+          trap 'rm -f "$private_log" artifacts/live-asr-dataset.json' EXIT
+          if ! mura-evaluate-asr-live --manifest "$LIVE_MANIFEST_PATH" --output-dataset artifacts/live-asr-dataset.json --device cuda:0 --max-audio-seconds 1800 > "$private_log" 2>&1; then
+            echo 'FAIL: live ASR inference failed; private provider output suppressed'
+            exit 1
+          fi
+          if ! mura-evaluate-asr --dataset artifacts/live-asr-dataset.json --release-gates benchmarks/asr_release_gates.json --json-output artifacts/asr-report.json --markdown-output artifacts/asr-report.md --require-runtime-metadata > "$private_log" 2>&1; then
+            echo 'FAIL: live ASR release gate failed; inspect aggregate report'
+            exit 1
+          fi
+          echo 'PASS: live ASR release gate; inspect aggregate report'
+      - name: Preserve aggregate evaluation report only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: asr-live-evaluation-${{ github.run_id }}
+          path: |
+            Mura_project/artifacts/asr-report.json
+            Mura_project/artifacts/asr-report.md
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,53 @@
+name: Quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python quality and offline ML gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Mura_project
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: Mura_project/pyproject.toml
+      - name: Install backend quality tools
+        run: python -m pip install -e ".[dev]"
+      - name: Enforce root workflow policy
+        run: python scripts/ci/check_workflow_policy.py
+      - name: Lint all backend Python
+        run: ruff check .
+      - name: Check backend Python formatting outside immutable migrations
+        run: ruff format --check src/mura apps services scripts tests
+      - name: Type-check production code and CI scripts
+        run: mypy src/mura apps services scripts/ci scripts/check_staging_config.py
+      - name: Scan production backend source
+        run: bandit -q -c pyproject.toml -r src apps services -ll
+      - name: Compile backend code and scripts
+        run: python -m compileall -q src/mura apps services scripts
+      - name: Enforce deterministic core release gates
+        run: mura-evaluate-core --manifest benchmarks/release_manifest.json --release-gates benchmarks/release_gates.json --json-output core-release-report.json
+      - name: Enforce deterministic identity gates
+        run: mura-evaluate-identity --coreference benchmarks/coreference_v2.json --entity-resolution benchmarks/entity_resolution_v2.json --release-gates benchmarks/identity_release_gates.json --json-output identity-release-report.json
+      - name: Enforce deterministic ASR contract gates
+        run: mura-evaluate-asr --dataset benchmarks/asr_contract_v1.json --release-gates benchmarks/asr_release_gates.json --json-output asr-release-report.json
+      - name: Enforce composite offline ML release gate
+        run: mura-evaluate-ml-release --manifest benchmarks/release/ml_release_manifest.json --json-output ml-release-report.json

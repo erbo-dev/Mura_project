@@ -12,12 +12,16 @@
       "sha": "ece7cb06caefa5fff74198d8649806c4678c61a1",
       "tag": "v6.3.0"
     },
+    "actions/setup-node": {
+      "sha": "49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "tag": "v4.4.0"
+    },
     "actions/upload-artifact": {
       "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02",
       "tag": "v4.6.2"
     },
     "github/codeql-action": {
-      "sha": "7211b7c8077ea37d8641b6271f6a365a22a5fbfa",
+      "sha": "f52b05f4acaaa234e44466e66d29050e135ea9ef",
       "tag": "v4.36.0"
     },
     "trufflesecurity/trufflehog": {
