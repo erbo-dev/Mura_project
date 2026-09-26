@@ -269,6 +269,16 @@ export function fetchMe(signal?: AbortSignal): Promise<MeView> {
   return coreRequest<MeView>("/v1/me", { signal });
 }
 
+export interface AccountDeletionResult {
+  mura_data_deleted: boolean;
+  identity_provider_account_deleted: boolean;
+  requires_provider_sign_out: boolean;
+}
+
+export function deleteAccount(): Promise<AccountDeletionResult> {
+  return coreRequest<AccountDeletionResult>("/v1/me", { method: "DELETE" });
+}
+
 export function fetchFamilies(signal?: AbortSignal): Promise<FamilyView[]> {
   return coreRequest<FamilyView[]>("/v1/families", { signal });
 }

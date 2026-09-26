@@ -197,6 +197,43 @@ def test_supabase_open_raises_filenotfound_on_404(
         storage.open("missing_key")
 
 
+def test_supabase_range_requests_only_requested_bytes(
+    storage: SupabaseAudioStorage, mock_session: MagicMock
+) -> None:
+    response = MagicMock()
+    response.status_code = 206
+    response.headers = {"Content-Range": "bytes 2-5/8", "Content-Length": "4"}
+    response.raw = io.BytesIO(b"cdef")
+    mock_session.get.return_value = response
+
+    stream = storage.open_range("private", start=2, end=5, total_size=8)
+
+    assert stream.read() == b"cdef"
+    assert response.raw.decode_content is False
+    assert mock_session.get.call_args.kwargs["headers"]["Range"] == "bytes=2-5"
+    assert mock_session.get.call_args.kwargs["headers"]["Accept-Encoding"] == "identity"
+    assert mock_session.get.call_args.kwargs["stream"] is True
+
+
+def test_supabase_range_rejects_full_body_and_stale_size(
+    storage: SupabaseAudioStorage, mock_session: MagicMock
+) -> None:
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {}
+    mock_session.get.return_value = response
+    with pytest.raises(AudioStorageError, match="range response"):
+        storage.open_range("private", start=2, end=5, total_size=8)
+    response.close.assert_called_once()
+
+    response.reset_mock()
+    response.status_code = 206
+    response.headers = {"Content-Range": "bytes 2-5/9"}
+    with pytest.raises(AudioStorageError, match="range response"):
+        storage.open_range("private", start=2, end=5, total_size=8)
+    response.close.assert_called_once()
+
+
 # ------------------------------------------------------------------- delete
 
 

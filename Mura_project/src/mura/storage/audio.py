@@ -199,6 +199,10 @@ class AudioStorage(Protocol):
 
     def open(self, storage_key: str) -> BinaryIO: ...
 
+    def open_range(
+        self, storage_key: str, *, start: int, end: int, total_size: int
+    ) -> BinaryIO: ...
+
     def materialize(self, storage_key: str) -> AbstractContextManager[Path]: ...
 
 
@@ -311,6 +315,17 @@ class LocalAudioStorage:
 
     def open(self, storage_key: str) -> BinaryIO:
         return self._path(storage_key).open("rb")
+
+    def open_range(self, storage_key: str, *, start: int, end: int, total_size: int) -> BinaryIO:
+        stream = self.open(storage_key)
+        try:
+            if os.fstat(stream.fileno()).st_size != total_size:
+                raise AudioStorageError("stored audio size does not match the recording")
+            stream.seek(start)
+            return stream
+        except Exception:
+            stream.close()
+            raise
 
     @contextmanager
     def materialize(self, storage_key: str) -> Iterator[Path]:
@@ -545,6 +560,29 @@ class SupabaseAudioStorage:
             )
 
         response.raw.decode_content = True
+        return cast(BinaryIO, response.raw)
+
+    def open_range(self, storage_key: str, *, start: int, end: int, total_size: int) -> BinaryIO:
+        url = f"{self.url}/storage/v1/object/authenticated/{self.bucket}/{storage_key}"
+        try:
+            response = self.session.get(
+                url,
+                headers=self._headers(
+                    {"Range": f"bytes={start}-{end}", "Accept-Encoding": "identity"}
+                ),
+                stream=True,
+                timeout=(10.0, self.timeout_seconds),
+            )
+        except requests.RequestException as exc:
+            raise AudioStorageError("audio range transport failed") from exc
+        if (
+            response.status_code != 206
+            or response.headers.get("Content-Range") != f"bytes {start}-{end}/{total_size}"
+            or response.headers.get("Content-Encoding", "identity") != "identity"
+        ):
+            response.close()
+            raise AudioStorageError("audio range response did not match the recording")
+        response.raw.decode_content = False
         return cast(BinaryIO, response.raw)
 
     @contextmanager

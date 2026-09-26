@@ -34,6 +34,7 @@ type Method = "GET" | "POST" | "PATCH" | "DELETE";
 const ALLOWED: ReadonlyArray<{ method: Method; pattern: RegExp }> = [
   { method: "GET", pattern: new RegExp(`^v1/capabilities$`) },
   { method: "GET", pattern: new RegExp(`^v1/me$`) },
+  { method: "DELETE", pattern: new RegExp(`^v1/me$`) },
   { method: "GET", pattern: new RegExp(`^v1/families$`) },
   { method: "POST", pattern: new RegExp(`^v1/families$`) },
   { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}$`) },
@@ -132,6 +133,36 @@ export function isAllowedCoreRoute(method: string, route: string): boolean {
 /** Capabilities gate the record button, so it gets a shorter budget. */
 const TIMEOUT_MS: Record<string, number> = { "v1/capabilities": 5_000 };
 const DEFAULT_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+const BINARY_RESPONSE_HEADERS = [
+  "content-length",
+  "content-disposition",
+  "accept-ranges",
+  "content-range",
+  "etag",
+] as const;
+
+function binaryRoute(route: string): boolean {
+  return (
+    /\/recordings\/rec_[a-f0-9]{32}\/audio$/.test(route) ||
+    /\/books\/book_[a-f0-9]{32}\/download$/.test(route) ||
+    route.endsWith("/privacy/export")
+  );
+}
+
+function allowedQuery(method: string, route: string, search: URLSearchParams): string | null {
+  if (!search.size) return "";
+  const download = method === "GET" && /\/books\/book_[a-f0-9]{32}\/download$/.test(route);
+  const paginated = method === "GET" && /\/((books)|(stories))$/.test(route);
+  const allowed = download ? ["format"] : paginated ? ["limit", "offset"] : [];
+  const clean = new URLSearchParams();
+  for (const [key, value] of search) {
+    if (!allowed.includes(key) || clean.has(key)) return null;
+    if (download ? !["pdf", "epub"].includes(value) : !/^\d{1,9}$/.test(value)) return null;
+    clean.set(key, value);
+  }
+  return clean.toString() ? `?${clean}` : "";
+}
 
 /**
  * Core's base URL, and nothing else.
@@ -203,6 +234,16 @@ export async function handleCoreProxy(request: Request, path: string[]): Promise
     Authorization: `Bearer ${session.accessToken}`,
     "x-request-id": requestId,
   });
+  const isBinary = request.method === "GET" && binaryRoute(route);
+  if (isBinary && route.endsWith("/audio")) {
+    const range = request.headers.get("range");
+    if (range) headers.set("range", range);
+  }
+
+  const query = allowedQuery(request.method, route, new URL(request.url).searchParams);
+  if (query === null) {
+    return envelope("invalid_request", "Invalid query parameters.", false, requestId, 400);
+  }
 
   let body: BodyInit | undefined;
   if (
@@ -223,28 +264,48 @@ export async function handleCoreProxy(request: Request, path: string[]): Promise
   }
 
   try {
-    const response = await fetch(`${baseUrl}/${route}`, {
+    // Binary streams need a bounded time to receive headers, not a deadline
+    // that aborts healthy playback/download halfway through the body.
+    const controller = isBinary ? new AbortController() : null;
+    const headerDeadline = controller
+      ? setTimeout(() => controller.abort(new DOMException("Upstream timed out", "TimeoutError")), DEFAULT_TIMEOUT_MS)
+      : null;
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/${route}${query}`, {
       method: request.method,
       headers,
       body,
       // Never cached: a shared cache entry would be a family's memories served
       // to whoever asked next.
       cache: "no-store",
-      signal: AbortSignal.timeout(TIMEOUT_MS[route] ?? DEFAULT_TIMEOUT_MS),
-    });
+      signal: controller?.signal ?? AbortSignal.timeout(
+        route.endsWith("/recordings") && request.method === "POST"
+          ? UPLOAD_TIMEOUT_MS
+          : (TIMEOUT_MS[route] ?? DEFAULT_TIMEOUT_MS),
+      ),
+      });
+    } finally {
+      if (headerDeadline) clearTimeout(headerDeadline);
+    }
     // The body is streamed rather than read as text. Family audio is bytes,
     // and `response.text()` would decode it as UTF-8 and hand the browser a
     // corrupted recording. Streaming also means a long recording is not
     // buffered in the proxy on its way through.
+    const responseHeaders = new Headers({
+      "content-type": response.headers.get("content-type") ?? "application/json",
+      "x-request-id": response.headers.get("x-request-id") ?? requestId,
+      "cache-control": "no-store, private",
+    });
+    if (isBinary) {
+      for (const header of BINARY_RESPONSE_HEADERS) {
+        const value = response.headers.get(header);
+        if (value !== null) responseHeaders.set(header, value);
+      }
+    }
     return new Response(response.body, {
       status: response.status,
-      headers: {
-        "content-type": response.headers.get("content-type") ?? "application/json",
-        "x-request-id": response.headers.get("x-request-id") ?? requestId,
-        // Never cached: a shared cache entry would be one family's memories
-        // served to whoever asked next.
-        "cache-control": "no-store, private",
-      },
+      headers: responseHeaders,
     });
   } catch (error) {
     // The upstream body is never forwarded here: a Cloudflare HTML page or a

@@ -10,6 +10,7 @@ describe("proxy allowlist", () => {
   it("allows the canonical application endpoints", () => {
     expect(isAllowedCoreRoute("GET", "v1/capabilities")).toBe(true);
     expect(isAllowedCoreRoute("GET", "v1/me")).toBe(true);
+    expect(isAllowedCoreRoute("DELETE", "v1/me")).toBe(true);
     expect(isAllowedCoreRoute("GET", "v1/families")).toBe(true);
     expect(isAllowedCoreRoute("POST", "v1/families")).toBe(true);
     expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}`)).toBe(true);
