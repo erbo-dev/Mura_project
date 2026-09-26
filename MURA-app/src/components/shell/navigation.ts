@@ -38,7 +38,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
  * elsewhere is exactly the wrong thing to put on screen. Both keep their own
  * back affordance.
  */
-const CHROMELESS = ["/", "/sign-in", "/sign-up", "/record", "/processing"];
+const CHROMELESS = ["/", "/sign-in", "/sign-up", "/record", "/processing", "/invite"];
 
 /**
  * Screens the user reaches before the product has started.
@@ -46,7 +46,7 @@ const CHROMELESS = ["/", "/sign-in", "/sign-up", "/record", "/processing"];
  * These are the only ones that still float a language switcher: there is no
  * rail and no Settings behind them yet, so nothing else could offer the choice.
  */
-const PRE_PRODUCT = ["/", "/sign-in", "/sign-up"];
+const PRE_PRODUCT = ["/", "/sign-in", "/sign-up", "/invite"];
 
 export function isPreProduct(pathname: string | null): boolean {
   if (!pathname) return false;
