@@ -24,7 +24,7 @@ jobs:
       - name: Fail on verified secrets
         uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
         with:
-          version: v3.95.9
+          version: 3.95.9
           extra_args: --results=verified
 
   dependency-audit:
@@ -60,7 +60,7 @@ jobs:
 
   dependency-review:
     name: Dependency change review
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.MURA_DEPENDENCY_GRAPH_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -75,3 +75,14 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
+
+  dependency-review-unavailable:
+    name: Dependency graph unavailable
+    if: github.event_name == 'pull_request' && vars.MURA_DEPENDENCY_GRAPH_ENABLED != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Report missing dependency graph
+        run: |
+          echo '::warning::BLOCKED: GitHub dependency graph is disabled; dependency-review action did not run. Enable dependency graph and set MURA_DEPENDENCY_GRAPH_ENABLED=true.'
+          echo 'BLOCKED: dependency-review action did not run; enable the repository dependency graph and set MURA_DEPENDENCY_GRAPH_ENABLED=true.' >> "$GITHUB_STEP_SUMMARY"

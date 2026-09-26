@@ -16,7 +16,7 @@
 - Existing full-repository Ruff lint: FAIL (257 baseline findings); formatting FAIL (at least 56 baseline files). These were remediated with targeted source fixes and a mechanical formatting-only change; historical migrations are excluded from reformatting.
 - Root Quality, Security, CodeQL, scheduled offline evaluation, and manually gated live workflows added. Live workflows require main, a protected `staging-ml-evaluation` environment, a GPU runner, environment secrets, and approved local manifest directory. Provider calls never run on PRs. External protection/runner configuration remains BLOCKED until proven.
 - Rebased-head local validation: full Python 3.11 suite PASS on isolated UTF-8 PostgreSQL (90% rounded coverage); Python 3.13 compatibility PASS; seven-test PostgreSQL atomicity gate PASS before rebase and included in the rebased full run; single Alembic head `20260923_0018` and fresh upgrade PASS. Ruff check/format, mypy, Bandit, pip-audit, compileall, workflow policy, and four deterministic provider-free gates PASS on the rebased head. The preexisting shared test database was inconsistent, so no destructive repair was attempted; a first isolated database inherited WIN1251 and was replaced with explicit UTF-8 before the passing full run.
-- Rebased frontend: `npm ci`, production `npm audit`, ESLint, TypeScript, 502 Vitest tests, and production build PASS. Rebased API and Worker Docker images PASS. GitHub Actions execution remains NOT EXECUTED until the PR is pushed.
+- Rebased frontend: `npm ci`, production `npm audit`, ESLint, TypeScript, 502 Vitest tests, and production build PASS. Rebased API and Worker Docker images PASS. Initial PR #59 CI: Quality, CodeQL, Frontend PASS; Security FAIL (TruffleHog image tag included an unsupported `v` prefix; dependency-review action reports the repository dependency graph disabled); Backend FAIL (changed-file Bandit catches six existing low-severity findings). These are being repaired without disabling the security scans.
 
 ## Milestone C - Browser/product correctness
 - Status: PENDING; validation NOT EXECUTED.
@@ -28,6 +28,7 @@
 - Railway trusted ingress CIDRs: BLOCKED (no deployment evidence).
 - Cloud staging execution: BLOCKED (credentials unavailable).
 - Branch protection: BLOCKED (rulesets API returned empty; classic branch protection API returned 403). Administrator must verify.
+- Dependency change review: BLOCKED (GitHub says dependency graph is disabled). Repository owner must enable the dependency graph, then set repository variable `MURA_DEPENDENCY_GRAPH_ENABLED=true`; until then the dependency-review job is explicitly skipped. Independent `pip-audit` and production `npm audit` still run and must pass.
 
 ## Decisions
 - Independent PR branches, no agent-performed merges, no force pushes, no production deployment. The user independently merged PR #58 while B was local, so B was rebased onto current main before push.

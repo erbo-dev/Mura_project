@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-import random
 import re
+import secrets
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -261,7 +261,7 @@ def calculate_retry_delay(
     backoff = min(base_seconds * (2 ** max(0, attempt - 1)), max_seconds)
     if jitter:
         # Uniform jitter in range [0.85, 1.15]
-        factor = random.uniform(0.85, 1.15)
+        factor = secrets.SystemRandom().uniform(0.85, 1.15)
         backoff = min(backoff * factor, max_seconds)
 
     return max(0.5, backoff)

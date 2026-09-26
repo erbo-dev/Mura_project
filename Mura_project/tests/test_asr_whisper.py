@@ -75,6 +75,35 @@ def test_language_is_never_pinned_and_translation_is_never_requested(tmp_path: P
     assert "language" not in sent["data"]
 
 
+def test_successful_transcription_reports_usage_without_changing_evidence(tmp_path: Path) -> None:
+    audio = tmp_path / "a.webm"
+    audio.write_bytes(b"x")
+    client, _ = _client(_Response(_payload()))
+    usage: list[dict[str, object]] = []
+    client.on_usage = lambda **fields: usage.append(fields)
+
+    envelope = client.transcribe(audio_path=audio, recording_id="rec_1")
+
+    assert envelope.full_text == MIXED
+    assert len(usage) == 1
+    assert usage[0]["success"] is True
+    assert usage[0]["audio_seconds"] == 6.5
+    assert "text" not in usage[0]
+
+
+def test_usage_callback_failure_does_not_change_transcription(tmp_path: Path) -> None:
+    audio = tmp_path / "a.webm"
+    audio.write_bytes(b"x")
+    client, _ = _client(_Response(_payload()))
+
+    def broken_usage(**fields: object) -> None:
+        raise RuntimeError("usage unavailable")
+
+    client.on_usage = broken_usage
+
+    assert client.transcribe(audio_path=audio, recording_id="rec_1").full_text == MIXED
+
+
 def test_code_switched_speech_is_reported_as_mixed(tmp_path: Path) -> None:
     audio = tmp_path / "a.webm"
     audio.write_bytes(b"x")

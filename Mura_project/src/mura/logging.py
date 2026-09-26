@@ -117,7 +117,7 @@ SENSITIVE_KEY_SUBSTRINGS = (
 )
 
 REDACTED_STR = "[REDACTED]"
-REDACTED_TOKEN_STR = "[REDACTED_TOKEN]"
+REDACTED_AUTH_MARKER = "[REDACTED_TOKEN]"
 
 _BEARER_PATTERN = re.compile(r"Bearer\s+[A-Za-z0-9-_=.]+", re.IGNORECASE)
 _JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\b")
@@ -143,7 +143,7 @@ class LogSanitizer:
             return value
         if isinstance(value, str):
             sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
-            sanitized = _JWT_PATTERN.sub(REDACTED_TOKEN_STR, sanitized)
+            sanitized = _JWT_PATTERN.sub(REDACTED_AUTH_MARKER, sanitized)
             return sanitized
         if isinstance(value, Mapping):
             return {
