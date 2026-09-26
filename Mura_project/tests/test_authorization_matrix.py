@@ -607,6 +607,45 @@ def test_an_upload_does_not_turn_the_uploader_into_a_person(world: World) -> Non
     assert world.owner_a.user_id not in result.text
 
 
+def test_family_audio_supports_bounded_ranges_without_exposing_storage(world: World) -> None:
+    accepted = world.client.post(
+        f"/v1/families/{FAMILY_A}/recordings", headers=world.owner_a.headers, **_upload_kwargs()
+    )
+    assert accepted.status_code == 202
+    path = f"/v1/families/{FAMILY_A}/recordings/{accepted.json()['recording_id']}/audio"
+
+    for range_header, expected in (
+        ("bytes=0-3", WAV_BYTES[:4]),
+        ("bytes=4-", WAV_BYTES[4:]),
+        ("bytes=-4", WAV_BYTES[-4:]),
+        ("bytes=0-999", WAV_BYTES),
+    ):
+        partial = world.client.get(path, headers={**world.viewer_a.headers, "Range": range_header})
+        assert partial.status_code == 206
+        assert partial.content == expected
+        assert partial.headers["accept-ranges"] == "bytes"
+        assert partial.headers["content-length"] == str(len(expected))
+        assert partial.headers["content-range"].endswith(f"/{len(WAV_BYTES)}")
+        assert partial.headers["cache-control"] == "no-store, private"
+        assert "family/" not in str(partial.headers)
+
+    full = world.client.get(path, headers=world.viewer_a.headers)
+    assert full.status_code == 200
+    assert full.content == WAV_BYTES
+
+    for range_header in ("bytes=999-", "bytes=8-2", "bytes=0-1,3-4", "bytes=-0", "wrong"):
+        invalid = world.client.get(path, headers={**world.viewer_a.headers, "Range": range_header})
+        assert invalid.status_code == 416
+        assert invalid.headers["content-range"] == f"bytes */{len(WAV_BYTES)}"
+        assert invalid.json()["error"]["code"]
+
+    foreign = world.client.get(
+        path.replace(FAMILY_A, FAMILY_B),
+        headers={**world.viewer_a.headers, "Range": "bytes=0-1"},
+    )
+    assert foreign.status_code == 404
+
+
 # ------------------------------------------------------- dependency caching
 
 

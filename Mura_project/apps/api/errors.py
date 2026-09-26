@@ -12,6 +12,7 @@ response body, a transcript or a name cannot reach the client through an error.
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -42,6 +43,7 @@ UPSTREAM_PROVIDER_FAILED = "upstream_provider_failed"
 PIPELINE_OUTPUT_INVALID = "pipeline_output_invalid"
 SERVICE_UNAVAILABLE = "service_unavailable"
 UPSTREAM_TIMEOUT = "upstream_timeout"
+RANGE_NOT_SATISFIABLE = "range_not_satisfiable"
 
 # Authorization codes. A raise site may select one of these so a client can
 # distinguish "log in" from "ask an owner"; the message still comes from the
@@ -101,6 +103,7 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     PIPELINE_OUTPUT_INVALID: "The extraction output failed contract validation.",
     SERVICE_UNAVAILABLE: "The service is not available.",
     UPSTREAM_TIMEOUT: "The upstream provider did not respond in time.",
+    RANGE_NOT_SATISFIABLE: "The requested byte range is not satisfiable.",
     AUTHENTICATION_REQUIRED: "Authentication is required.",
     INVALID_TOKEN: "Authentication is required.",
     FAMILY_NOT_FOUND: "The requested resource was not found.",
@@ -146,6 +149,7 @@ _CODE_BY_STATUS: dict[int, str] = {
     409: CONFLICT,
     413: PAYLOAD_TOO_LARGE,
     415: UNSUPPORTED_MEDIA_TYPE,
+    416: RANGE_NOT_SATISFIABLE,
     422: VALIDATION_FAILED,
     429: RATE_LIMITED,
     500: INTERNAL_ERROR,
@@ -235,7 +239,13 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
                 "code": code,
             },
         )
-    return error_response(request, status_code=status_code, code=code)
+    response = error_response(request, status_code=status_code, code=code)
+    if status_code == 416 and isinstance(exc, StarletteHTTPException):
+        content_range = (exc.headers or {}).get("content-range", "")
+        if re.fullmatch(r"bytes \*/\d+", content_range):
+            response.headers["Content-Range"] = content_range
+            response.headers["Accept-Ranges"] = "bytes"
+    return response
 
 
 async def handle_validation_error(request: Request, _exc: Exception) -> JSONResponse:

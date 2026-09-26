@@ -175,7 +175,7 @@ describe("blocked surfaces", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("rejects a method the route does not support", async () => {
+  it("allows account deletion only with the authenticated user's token", async () => {
     signedIn();
     const fetchSpy = upstream();
     vi.stubGlobal("fetch", fetchSpy);
@@ -183,8 +183,78 @@ describe("blocked surfaces", () => {
     const request = new Request(`https://app.example/api/mura/v1/me`, { method: "DELETE" });
     const response = await handleCoreProxy(request, ["v1", "me"]);
 
-    expect(response.status).toBe(404);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${CORE_URL}/v1/me`);
+    expect(init.method).toBe("DELETE");
+    expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${USER_TOKEN}`);
+  });
+});
+
+describe("binary transport", () => {
+  it("forwards only the audio Range and selected 206 response headers", async () => {
+    signedIn();
+    const fetchSpy = vi.fn(async () => new Response(new Uint8Array([3, 4]), {
+      status: 206,
+      headers: {
+        "content-type": "audio/webm",
+        "content-length": "2",
+        "content-range": "bytes 2-3/8",
+        "accept-ranges": "bytes",
+        "set-cookie": "private=leak",
+        "authorization": "Bearer upstream-secret",
+      },
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const route = `v1/families/${FAMILY}/recordings/${RECORDING}/audio`;
+
+    const response = await handleCoreProxy(get(route, {
+      range: "bytes=2-3", authorization: "Bearer browser-forgery", "if-range": "fake",
+    }), route.split("/"));
+
+    expect(response.status).toBe(206);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([3, 4]));
+    const init = (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(new Headers(init.headers).get("range")).toBe("bytes=2-3");
+    expect(new Headers(init.headers).get("if-range")).toBeNull();
+    expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${USER_TOKEN}`);
+    expect(response.headers.get("content-range")).toBe("bytes 2-3/8");
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("content-length")).toBe("2");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("authorization")).toBeNull();
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(init.signal?.aborted).toBe(false);
+  });
+
+  it("preserves Core's safe PDF/EPUB filename and no upstream cookie", async () => {
+    signedIn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([37, 80]), {
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": "attachment; filename*=UTF-8''family-book.pdf",
+        "set-cookie": "private=leak",
+      },
+    })));
+    const route = `v1/families/${FAMILY}/books/book_${"a".repeat(32)}/download`;
+    const response = await handleCoreProxy(get(route), route.split("/"));
+
+    expect(response.headers.get("content-disposition")).toContain("family-book.pdf");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([37, 80]));
+  });
+
+  it("never forwards Range or upstream binary headers on ordinary JSON", async () => {
+    signedIn();
+    const fetchSpy = vi.fn(async () => new Response("{}", {
+      headers: { "content-disposition": "attachment; filename=unsafe", "content-length": "2" },
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const response = await handleCoreProxy(get("v1/me", { range: "bytes=0-1" }), ["v1", "me"]);
+
+    expect(new Headers((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers).get("range")).toBeNull();
+    expect(response.headers.get("content-disposition")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
   });
 });
 

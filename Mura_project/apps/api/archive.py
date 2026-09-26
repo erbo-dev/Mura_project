@@ -14,10 +14,11 @@ expressiveness.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Iterator
 from typing import Annotated, Any, Protocol, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from apps.api.errors import FAMILY_NOT_FOUND
@@ -48,6 +49,35 @@ def _not_found() -> HTTPException:
     """Absent and not-yours are the same answer, and say nothing further."""
 
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=FAMILY_NOT_FOUND)
+
+
+def _byte_range(value: str, size: int) -> tuple[int, int] | None:
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", value.strip())
+    if match is None or size <= 0:
+        return None
+    first, last = match.groups()
+    if not first and not last:
+        return None
+    if not first:
+        suffix = int(last)
+        return (max(0, size - suffix), size - 1) if suffix > 0 else None
+    start = int(first)
+    end = min(int(last), size - 1) if last else size - 1
+    return (start, end) if start < size and end >= start else None
+
+
+def _audio_chunks(stream: Any, length: int | None) -> Iterator[bytes]:
+    try:
+        remaining = length
+        while remaining is None or remaining > 0:
+            chunk = stream.read(min(64 * 1024, remaining) if remaining is not None else 64 * 1024)
+            if not chunk:
+                break
+            yield chunk
+            if remaining is not None:
+                remaining -= len(chunk)
+    finally:
+        stream.close()
 
 
 def register_archive_routes(
@@ -154,6 +184,7 @@ def register_archive_routes(
         family_id: str,
         recording_id: str,
         runtime: object = Depends(get_runtime_dependency),
+        range_header: str | None = Header(default=None, alias="Range"),
     ) -> StreamingResponse:
         """The recording itself, to an authorised family member.
 
@@ -177,22 +208,44 @@ def register_archive_routes(
                 raise _not_found()
             storage_key = row.storage_key
             media_type = row.audio_mime_type or "application/octet-stream"
+            size = row.audio_size_bytes
+
+        headers = {
+            "cache-control": "no-store, private",
+            "content-disposition": "inline",
+            "accept-ranges": "bytes",
+        }
+        byte_range = None
+        if range_header is not None:
+            byte_range = _byte_range(range_header, size or 0)
+            if byte_range is None:
+                raise HTTPException(
+                    status_code=416,
+                    detail="requested audio range is not satisfiable",
+                    headers={"content-range": f"bytes */{size or 0}", "accept-ranges": "bytes"},
+                )
+            start, end = byte_range
+            headers["content-range"] = f"bytes {start}-{end}/{size}"
+            headers["content-length"] = str(end - start + 1)
+        elif size is not None:
+            headers["content-length"] = str(size)
 
         try:
-            stream = typed.storage.open(storage_key)
+            stream = (
+                typed.storage.open_range(storage_key, start=start, end=end, total_size=size)
+                if byte_range is not None and size is not None
+                else typed.storage.open(storage_key)
+            )
         except Exception as exc:
             # A missing object is not a different answer from a missing row:
             # both mean the family cannot hear this recording.
             raise _not_found() from exc
 
         return StreamingResponse(
-            stream,
+            _audio_chunks(stream, end - start + 1 if byte_range is not None else None),
             media_type=media_type,
-            headers={
-                # Family audio must never sit in a shared cache.
-                "cache-control": "no-store, private",
-                "content-disposition": "inline",
-            },
+            status_code=status.HTTP_206_PARTIAL_CONTENT if byte_range is not None else 200,
+            headers=headers,
         )
 
     @app.get(
