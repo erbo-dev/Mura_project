@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from mura.domain.book_models import (
-    BookJobStatus,
     BookLanguage,
     BookSourceSnapshot,
     BookStatus,
@@ -19,7 +18,6 @@ from mura.domain.book_models import (
 from mura.leases import LeaseOwnershipLost
 from mura.orchestration.books import BookJobWorker
 from mura.reliability.failures import (
-    ClassifiedFailure,
     FailureCategory,
     FailureDisposition,
     calculate_retry_delay,
@@ -37,10 +35,10 @@ from mura.storage.identity import FamilyRow, UserRow
 
 
 def _aware(dt: datetime) -> datetime:
-    from datetime import timezone
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
+
 
 def _make_mock_response(status_code: int, headers: dict[str, str] | None = None) -> Any:
     resp = MagicMock()
@@ -51,7 +49,7 @@ def _make_mock_response(status_code: int, headers: dict[str, str] | None = None)
 
 def test_classify_provider_rate_limit_with_retry_after() -> None:
     exc = Exception("Rate limit exceeded")
-    setattr(exc, "response", _make_mock_response(429, {"Retry-After": "45"}))
+    exc.response = _make_mock_response(429, {"Retry-After": "45"})
     classified = classify_failure(exc)
     assert classified.category == FailureCategory.PROVIDER_RATE_LIMIT
     assert classified.disposition == FailureDisposition.RETRY
@@ -63,7 +61,7 @@ def test_classify_provider_rate_limit_with_retry_after() -> None:
 @pytest.mark.parametrize("status_code", [500, 501, 502, 503, 505, 599])
 def test_classify_provider_server_error(status_code: int) -> None:
     exc = Exception(f"Provider Server Error {status_code}")
-    setattr(exc, "response", _make_mock_response(status_code))
+    exc.response = _make_mock_response(status_code)
     classified = classify_failure(exc)
     assert classified.category == FailureCategory.PROVIDER_SERVER_ERROR
     assert classified.disposition == FailureDisposition.RETRY
@@ -72,7 +70,7 @@ def test_classify_provider_server_error(status_code: int) -> None:
 
 def test_classify_provider_auth_error_terminal() -> None:
     exc = Exception("Unauthorized 401")
-    setattr(exc, "response", _make_mock_response(401))
+    exc.response = _make_mock_response(401)
     classified = classify_failure(exc)
     assert classified.category == FailureCategory.PROVIDER_AUTH_ERROR
     assert classified.disposition == FailureDisposition.TERMINAL
@@ -126,7 +124,6 @@ def test_calculate_retry_delay_exponential_and_bounds() -> None:
     assert d_max == 120.0
 
 
-
 @pytest.fixture
 def db() -> Database:
     database = Database("sqlite+pysqlite:///:memory:")
@@ -137,7 +134,9 @@ def db() -> Database:
 def test_claim_next_job_excludes_exhausted_attempts(db: Database) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_retry_test", name="Retry Fam", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_retry_test", name="Retry Fam", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id="user_retry_test",
@@ -182,7 +181,9 @@ def test_claim_next_job_excludes_exhausted_attempts(db: Database) -> None:
 def test_defer_job_resets_lease_and_updates_next_attempt(db: Database) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_defer_test", name="Defer Fam", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_defer_test", name="Defer Fam", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id="user_defer_test",
@@ -205,7 +206,7 @@ def test_defer_job_resets_lease_and_updates_next_attempt(db: Database) -> None:
         output_language=BookLanguage.RU.value,
         target_word_count=5000,
     )
-    job = job_repo.create_job(
+    job_repo.create_job(
         book_id=book.book_id,
         family_id="fam_defer_test",
     )
@@ -237,7 +238,11 @@ def test_defer_job_resets_lease_and_updates_next_attempt(db: Database) -> None:
 def test_book_worker_defers_on_retryable_provider_error(db: Database, tmp_path: Any) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_worker_retry", name="Worker Retry", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(
+                family_id="fam_worker_retry", name="Worker Retry", created_at=now, updated_at=now
+            )
+        )
         session.add(
             UserRow(
                 user_id="user_worker_retry",
@@ -275,7 +280,7 @@ def test_book_worker_defers_on_retryable_provider_error(db: Database, tmp_path: 
     # Mock client that raises HTTP 429
     failing_client = MagicMock()
     err = Exception("DeepSeek Rate Limit")
-    setattr(err, "response", _make_mock_response(429, {"Retry-After": "30"}))
+    err.response = _make_mock_response(429, {"Retry-After": "30"})
     failing_client.side_effect = err
     failing_client.request_json.side_effect = err
 
@@ -304,4 +309,3 @@ def test_book_worker_defers_on_retryable_provider_error(db: Database, tmp_path: 
     updated_book = book_repo.get_book_unscoped(book.book_id)
     assert updated_book is not None
     assert updated_book.status != BookStatus.FAILED.value
-

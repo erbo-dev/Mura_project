@@ -210,7 +210,6 @@ def test_dependency_builders_are_reusable() -> None:
     assert callable(guard)
 
 
-
 # ---------------------------------------------------------- account deletion HTTP
 
 
@@ -225,10 +224,13 @@ def test_delete_me_removes_non_owner_mura_account(world: dict[str, Any]) -> None
         "requires_provider_sign_out": True,
     }
     assert world["identity"].get_user(viewer.user_id) is None
-    assert world["identity"].get_membership(
-        family_id=world["family_a"],
-        user_id=viewer.user_id,
-    ) is None
+    assert (
+        world["identity"].get_membership(
+            family_id=world["family_a"],
+            user_id=viewer.user_id,
+        )
+        is None
+    )
 
 
 def test_delete_me_refuses_sole_owner_without_partial_changes(
@@ -240,10 +242,13 @@ def test_delete_me_refuses_sole_owner_without_partial_changes(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "account_deletion_requires_owner_transfer"
     assert world["identity"].get_user(owner.user_id) is not None
-    assert world["identity"].get_membership(
-        family_id=world["family_a"],
-        user_id=owner.user_id,
-    ) is not None
+    assert (
+        world["identity"].get_membership(
+            family_id=world["family_a"],
+            user_id=owner.user_id,
+        )
+        is not None
+    )
 
 
 # ----------------------------------------------------- membership admin HTTP

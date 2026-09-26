@@ -197,9 +197,7 @@ class TestDeclaredLanguage:
         audio = tmp_path / "a.webm"
         audio.write_bytes(b"x")
         client, session = _client(_Response(_payload()))
-        client.transcribe(
-            audio_path=audio, recording_id="rec_1", declared_language=declared
-        )
+        client.transcribe(audio_path=audio, recording_id="rec_1", declared_language=declared)
         return session.calls[0]["data"]
 
     def test_auto_still_sends_no_language(self, tmp_path: Path) -> None:
@@ -209,25 +207,19 @@ class TestDeclaredLanguage:
         assert "language" not in self._sent(tmp_path, "auto")
         assert "language" not in self._sent(tmp_path, "mixed")
 
-    def test_declared_kazakh_is_passed_with_an_orthography_hint(
-        self, tmp_path: Path
-    ) -> None:
+    def test_declared_kazakh_is_passed_with_an_orthography_hint(self, tmp_path: Path) -> None:
         sent = self._sent(tmp_path, "kk")
         assert sent["language"] == "kk"
         # Without the hint Whisper flattens ә ғ қ ң ө ұ ү һ і onto Russian
         # letters, which quietly misspells every name in the archive.
         assert sent["prompt"] == KAZAKH_ORTHOGRAPHY_PROMPT
 
-    def test_declared_russian_is_passed_without_a_kazakh_hint(
-        self, tmp_path: Path
-    ) -> None:
+    def test_declared_russian_is_passed_without_a_kazakh_hint(self, tmp_path: Path) -> None:
         sent = self._sent(tmp_path, "ru")
         assert sent["language"] == "ru"
         assert "prompt" not in sent
 
-    def test_an_unknown_declaration_is_ignored_rather_than_forwarded(
-        self, tmp_path: Path
-    ) -> None:
+    def test_an_unknown_declaration_is_ignored_rather_than_forwarded(self, tmp_path: Path) -> None:
         # A value the recogniser would reject must not reach it and fail the job.
         assert "language" not in self._sent(tmp_path, "tr")
 
@@ -298,9 +290,7 @@ class TestModelsWithoutTimestamps:
 
         assert envelope.asr_metadata["timings_estimated"] is True
 
-    def test_reported_timings_are_not_labelled_as_estimated(
-        self, tmp_path: Path
-    ) -> None:
+    def test_reported_timings_are_not_labelled_as_estimated(self, tmp_path: Path) -> None:
         audio = tmp_path / "a.webm"
         audio.write_bytes(b"x")
         client, _ = _client(_Response(_payload()))

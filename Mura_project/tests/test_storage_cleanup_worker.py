@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, timedelta
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -109,9 +108,7 @@ def test_cleanup_worker_crash_recovery_reclaims_expired_lease() -> None:
     repo = StorageCleanupRepository(db)
     job = _queued(repo)
     now = utcnow()
-    first = repo.claim_next_job(
-        lease_owner="worker_dead", lease_seconds=5, now=now
-    )
+    first = repo.claim_next_job(lease_owner="worker_dead", lease_seconds=5, now=now)
     assert first is not None
 
     storage = MagicMock()
@@ -151,7 +148,6 @@ def test_cleanup_worker_fails_closed_when_recorded_backend_is_unconfigured() -> 
     assert failed is not None
     assert failed.status == StorageCleanupStatus.FAILED.value
     assert failed.error_code == "storage_backend_unconfigured"
-
 
 
 @pytest.mark.parametrize("status_code", [500, 501, 502, 503, 505, 599])

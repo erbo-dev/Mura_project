@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any
+from decimal import ROUND_HALF_UP, Decimal
 
 DEFAULT_PRICING_VERSION = "2026-09-v1"
 
@@ -135,4 +134,3 @@ def calculate_ai_cost(
         return None, None
 
     return total_cost.quantize(_SIX_DECIMALS, rounding=ROUND_HALF_UP), rate.pricing_version
-

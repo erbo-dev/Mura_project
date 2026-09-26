@@ -186,4 +186,3 @@ def repair_chapter(
         "request_seconds": getattr(usage, "request_seconds", 0.0),
     }
     return repaired_draft, telemetry
-

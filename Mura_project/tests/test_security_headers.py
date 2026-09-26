@@ -67,7 +67,6 @@ def test_cors_allows_delete_and_options() -> None:
     assert "DELETE" in allow_methods
 
 
-
 def test_hsts_is_absent_outside_production() -> None:
     settings = _settings()
     app = create_app(settings)

@@ -184,7 +184,6 @@ def test_cancelled_book_cannot_cross_artifact_durability_boundary(tmp_path: Path
     assert list((tmp_path / "books").rglob("*.pdf")) == []
 
 
-
 def test_stale_book_worker_cannot_mutate_or_publish_after_reclaim(tmp_path: Path) -> None:
     db, repo, book, storage = _seed(tmp_path)
     chapters = BookChapterRepository(db)

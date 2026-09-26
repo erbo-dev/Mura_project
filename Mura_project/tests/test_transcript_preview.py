@@ -37,8 +37,12 @@ def harness(tmp_path: Path) -> tuple[TestClient, Database, dict[str, str]]:
     database = Database(settings.database_url)
     database.create_schema()
     _seed(database)
-    _seed_recording(database, family_id=FAMILY_A, recording_id="rec_a", job_id="job_a", with_result=False)
-    _seed_recording(database, family_id=FAMILY_B, recording_id="rec_b", job_id="job_b", with_result=False)
+    _seed_recording(
+        database, family_id=FAMILY_A, recording_id="rec_a", job_id="job_a", with_result=False
+    )
+    _seed_recording(
+        database, family_id=FAMILY_B, recording_id="rec_b", job_id="job_b", with_result=False
+    )
 
     identity = IdentityRepository(database)
     verifier = FakePrincipalVerifier()

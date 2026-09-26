@@ -101,9 +101,12 @@ def test_cleanup_defer_and_reclaim_after_due_time() -> None:
         error_detail="storage cleanup deferred",
         lease_owner="worker_a",
     )
-    assert repo.claim_next_job(
-        lease_owner="worker_b", lease_seconds=30, now=due - timedelta(seconds=1)
-    ) is None
+    assert (
+        repo.claim_next_job(
+            lease_owner="worker_b", lease_seconds=30, now=due - timedelta(seconds=1)
+        )
+        is None
+    )
     reclaimed = repo.claim_next_job(
         lease_owner="worker_b", lease_seconds=30, now=due + timedelta(seconds=1)
     )
@@ -121,9 +124,7 @@ def test_cleanup_expired_lease_is_reclaimed() -> None:
         storage_key="family/fam/recordings/rec-2/original.wav",
     )
     now = utcnow()
-    claimed = repo.claim_next_job(
-        lease_owner="worker_dead", lease_seconds=10, now=now
-    )
+    claimed = repo.claim_next_job(lease_owner="worker_dead", lease_seconds=10, now=now)
     assert claimed is not None
     reclaimed = repo.claim_next_job(
         lease_owner="worker_recovery",
@@ -140,7 +141,7 @@ def test_cleanup_expired_lease_is_reclaimed() -> None:
 def test_cleanup_last_attempt_crash_is_still_reclaimable() -> None:
     db = _db()
     repo = StorageCleanupRepository(db)
-    job = repo.enqueue_cleanup(
+    repo.enqueue_cleanup(
         resource_type=StorageCleanupResourceType.RECORDING_AUDIO.value,
         storage_kind=StorageKind.AUDIO.value,
         storage_backend="local",
@@ -148,9 +149,7 @@ def test_cleanup_last_attempt_crash_is_still_reclaimable() -> None:
         max_attempts=1,
     )
     now = utcnow()
-    assert repo.claim_next_job(
-        lease_owner="worker_dead", lease_seconds=10, now=now
-    ) is not None
+    assert repo.claim_next_job(lease_owner="worker_dead", lease_seconds=10, now=now) is not None
     reclaimed = repo.claim_next_job(
         lease_owner="worker_other",
         lease_seconds=10,

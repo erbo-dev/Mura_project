@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 FAULT_DEEPSEEK_TIMEOUT = "DEEPSEEK_TIMEOUT_ONCE"
 FAULT_DEEPSEEK_429 = "DEEPSEEK_429_ONCE"
@@ -28,14 +28,16 @@ FAULT_PROVIDER_503 = "PROVIDER_503_ONCE"
 FAULT_STORAGE_503 = "STORAGE_503_ONCE"
 FAULT_PDF_FAILURE = "PDF_FAILURE_ONCE"
 
-ALL_FAULTS = frozenset({
-    FAULT_DEEPSEEK_TIMEOUT,
-    FAULT_DEEPSEEK_429,
-    FAULT_PROVIDER_401,
-    FAULT_PROVIDER_503,
-    FAULT_STORAGE_503,
-    FAULT_PDF_FAILURE,
-})
+ALL_FAULTS = frozenset(
+    {
+        FAULT_DEEPSEEK_TIMEOUT,
+        FAULT_DEEPSEEK_429,
+        FAULT_PROVIDER_401,
+        FAULT_PROVIDER_503,
+        FAULT_STORAGE_503,
+        FAULT_PDF_FAILURE,
+    }
+)
 
 _lock = threading.Lock()
 _active_faults: set[str] = set()
@@ -44,10 +46,7 @@ _fault_metadata: dict[str, dict[str, object]] = {}
 
 def assert_fault_injection_allowed() -> None:
     """Hard gate: ensure fault injection can NEVER run in production."""
-    env = (
-        os.environ.get("MURA_ENVIRONMENT", "")
-        or os.environ.get("APP_ENV", "")
-    ).strip().lower()
+    env = (os.environ.get("MURA_ENVIRONMENT", "") or os.environ.get("APP_ENV", "")).strip().lower()
     if env == "production":
         raise ValueError("Fault injection cannot be enabled in production.")
 
@@ -108,4 +107,3 @@ def fault_injected(fault_name: str, **metadata: object) -> Generator[None, None,
         yield
     finally:
         deactivate_fault(fault_name)
-

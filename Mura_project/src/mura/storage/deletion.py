@@ -48,9 +48,7 @@ class RecordingDeletionService:
         self.cleanup_repository = cleanup_repository or StorageCleanupRepository(database)
         backend = getattr(storage, "backend", None)
         self.default_storage_backend = (
-            default_storage_backend
-            or getattr(backend, "value", backend)
-            or "local"
+            default_storage_backend or getattr(backend, "value", backend) or "local"
         )
         self.cleanup_max_attempts = cleanup_max_attempts
 
@@ -104,7 +102,9 @@ class RecordingDeletionService:
                 delete(PipelineResultRow).where(PipelineResultRow.recording_id == recording_id)
             )
             session.execute(
-                delete(ProcessingTraceEventRow).where(ProcessingTraceEventRow.recording_id == recording_id)
+                delete(ProcessingTraceEventRow).where(
+                    ProcessingTraceEventRow.recording_id == recording_id
+                )
             )
             session.execute(
                 delete(ArchiveClaimRow).where(ArchiveClaimRow.recording_id == recording_id)

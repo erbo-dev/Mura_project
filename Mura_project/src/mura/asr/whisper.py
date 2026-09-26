@@ -166,7 +166,9 @@ class WhisperASRClient:
                         latency_ms=int(elapsed * 1000),
                         success=False,
                         audio_seconds=None,
-                        error_code="provider_timeout" if isinstance(exc, requests.Timeout) else "transcription_failed",
+                        error_code="provider_timeout"
+                        if isinstance(exc, requests.Timeout)
+                        else "transcription_failed",
                     )
                 except Exception:
                     pass
@@ -176,8 +178,14 @@ class WhisperASRClient:
             elapsed = time.perf_counter() - started
             if self.on_usage is not None:
                 try:
-                    err_code = "provider_rate_limit" if response.status_code == 429 else (
-                        "provider_auth_error" if response.status_code in (401, 403) else "transcription_failed"
+                    err_code = (
+                        "provider_rate_limit"
+                        if response.status_code == 429
+                        else (
+                            "provider_auth_error"
+                            if response.status_code in (401, 403)
+                            else "transcription_failed"
+                        )
                     )
                     self.on_usage(
                         provider="whisper",

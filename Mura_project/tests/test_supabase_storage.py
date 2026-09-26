@@ -9,7 +9,6 @@ import pytest
 import requests
 
 from mura.config import AudioStorageBackend, CoreSettings
-from mura.storage.storage_errors import StorageDeleteError
 from mura.storage.audio import (
     AudioStorageError,
     AudioTooLargeError,
@@ -18,6 +17,7 @@ from mura.storage.audio import (
     UnsupportedAudioError,
     build_audio_storage,
 )
+from mura.storage.storage_errors import StorageDeleteError
 
 FAMILY = "family_supabase_test"
 RECORDING = "rec_" + "f" * 32
@@ -286,8 +286,6 @@ def test_build_audio_storage_constructs_supabase_backend() -> None:
     assert backend.backend is AudioStorageBackend.SUPABASE
     assert backend.bucket == "test-bucket"
     assert backend.timeout_seconds == 45.0
-
-
 
 
 @pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503, 504])

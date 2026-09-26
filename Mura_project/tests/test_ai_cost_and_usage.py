@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from mura.cost import calculate_ai_cost, DEFAULT_PRICING_VERSION
+from mura.cost import DEFAULT_PRICING_VERSION, calculate_ai_cost
 from mura.logging import job_id_ctx, recording_id_ctx, request_id_ctx
 from mura.storage.ai_usage import AIUsageEventRow, AIUsageLedger
 from mura.storage.database import Database
@@ -181,4 +181,3 @@ def test_ai_usage_ledger_24h_summary() -> None:
     assert summary["cached_input_tokens"] == 5_000
     assert summary["audio_seconds"] == 120.0
     assert Decimal(summary["estimated_cost_usd"]) > Decimal("0")
-

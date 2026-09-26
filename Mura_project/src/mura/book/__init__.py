@@ -77,4 +77,3 @@ __all__ = [
     "SnapshotStory",
     "SnapshotUncertainty",
 ]
-

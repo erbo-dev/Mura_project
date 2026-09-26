@@ -112,4 +112,3 @@ def update_continuity(
             "prompt_version": BOOK_CONTINUITY_PROMPT_VERSION,
             "error": str(exc),
         }
-

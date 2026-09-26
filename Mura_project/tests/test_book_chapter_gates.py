@@ -14,7 +14,6 @@ from mura.domain.book_models import (
     ChapterDraft,
     ChapterPlan,
     GateCode,
-    ReviewResult,
     ReviewStatus,
 )
 from mura.storage.archive_read import GroundingBundle
@@ -229,10 +228,7 @@ def test_gate_wrong_language():
     snapshot = _sample_snapshot()
     plan = _sample_plan()
     # English Latin text for KK book
-    text = (
-        "This is an entirely English chapter text that does not belong in a Kazakh book. "
-        * 50
-    )
+    text = "This is an entirely English chapter text that does not belong in a Kazakh book. " * 50
 
     draft = ChapterDraft(
         chapter_number=1,

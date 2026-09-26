@@ -196,4 +196,3 @@ def plan_book(
     }
 
     return blueprint, report, telemetry
-

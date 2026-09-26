@@ -37,9 +37,7 @@ def build_asr_client(settings: object) -> RemoteASRClient | WhisperASRClient:
     if provider is ASRProvider.WHISPER:
         api_key = getattr(settings, "whisper_api_key", None)
         if not api_key:
-            raise ASRConfigurationError(
-                "ASR_PROVIDER=whisper requires WHISPER_API_KEY"
-            )
+            raise ASRConfigurationError("ASR_PROVIDER=whisper requires WHISPER_API_KEY")
         return WhisperASRClient(
             api_key=api_key,
             base_url=getattr(settings, "whisper_base_url", "https://api.openai.com/v1"),

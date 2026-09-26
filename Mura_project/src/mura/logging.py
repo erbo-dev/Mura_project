@@ -68,7 +68,6 @@ SAFE_OPAQUE_KEYS = frozenset(
         "poll_interval_seconds",
         "lease_seconds",
         "heartbeat_seconds",
-        "chapter_number",
         "chapters_total",
         "chapters_approved",
         "word_count",
@@ -224,13 +223,37 @@ class StructuredJsonFormatter(logging.Formatter):
 
         # Custom extra fields passed to logger.info(..., extra={...})
         standard_attrs = {
-            "args", "asctime", "created", "exc_info", "exc_text", "filename",
-            "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-            "message", "msg", "name", "pathname", "process", "processName",
-            "relativeCreated", "stack_info", "thread", "threadName", "taskName",
-            "request_id", "job_id", "recording_id", "book_id", "family_id", "attempt", "worker_id",
-            "request_id", "job_id", "recording_id", "book_id", "chapter_number",
-            "family_id", "attempt", "worker_id",
+            "args",
+            "asctime",
+            "created",
+            "exc_info",
+            "exc_text",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "msg",
+            "name",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "thread",
+            "threadName",
+            "taskName",
+            "request_id",
+            "job_id",
+            "recording_id",
+            "book_id",
+            "family_id",
+            "attempt",
+            "worker_id",
+            "chapter_number",
         }
         extras: dict[str, Any] = {}
         for key, value in record.__dict__.items():
@@ -264,9 +287,7 @@ class HumanReadableFormatter(logging.Formatter):
             if val:
                 ctx_parts.append(f"{field}={val}")
         ctx_str = f" [{', '.join(ctx_parts)}]" if ctx_parts else ""
-        time_str = datetime.fromtimestamp(record.created, tz=UTC).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        time_str = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         msg = LogSanitizer.sanitize_value(record.getMessage())
         return f"{time_str} {record.levelname:<7} {self.service} {record.name}{ctx_str} {msg}"
 

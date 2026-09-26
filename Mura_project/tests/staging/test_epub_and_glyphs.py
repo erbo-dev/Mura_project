@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+
 import pytest
 
 from mura.book.export_document import build_book_html, write_epub3
@@ -74,7 +75,17 @@ def test_kazakh_cyrillic_glyph_fidelity_in_epub_and_html() -> None:
 
     (Ә, ғ, қ, ң, ө, ұ, ү, h, і) survive round-trip rendering in both HTML and EPUB.
     """
-    special_kazakh_glyphs = ["Мұра", "Әже", "Ғасыр", "Құндылық", "Өмір", "Ұрпақ", "Із", "Көңіл", "Үміт"]
+    special_kazakh_glyphs = [
+        "Мұра",
+        "Әже",
+        "Ғасыр",
+        "Құндылық",
+        "Өмір",
+        "Ұрпақ",
+        "Із",
+        "Көңіл",
+        "Үміт",
+    ]
     text_content = " ".join(special_kazakh_glyphs)
 
     chapters = [
@@ -108,4 +119,3 @@ def test_kazakh_cyrillic_glyph_fidelity_in_epub_and_html() -> None:
         ch1_xhtml = zf.read("OEBPS/chapter_1.xhtml").decode("utf-8")
         for glyph_word in special_kazakh_glyphs:
             assert glyph_word in ch1_xhtml, f"Missing glyph word in EPUB chapter: {glyph_word}"
-

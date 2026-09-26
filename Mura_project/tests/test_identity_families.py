@@ -289,7 +289,6 @@ def test_non_owner_removal_is_always_allowed(repository: IdentityRepository) -> 
     assert len(repository.list_members(family.family_id)) == 1
 
 
-
 # ------------------------------------------------------------ account deletion
 
 
@@ -333,10 +332,13 @@ def test_delete_multi_owner_account_preserves_family(
     assert repository.delete_account(user_id=alice_id) is True
 
     assert repository.get_user(alice_id) is None
-    assert repository.get_family_for_member(
-        family_id=family.family_id,
-        user_id=bob_id,
-    ) is not None
+    assert (
+        repository.get_family_for_member(
+            family_id=family.family_id,
+            user_id=bob_id,
+        )
+        is not None
+    )
     assert repository.count_owners(family.family_id) == 1
 
 
@@ -350,10 +352,13 @@ def test_delete_sole_owner_account_is_atomic_and_refused(
 
     assert caught.value.family_ids == [family.family_id]
     assert repository.get_user(alice_id) is not None
-    assert repository.get_membership(
-        family_id=family.family_id,
-        user_id=alice_id,
-    ) is not None
+    assert (
+        repository.get_membership(
+            family_id=family.family_id,
+            user_id=alice_id,
+        )
+        is not None
+    )
     # A refusal must not partially remove unrelated non-owner memberships.
     other = repository.create_family(name="Other", owner_user_id=bob_id)
     with repository.database.session_factory.begin() as session:
@@ -368,10 +373,13 @@ def test_delete_sole_owner_account_is_atomic_and_refused(
 
     with pytest.raises(AccountDeletionBlockedError):
         repository.delete_account(user_id=alice_id)
-    assert repository.get_membership(
-        family_id=other.family_id,
-        user_id=alice_id,
-    ) is not None
+    assert (
+        repository.get_membership(
+            family_id=other.family_id,
+            user_id=alice_id,
+        )
+        is not None
+    )
 
 
 # ------------------------------------------------------- real PostgreSQL only

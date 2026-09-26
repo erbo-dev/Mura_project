@@ -14,7 +14,6 @@ from mura.domain.book_models import (
     BookLanguage,
     BookStage,
     BookStatus,
-    ChapterStatus,
     ExportFormat,
     ExportStatus,
 )
@@ -41,7 +40,9 @@ def family_and_user(db: Database) -> tuple[str, str]:
     fid = "family_export_test_1"
     uid = "user_export_test_1"
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id=fid, name="Export Test Family", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id=fid, name="Export Test Family", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id=uid,
@@ -111,7 +112,10 @@ def test_write_epub3_structure() -> None:
             "title": "Ауылдағы балалық шақ",
             "subtitle": "1950–1960",
             "time_period": "1950-1960",
-            "text": "Біздің ауыл өзеннің бойында орналасқан.\n\nКөктемде күн жылынғанда дала құлпыратын.",
+            "text": (
+                "Біздің ауыл өзеннің бойында орналасқан.\n\n"
+                "Көктемде күн жылынғанда дала құлпыратын."
+            ),
         }
     ]
 
@@ -158,7 +162,9 @@ def test_write_epub3_structure() -> None:
     assert "Ауылдағы балалық шақ" in nav_content
 
 
-def test_export_service_pdf_and_epub(db: Database, family_and_user: tuple[str, str], tmp_path: Path) -> None:
+def test_export_service_pdf_and_epub(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
     fid, uid = family_and_user
     book_repo = BookRepository(db)
     ch_repo = BookChapterRepository(db)
@@ -231,7 +237,9 @@ def test_export_service_pdf_and_epub(db: Database, family_and_user: tuple[str, s
     assert artifact_storage.exists(storage_key=epub_row.storage_key)
 
 
-def test_export_service_engine_unavailable(db: Database, family_and_user: tuple[str, str], tmp_path: Path) -> None:
+def test_export_service_engine_unavailable(
+    db: Database, family_and_user: tuple[str, str], tmp_path: Path
+) -> None:
     fid, uid = family_and_user
     book_repo = BookRepository(db)
     ch_repo = BookChapterRepository(db)

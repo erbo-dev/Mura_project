@@ -8,7 +8,7 @@ from apps.api.main import create_app, get_settings
 from mura.config import CoreSettings
 from mura.jobs import JobStatus
 from mura.storage.ai_usage import AIUsageLedger
-from mura.storage.database import Database, ProcessingJobRow, RecordingRow
+from mura.storage.database import ProcessingJobRow, RecordingRow
 
 CORE_TOKEN = "c" * 40
 OPERATIONS_TOKEN = "o" * 40
@@ -97,8 +97,8 @@ def test_operations_monitoring_summary_privacy_no_content_leakage() -> None:
     client = TestClient(app, raise_server_exceptions=False)
 
     # Access runtime database to seed a recording and usage event
-    runtime = app.state._test_runtime if hasattr(app.state, "_test_runtime") else None
     from apps.api.main import _runtime
+
     assert _runtime is not None
 
     # Seed job and AI usage
@@ -151,4 +151,3 @@ def test_operations_monitoring_summary_privacy_no_content_leakage() -> None:
     assert "/data/secret_audio.wav" not in body_text
     assert OPERATIONS_TOKEN not in body_text
     assert CORE_TOKEN not in body_text
-

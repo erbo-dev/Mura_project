@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -69,7 +68,10 @@ def test_log_sanitizer_preserves_safe_opaque_keys():
 
 
 def test_log_sanitizer_redacts_bearer_and_jwt_in_strings():
-    msg = "User authenticated with Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThis"
+    msg = (
+        "User authenticated with Bearer "
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThis"
+    )
     sanitized = LogSanitizer.sanitize_value(msg)
     assert "Bearer [REDACTED]" in sanitized or "[REDACTED_TOKEN]" in sanitized
     assert "doNotLeakThis" not in sanitized
@@ -233,10 +235,9 @@ def test_correlation_filter_enriches_record():
             worker_id="worker_filter_222",
         ):
             flt.filter(record)
-            assert getattr(record, "request_id") == "req_filter_123"
-            assert getattr(record, "job_id") == "job_filter_456"
-            assert getattr(record, "recording_id") == "rec_filter_789"
-            assert getattr(record, "family_id") == "fam_filter_111"
-            assert getattr(record, "attempt") == 1
-            assert getattr(record, "worker_id") == "worker_filter_222"
-
+            assert record.request_id == "req_filter_123"
+            assert record.job_id == "job_filter_456"
+            assert record.recording_id == "rec_filter_789"
+            assert record.family_id == "fam_filter_111"
+            assert record.attempt == 1
+            assert record.worker_id == "worker_filter_222"

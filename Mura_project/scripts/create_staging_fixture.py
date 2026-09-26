@@ -9,8 +9,10 @@ Generates the canonical synthetic staging dataset:
 - 3 Grounded Synthetic Recordings:
   * Recording A (Kazakh): 'Әжемнің мұрасы' (Keywords: Мұра, Әже, Ғасыр, Құндылық, Өмір, Ұрпақ, Із),
     contains family heirloom carpet (материалдық жәдігер - кілем).
-  * Recording B (Russian): 'Переезд в Алматы' (Corrected date: moved in 1982 not 1978, conflicting house number).
-  * Recording C (Code-Switched RU/KK): 'Шілдехана тойы' (Uncertain claim about celebration location).
+  * Recording B (Russian): 'Переезд в Алматы' (Corrected date: moved in 1982
+    not 1978, conflicting house number).
+  * Recording C (Code-Switched RU/KK): 'Шілдехана тойы' (Uncertain claim
+    about celebration location).
 
 Follows product boundaries (Identity -> Recording -> Processing -> Archive).
 """
@@ -152,9 +154,15 @@ def build_synthetic_kazakh_result() -> PipelineResult:
     )
 
     resolutions = [
-        MentionResolution(mention_id="m_kulash", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"),
-        MentionResolution(mention_id="m_aidar", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"),
-        MentionResolution(mention_id="m_aigul", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"),
+        MentionResolution(
+            mention_id="m_kulash", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"
+        ),
+        MentionResolution(
+            mention_id="m_aidar", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"
+        ),
+        MentionResolution(
+            mention_id="m_aigul", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"
+        ),
     ]
 
     return PipelineResult(
@@ -240,7 +248,9 @@ def build_synthetic_russian_result() -> PipelineResult:
     ]
 
     resolutions = [
-        MentionResolution(mention_id="m_serik", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"),
+        MentionResolution(
+            mention_id="m_serik", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"
+        ),
     ]
 
     return PipelineResult(
@@ -325,7 +335,9 @@ def build_synthetic_mixed_result() -> PipelineResult:
     ]
 
     resolutions = [
-        MentionResolution(mention_id="m_serik_ata", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"),
+        MentionResolution(
+            mention_id="m_serik_ata", status=ResolutionStatus.NEW_PERSON, reason="fixture archive"
+        ),
     ]
 
     return PipelineResult(
@@ -363,7 +375,10 @@ def seed_staging_fixture(database: Database, audio_dir: Path | None = None) -> d
     with database.session_factory() as session:
         existing = session.scalar(select(FamilyRow).where(FamilyRow.family_id == STAGING_FAMILY_ID))
     if existing is not None:
-        print(f"[INFO] Existing staging family '{STAGING_FAMILY_ID}' found. Deleting for idempotency...")
+        print(
+            f"[INFO] Existing staging family '{STAGING_FAMILY_ID}' found. "
+            "Deleting for idempotency..."
+        )
         identity_repo.delete_family(STAGING_FAMILY_ID)
 
     user_aidar = identity_repo.resolve_principal(
@@ -427,14 +442,35 @@ def seed_staging_fixture(database: Database, audio_dir: Path | None = None) -> d
     print(f"[OK] Family created: '{family.name}' (ID: {family.family_id}) with 3 members.")
 
     fixtures = [
-        (RECORDING_A_ID, "job_staging_001", "rec_a_kazakh.wav", "Күләш әже", build_synthetic_kazakh_result()),
-        (RECORDING_B_ID, "job_staging_002", "rec_b_russian.wav", "Айгүл", build_synthetic_russian_result()),
-        (RECORDING_C_ID, "job_staging_003", "rec_c_mixed.wav", "Серік ата", build_synthetic_mixed_result()),
+        (
+            RECORDING_A_ID,
+            "job_staging_001",
+            "rec_a_kazakh.wav",
+            "Күләш әже",
+            build_synthetic_kazakh_result(),
+        ),
+        (
+            RECORDING_B_ID,
+            "job_staging_002",
+            "rec_b_russian.wav",
+            "Айгүл",
+            build_synthetic_russian_result(),
+        ),
+        (
+            RECORDING_C_ID,
+            "job_staging_003",
+            "rec_c_mixed.wav",
+            "Серік ата",
+            build_synthetic_mixed_result(),
+        ),
     ]
 
     for rec_id, job_id, filename, speaker, result in fixtures:
         audio_file = audio_dir / filename
-        audio_file.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+        audio_file.write_bytes(
+            b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"
+            b"\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+        )
         recording_repo.create_recording_and_job(
             recording_id=rec_id,
             job_id=job_id,
@@ -474,9 +510,10 @@ def seed_staging_fixture(database: Database, audio_dir: Path | None = None) -> d
 
 
 if __name__ == "__main__":
-    db_url = os.environ.get("DATABASE_URL", "postgresql+psycopg://mura_test@127.0.0.1:5432/mura_leases_test")
+    db_url = os.environ.get(
+        "DATABASE_URL", "postgresql+psycopg://mura_test@127.0.0.1:5432/mura_leases_test"
+    )
     db = Database(db_url)
     manifest = seed_staging_fixture(db)
     print("RESULT: Deterministic staging fixture successfully created.")
     print(manifest)
-

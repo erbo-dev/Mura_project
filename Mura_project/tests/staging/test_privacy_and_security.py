@@ -1,9 +1,11 @@
 """Staging security, BOLA and privacy audit suite.
 
 Validates:
-1. Cross-Family BOLA / IDOR matrix across 10 critical endpoints (returns 404, never 403 or data leak).
+1. Cross-Family BOLA / IDOR across 10 critical endpoints
+   (returns 404, never 403 or data leak).
 2. Role & Capability matrix (Viewer blocked with 403, Editor blocked from family deletion with 403).
-3. Privacy deletion cascades (recording, book, and complete family wipeout including storage cleanup).
+3. Privacy deletion cascades (recording, book, and complete family wipeout
+   including storage cleanup).
 4. Privacy data export (GDPR structured export with zero leaked secrets or internal credentials).
 """
 
@@ -25,40 +27,34 @@ from mura.domain.book_models import (
     BookLanguage,
     BookStage,
     BookStatus,
-    ChapterStatus,
     ExportFormat,
     ExportStatus,
 )
 from mura.identity.policy import FamilyRole
-from mura.jobs import JobStatus
+from mura.orchestration.cleanup import StorageCleanupWorker
 from mura.storage.archive import (
     ArchiveClaimRow,
     ArchivePersonRow,
     FamilyGraphEdgeRow,
 )
-from mura.orchestration.cleanup import StorageCleanupWorker
 from mura.storage.audio import LegacyLocalAudioStorage, LocalAudioStorage
 from mura.storage.book import (
     BookChapterRepository,
     BookChapterRow,
     BookExportRepository,
     BookExportRow,
-    BookJobRepository,
-    BookJobRow,
-    BookRepository,
     BookRow,
 )
 from mura.storage.book_artifacts import LocalBookArtifactStorage
 from mura.storage.cleanup import StorageCleanupRepository, StorageKind
 from mura.storage.database import (
     Database,
-    PipelineResultRow,
     ProcessingJobRow,
     RecordingRepository,
     RecordingRow,
     utcnow,
 )
-from mura.storage.identity import FamilyMembershipRow, FamilyRow, IdentityRepository, UserRow
+from mura.storage.identity import FamilyMembershipRow, FamilyRow, IdentityRepository
 from tests.authz_factories import (
     FakePrincipalVerifier,
     TestIdentity,
@@ -73,7 +69,10 @@ WORKER_TOKEN = "w" * 40
 ASR_TOKEN = "a" * 40
 DEEPSEEK_KEY = "sk-" + "d" * 40
 
-WAV_CONTENT = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+WAV_CONTENT = (
+    b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"
+    b"\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+)
 
 
 def _create_test_settings(tmp_path: Path) -> CoreSettings:
@@ -110,11 +109,35 @@ def staging_security_env(tmp_path: Path) -> dict[str, Any]:
     verifier = FakePrincipalVerifier()
 
     # Create users
-    owner_1 = create_test_user(identity_repo, subject="owner_1", email="owner1@mura.kz", display_name="Owner One", verifier=verifier)
-    editor_1 = create_test_user(identity_repo, subject="editor_1", email="editor1@mura.kz", display_name="Editor One", verifier=verifier)
-    viewer_1 = create_test_user(identity_repo, subject="viewer_1", email="viewer1@mura.kz", display_name="Viewer One", verifier=verifier)
+    owner_1 = create_test_user(
+        identity_repo,
+        subject="owner_1",
+        email="owner1@mura.kz",
+        display_name="Owner One",
+        verifier=verifier,
+    )
+    editor_1 = create_test_user(
+        identity_repo,
+        subject="editor_1",
+        email="editor1@mura.kz",
+        display_name="Editor One",
+        verifier=verifier,
+    )
+    viewer_1 = create_test_user(
+        identity_repo,
+        subject="viewer_1",
+        email="viewer1@mura.kz",
+        display_name="Viewer One",
+        verifier=verifier,
+    )
 
-    owner_2 = create_test_user(identity_repo, subject="owner_2", email="owner2@mura.kz", display_name="Owner Two", verifier=verifier)
+    owner_2 = create_test_user(
+        identity_repo,
+        subject="owner_2",
+        email="owner2@mura.kz",
+        display_name="Owner Two",
+        verifier=verifier,
+    )
 
     # Create families
     fam_1 = "fam_staging_sec_1"
@@ -210,9 +233,13 @@ def staging_security_env(tmp_path: Path) -> dict[str, Any]:
     chapter_repo = BookChapterRepository(db)
     chapter_repo.create_chapter_stubs(
         book_id=book_1,
-        chapter_plans=[{"chapter_number": 1, "title": "1-тарау. Басы", "source_recording_ids": [rec_1]}],
+        chapter_plans=[
+            {"chapter_number": 1, "title": "1-тарау. Басы", "source_recording_ids": [rec_1]}
+        ],
     )
-    chapter_repo.approve_chapter(book_id=book_1, chapter_number=1, final_text="Балалық шақ туралы.", word_count=3)
+    chapter_repo.approve_chapter(
+        book_id=book_1, chapter_number=1, final_text="Балалық шақ туралы.", word_count=3
+    )
 
     # Save PDF export for Book 1
     storage_key = book_artifact_storage.store(
@@ -499,7 +526,7 @@ def test_privacy_cascade_delete_book(staging_security_env: dict[str, Any]) -> No
 
 @pytest.mark.staging
 def test_privacy_cascade_delete_entire_family(staging_security_env: dict[str, Any]) -> None:
-    """Verifies that deleting a family wipes all members, graph edges, claims, people, and the family row."""
+    """Family deletion wipes members, graph edges, claims, people, and its row."""
     client: TestClient = staging_security_env["client"]
     owner_1: TestIdentity = staging_security_env["owner_1"]
     db: Database = staging_security_env["db"]
@@ -518,13 +545,21 @@ def test_privacy_cascade_delete_entire_family(staging_security_env: dict[str, An
     with db.session_factory() as session:
         fam = session.scalar(select(FamilyRow).where(FamilyRow.family_id == fam_1))
         assert fam is None
-        members = session.scalars(select(FamilyMembershipRow).where(FamilyMembershipRow.family_id == fam_1)).all()
+        members = session.scalars(
+            select(FamilyMembershipRow).where(FamilyMembershipRow.family_id == fam_1)
+        ).all()
         assert len(members) == 0
-        claims = session.scalars(select(ArchiveClaimRow).where(ArchiveClaimRow.family_id == fam_1)).all()
+        claims = session.scalars(
+            select(ArchiveClaimRow).where(ArchiveClaimRow.family_id == fam_1)
+        ).all()
         assert len(claims) == 0
-        edges = session.scalars(select(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == fam_1)).all()
+        edges = session.scalars(
+            select(FamilyGraphEdgeRow).where(FamilyGraphEdgeRow.family_id == fam_1)
+        ).all()
         assert len(edges) == 0
-        people = session.scalars(select(ArchivePersonRow).where(ArchivePersonRow.family_id == fam_1)).all()
+        people = session.scalars(
+            select(ArchivePersonRow).where(ArchivePersonRow.family_id == fam_1)
+        ).all()
         assert len(people) == 0
 
 

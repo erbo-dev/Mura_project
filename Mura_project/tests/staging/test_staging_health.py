@@ -1,4 +1,4 @@
-"""Staging validation tests for API health, readiness, security headers, CORS and auth boundaries."""
+"""Staging checks for health, readiness, security headers, CORS and auth."""
 
 from __future__ import annotations
 
@@ -119,4 +119,3 @@ def test_staging_cors_protection(client: TestClient) -> None:
         },
     )
     assert resp.headers.get("Access-Control-Allow-Origin") == "https://mura-staging.vercel.app"
-

@@ -207,7 +207,6 @@ def test_create_family_book_role_and_eligibility(api_env) -> None:
         json={
             "title": "Хроника семьи Асановых",
             "output_language": "kk",
-            "target_word_count": 15000,
             "target_word_count": 25000,
         },
     )
@@ -567,8 +566,9 @@ def test_cancel_and_regenerate_family_book(api_env) -> None:
     assert old_book.title == "Бастапқы нұсқа"
 
 
-
-def test_regenerate_reuses_original_source_list_and_excludes_new_archive_recordings(api_env) -> None:
+def test_regenerate_reuses_original_source_list_and_excludes_new_archive_recordings(
+    api_env,
+) -> None:
     book_repo = BookRepository(api_env.database)
     original = book_repo.create_book(
         family_id="fam_alpha",

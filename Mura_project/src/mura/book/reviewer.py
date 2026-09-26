@@ -138,10 +138,9 @@ def review_chapter(
         "selected_evidence": relevant_evidence,
         "allowed_relationships": relevant_relationships,
         "selected_claims": relevant_claims,
-        "corrections": [
-            correction.model_dump(mode="json")
-            for correction in snapshot.corrections
-        ][:24],
+        "corrections": [correction.model_dump(mode="json") for correction in snapshot.corrections][
+            :24
+        ],
         "conflicts": relevant_conflicts,
         "required_uncertainties": chapter_plan.uncertainties,
         "output_language": output_language.value,

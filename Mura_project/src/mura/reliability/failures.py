@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
 import logging
 import random
 import re
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from mura.book.snapshot_validation import SnapshotClosureError
@@ -113,7 +113,10 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
         )
 
     # 2. Export engine missing
-    if "exportengineunavailable" in exc_type_name.lower() or "export engine unavailable" in error_str.lower():
+    if (
+        "exportengineunavailable" in exc_type_name.lower()
+        or "export engine unavailable" in error_str.lower()
+    ):
         return ClassifiedFailure(
             category=FailureCategory.UNKNOWN_ERROR,
             disposition=FailureDisposition.TERMINAL,
@@ -130,7 +133,9 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
         return ClassifiedFailure(
             category=FailureCategory.GROUNDING_BLOCKED,
             disposition=FailureDisposition.TERMINAL,
-            error_code="gate_failed" if "gate" in error_str.lower() else "blueprint_validation_failed",
+            error_code="gate_failed"
+            if "gate" in error_str.lower()
+            else "blueprint_validation_failed",
             error_detail=error_str,
         )
 
@@ -152,7 +157,9 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
 
     if status_code is not None:
         if status_code == 429:
-            retry_after = _parse_retry_after(headers.get("Retry-After") if hasattr(headers, "get") else None)
+            retry_after = _parse_retry_after(
+                headers.get("Retry-After") if hasattr(headers, "get") else None
+            )
             return ClassifiedFailure(
                 category=FailureCategory.PROVIDER_RATE_LIMIT,
                 disposition=FailureDisposition.RETRY,
@@ -258,4 +265,3 @@ def calculate_retry_delay(
         backoff = min(backoff * factor, max_seconds)
 
     return max(0.5, backoff)
-

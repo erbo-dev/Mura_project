@@ -102,4 +102,3 @@ def test_isolated_schema_creation_includes_all_storage_models(tmp_path: Path) ->
     assert "books" in tables
     assert "recordings" in tables
     assert "processing_jobs" in tables
-

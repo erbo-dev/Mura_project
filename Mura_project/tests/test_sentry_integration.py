@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
-
 from mura.logging import RequestContextManager, WorkerJobContextManager
 from mura.sentry import (
     _before_send_sanitizer,
@@ -120,4 +116,3 @@ def test_capture_exception_safe_when_sentry_inactive():
         raise ValueError("Simulated unhandled exception")
     except ValueError as exc:
         capture_exception(exc, tags={"route": "/test"}, extra={"safe_key": "val"})
-
