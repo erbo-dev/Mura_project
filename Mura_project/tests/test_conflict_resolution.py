@@ -28,7 +28,7 @@ from mura.storage.conflict_resolution import (
     ConflictResolutionError,
     ConflictResolutionService,
 )
-from mura.storage.database import Database, RecordingRepository, RecordingRow
+from mura.storage.database import Database, PipelineResultRow, RecordingRepository, RecordingRow
 
 
 def _transcript(recording_id: str) -> TranscriptEnvelope:
@@ -201,6 +201,33 @@ def _seed_conflict(tmp_path: Path):
     assert report.open_conflicts == 1
     conflict = service.list_conflicts(family_id="family_1", status="open")[0]
     return database, recordings, archive, service, parent, spouse, people, conflict
+
+
+def test_conflict_evidence_only_includes_its_own_recording_and_claim(tmp_path: Path) -> None:
+    database, _recordings, _archive, service, parent, _spouse, _people, conflict = _seed_conflict(
+        tmp_path
+    )
+    evidence_id = parent.extraction.evidence_spans[0].evidence_id
+    with database.session_factory.begin() as session:
+        session.add(
+            PipelineResultRow(
+                recording_id="rec_1",
+                payload={
+                    "extraction": {
+                        "evidence_spans": [
+                            {"evidence_id": evidence_id, "text": "The narrator said this."},
+                            {"evidence_id": "unrelated", "text": "Other family's quote."},
+                        ]
+                    }
+                },
+            )
+        )
+
+    reviewed = service.get_conflict(family_id="family_1", conflict_id=conflict.conflict_id)
+    parent_claim = next(claim for claim in reviewed.claims if claim.recording_id == "rec_1")
+    assert parent_claim.evidence_quotes == ["The narrator said this."]
+    assert parent_claim.source_object_id
+    assert "Other family's quote." not in str(reviewed.model_dump())
 
 
 def test_resolved_preference_survives_reconciliation(tmp_path: Path) -> None:

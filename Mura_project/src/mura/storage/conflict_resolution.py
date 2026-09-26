@@ -22,7 +22,14 @@ from mura.storage.archive import (
     _relationship_state_status,
     _stable_id,
 )
-from mura.storage.database import JSON_VALUE, Base, Database, RecordingRow, utcnow
+from mura.storage.database import (
+    JSON_VALUE,
+    Base,
+    Database,
+    PipelineResultRow,
+    RecordingRow,
+    utcnow,
+)
 
 _AUTO_MATERIALIZABLE_CLASSES = {
     EvidenceClass.A_EXPLICIT.value,
@@ -67,6 +74,8 @@ class ConflictClaimView(StrictModel):
     evidence_class: str
     verification_status: str
     evidence_ids: list[str] = Field(default_factory=list)
+    evidence_quotes: list[str] = Field(default_factory=list)
+    source_object_id: str
     payload: dict[str, object]
 
 
@@ -575,21 +584,42 @@ class ConflictResolutionService:
     @staticmethod
     def _view(session: Session, conflict: ArchiveConflictRow) -> ConflictReviewView:
         claims = [session.get(ArchiveClaimRow, claim_id) for claim_id in conflict.claim_ids]
-        claim_views = [
-            ConflictClaimView(
-                claim_id=claim.claim_id,
-                recording_id=claim.recording_id,
-                object_type=claim.object_type,
-                predicate=claim.predicate,
-                status=claim.status,
-                evidence_class=claim.evidence_class,
-                verification_status=claim.verification_status,
-                evidence_ids=list(claim.evidence_ids),
-                payload=dict(claim.payload),
+        claim_views: list[ConflictClaimView] = []
+        for claim in claims:
+            if claim is None or claim.family_id != conflict.family_id:
+                continue
+            pipeline = session.get(PipelineResultRow, claim.recording_id)
+            extraction = pipeline.payload.get("extraction") if pipeline is not None else None
+            spans = extraction.get("evidence_spans") if isinstance(extraction, dict) else None
+            supported_ids = set(claim.evidence_ids or [])
+            quotes = (
+                [
+                    span["text"].strip()
+                    for span in spans
+                    if isinstance(span, dict)
+                    and isinstance(span.get("evidence_id"), str)
+                    and span["evidence_id"] in supported_ids
+                    and isinstance(span.get("text"), str)
+                    and span["text"].strip()
+                ]
+                if isinstance(spans, list)
+                else []
             )
-            for claim in claims
-            if claim is not None
-        ]
+            claim_views.append(
+                ConflictClaimView(
+                    claim_id=claim.claim_id,
+                    recording_id=claim.recording_id,
+                    source_object_id=claim.source_object_id,
+                    object_type=claim.object_type,
+                    predicate=claim.predicate,
+                    status=claim.status,
+                    evidence_class=claim.evidence_class,
+                    verification_status=claim.verification_status,
+                    evidence_ids=list(claim.evidence_ids),
+                    evidence_quotes=quotes,
+                    payload=dict(claim.payload),
+                )
+            )
         decisions = list(
             session.scalars(
                 select(ArchiveConflictDecisionRow)
