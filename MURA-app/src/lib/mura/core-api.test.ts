@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  acceptInvitation,
   CoreRequestError,
+  createFamilyInvitation,
   deleteAccount,
   deleteFamily,
   deleteRecording,
   exportFamilyData,
   fetchJob,
+  listFamilyInvitations,
+  previewInvitation,
   readApiError,
+  revokeFamilyInvitation,
   submitRecording,
 } from "@/lib/mura/core-api";
 import { currentSpeakerPersonId } from "@/lib/mura/scope";
@@ -240,5 +245,98 @@ describe("privacy lifecycle requests", () => {
     expect(url).toBe(`/api/mura/v1/families/${FAMILY}`);
     expect(init.method).toBe("DELETE");
     expect(JSON.parse(init.body as string)).toEqual({ confirm_family_id: FAMILY });
+  });
+});
+
+describe("family invitations lifecycle", () => {
+  const INV_ID = `invite_${"1".repeat(32)}`;
+  const TOKEN = "abcdef123456_-sampletoken";
+
+  it("creates an invitation with intended role", async () => {
+    const mockInv = {
+      invitation_id: INV_ID,
+      family_id: FAMILY,
+      created_by_user_id: "user_1",
+      role: "editor",
+      status: "pending",
+      invitation_url: `/invite/${TOKEN}`,
+      expires_at: "2026-10-01T00:00:00Z",
+      created_at: "2026-09-26T00:00:00Z",
+      accepted_at: null,
+      accepted_by_user_id: null,
+    };
+    const spy = vi.fn(async () => jsonResponse(mockInv));
+    vi.stubGlobal("fetch", spy);
+
+    const result = await createFamilyInvitation(FAMILY, "editor");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/mura/v1/families/${FAMILY}/invitations`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ role: "editor" });
+    expect(result).toEqual(mockInv);
+  });
+
+  it("lists pending invitations with status query parameter", async () => {
+    const mockList = [{ invitation_id: INV_ID, family_id: FAMILY, status: "pending" }];
+    const spy = vi.fn(async () => jsonResponse(mockList));
+    vi.stubGlobal("fetch", spy);
+
+    const result = await listFamilyInvitations(FAMILY, "pending");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url] = spy.mock.calls[0] as unknown as [string];
+    expect(url).toBe(`/api/mura/v1/families/${FAMILY}/invitations?status=pending`);
+    expect(result).toEqual(mockList);
+  });
+
+  it("revokes an invitation via POST to revoke endpoint", async () => {
+    const mockRevoked = { invitation_id: INV_ID, status: "revoked" };
+    const spy = vi.fn(async () => jsonResponse(mockRevoked));
+    vi.stubGlobal("fetch", spy);
+
+    const result = await revokeFamilyInvitation(FAMILY, INV_ID);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/mura/v1/families/${FAMILY}/invitations/${INV_ID}/revoke`);
+    expect(init.method).toBe("POST");
+    expect(result).toEqual(mockRevoked);
+  });
+
+  it("previews an invitation using public token preview route", async () => {
+    const mockPreview = {
+      invitation_id: INV_ID,
+      family_id: FAMILY,
+      family_name: "Test Family",
+      role: "viewer",
+      status: "pending",
+      inviter_name: "Owner",
+      expires_at: "2026-10-01T00:00:00Z",
+    };
+    const spy = vi.fn(async () => jsonResponse(mockPreview));
+    vi.stubGlobal("fetch", spy);
+
+    const result = await previewInvitation(TOKEN);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url] = spy.mock.calls[0] as unknown as [string];
+    expect(url).toBe(`/api/mura/v1/invitations/${TOKEN}/preview`);
+    expect(result).toEqual(mockPreview);
+  });
+
+  it("accepts an invitation via POST to accept endpoint", async () => {
+    const mockAccept = { family_id: FAMILY, role: "editor", replayed: false };
+    const spy = vi.fn(async () => jsonResponse(mockAccept));
+    vi.stubGlobal("fetch", spy);
+
+    const result = await acceptInvitation(TOKEN);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/mura/v1/invitations/${TOKEN}/accept`);
+    expect(init.method).toBe("POST");
+    expect(result).toEqual(mockAccept);
   });
 });

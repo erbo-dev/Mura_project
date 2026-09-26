@@ -28,6 +28,8 @@ const CHAPTER_NUM = "[0-9]{1,3}";
 /** Story and conflict ids are extraction-minted, so their shape is looser. */
 const STORY = "[A-Za-z0-9_-]{1,128}";
 const CONFLICT = "[A-Za-z0-9_-]{1,128}";
+const INVITATION = "invite_[a-f0-9]{32}";
+const INVITATION_TOKEN = "[a-zA-Z0-9_-]{20,128}";
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -121,6 +123,22 @@ const ALLOWED: ReadonlyArray<{ method: Method; pattern: RegExp }> = [
     method: "DELETE",
     pattern: new RegExp(`^v1/families/${FAMILY}$`),
   },
+
+  // Family Invitations Lifecycle
+  { method: "POST", pattern: new RegExp(`^v1/families/${FAMILY}/invitations$`) },
+  { method: "GET", pattern: new RegExp(`^v1/families/${FAMILY}/invitations$`) },
+  {
+    method: "POST",
+    pattern: new RegExp(`^v1/families/${FAMILY}/invitations/${INVITATION}/revoke$`),
+  },
+  {
+    method: "GET",
+    pattern: new RegExp(`^v1/invitations/${INVITATION_TOKEN}/preview$`),
+  },
+  {
+    method: "POST",
+    pattern: new RegExp(`^v1/invitations/${INVITATION_TOKEN}/accept$`),
+  },
 ];
 
 export function isAllowedCoreRoute(method: string, route: string): boolean {
@@ -128,6 +146,11 @@ export function isAllowedCoreRoute(method: string, route: string): boolean {
   // escape the patterns above, so reject those before matching.
   if (route.includes("..") || route.includes("//") || route.startsWith("/")) return false;
   return ALLOWED.some((entry) => entry.method === method && entry.pattern.test(route));
+}
+
+export function isPublicCoreRoute(method: string, route: string): boolean {
+  if (route.includes("..") || route.includes("//") || route.startsWith("/")) return false;
+  return method === "GET" && new RegExp(`^v1/invitations/${INVITATION_TOKEN}/preview$`).test(route);
 }
 
 /** Capabilities gate the record button, so it gets a shorter budget. */
@@ -154,11 +177,25 @@ function allowedQuery(method: string, route: string, search: URLSearchParams): s
   if (!search.size) return "";
   const download = method === "GET" && /\/books\/book_[a-f0-9]{32}\/download$/.test(route);
   const paginated = method === "GET" && /\/((books)|(stories))$/.test(route);
-  const allowed = download ? ["format"] : paginated ? ["limit", "offset"] : [];
+  const invitations =
+    method === "GET" && new RegExp(`^v1/families/${FAMILY}/invitations$`).test(route);
+  const allowed = download
+    ? ["format"]
+    : paginated
+      ? ["limit", "offset"]
+      : invitations
+        ? ["status"]
+        : [];
   const clean = new URLSearchParams();
   for (const [key, value] of search) {
     if (!allowed.includes(key) || clean.has(key)) return null;
-    if (download ? !["pdf", "epub"].includes(value) : !/^\d{1,9}$/.test(value)) return null;
+    if (download) {
+      if (!["pdf", "epub"].includes(value)) return null;
+    } else if (paginated) {
+      if (!/^\d{1,9}$/.test(value)) return null;
+    } else if (invitations) {
+      if (!["pending", "accepted", "revoked", "expired"].includes(value)) return null;
+    }
     clean.set(key, value);
   }
   return clean.toString() ? `?${clean}` : "";
@@ -216,24 +253,30 @@ export async function handleCoreProxy(request: Request, path: string[]): Promise
   // Resolved from the server session only. Any Authorization header the caller
   // supplied is discarded: presenting your own bearer must not make the proxy
   // forward it.
+  const isPublic = isPublicCoreRoute(request.method, route);
   const session = await readServerAuthSession(request);
-  if (session.status === "provider_unconfigured") {
-    return envelope(
-      AUTH_PROVIDER_UNCONFIGURED,
-      "Вход пока не настроен.",
-      false,
-      requestId,
-      401,
-    );
-  }
-  if (session.status !== "authenticated") {
-    return envelope(AUTHENTICATION_REQUIRED, "Требуется вход.", false, requestId, 401);
+
+  if (!isPublic) {
+    if (session.status === "provider_unconfigured") {
+      return envelope(
+        AUTH_PROVIDER_UNCONFIGURED,
+        "Вход пока не настроен.",
+        false,
+        requestId,
+        401,
+      );
+    }
+    if (session.status !== "authenticated") {
+      return envelope(AUTHENTICATION_REQUIRED, "Требуется вход.", false, requestId, 401);
+    }
   }
 
   const headers = new Headers({
-    Authorization: `Bearer ${session.accessToken}`,
     "x-request-id": requestId,
   });
+  if (session.status === "authenticated") {
+    headers.set("Authorization", `Bearer ${session.accessToken}`);
+  }
   const isBinary = request.method === "GET" && binaryRoute(route);
   if (isBinary && route.endsWith("/audio")) {
     const range = request.headers.get("range");

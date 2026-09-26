@@ -10,6 +10,7 @@ routes do -- one implementation, one place to get it wrong.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -17,6 +18,11 @@ from pydantic import Field
 
 from apps.api.errors import (
     ACCOUNT_DELETION_REQUIRES_OWNER_TRANSFER,
+    INVALID_INVITATION_ROLE,
+    INVITATION_ALREADY_ACCEPTED,
+    INVITATION_EXPIRED,
+    INVITATION_NOT_FOUND,
+    INVITATION_REVOKED,
     SOLE_OWNER_REQUIRED,
 )
 from mura.domain.models import StrictModel
@@ -27,6 +33,11 @@ from mura.storage.identity import (
     AccountDeletionBlockedError,
     FamilyDeleteAuthorizationError,
     IdentityRepository,
+    InvalidInvitationRoleError,
+    InvitationAlreadyAcceptedError,
+    InvitationExpiredError,
+    InvitationNotFoundError,
+    InvitationRevokedError,
     MembershipNotFoundError,
     SoleOwnerError,
 )
@@ -312,15 +323,244 @@ def sole_owner_error() -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SOLE_OWNER_REQUIRED)
 
 
+def _aware_req(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _aware_opt(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+class CreateInvitationRequest(StrictModel):
+    role: FamilyRole = FamilyRole.EDITOR
+
+
+class InvitationView(StrictModel):
+    invitation_id: str
+    family_id: str
+    intended_role: FamilyRole
+    status: str
+    expires_at: datetime
+    created_at: datetime
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class InvitationCreatedView(InvitationView):
+    invitation_url: str
+
+
+class InvitationPreviewView(StrictModel):
+    family_name: str
+    inviter_name: str | None = None
+    intended_role: FamilyRole
+    status: str
+    expires_at: datetime
+
+
+class InvitationAcceptResultView(StrictModel):
+    family_id: str
+    role: FamilyRole
+    already_member: bool
+    membership_id: str
+
+
+def register_invitation_routes(
+    app: FastAPI,
+    *,
+    principal_dependency: Callable[..., Principal],
+    manage_members_dependency: Callable[..., object],
+    identity_repository_dependency: Callable[..., object],
+) -> None:
+    def _repository(runtime: object) -> IdentityRepository:
+        return cast(IdentityRepository, runtime)
+
+    @app.post(
+        "/v1/families/{family_id}/invitations",
+        response_model=InvitationCreatedView,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_invitation(
+        family_id: str,
+        request: CreateInvitationRequest,
+        context: object = Depends(manage_members_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> InvitationCreatedView:
+        authorized = cast(AuthorizedFamilyContext, context)
+        identity = _repository(repository)
+        try:
+            invitation, token = identity.create_invitation(
+                family_id=family_id,
+                creator_user_id=authorized.user_id,
+                intended_role=request.role,
+            )
+        except InvalidInvitationRoleError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=INVALID_INVITATION_ROLE,
+            ) from exc
+        return InvitationCreatedView(
+            invitation_id=invitation.invitation_id,
+            family_id=invitation.family_id,
+            intended_role=FamilyRole(invitation.intended_role),
+            status=invitation.status,
+            expires_at=_aware_req(invitation.expires_at),
+            created_at=_aware_req(invitation.created_at),
+            accepted_at=_aware_opt(invitation.accepted_at),
+            revoked_at=_aware_opt(invitation.revoked_at),
+            invitation_url=f"/invite/{token}",
+        )
+
+    @app.get(
+        "/v1/families/{family_id}/invitations",
+        response_model=list[InvitationView],
+    )
+    def list_invitations(
+        family_id: str,
+        context: object = Depends(manage_members_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> list[InvitationView]:
+        del context
+        identity = _repository(repository)
+        rows = identity.list_invitations(family_id)
+        return [
+            InvitationView(
+                invitation_id=row.invitation_id,
+                family_id=row.family_id,
+                intended_role=FamilyRole(row.intended_role),
+                status=row.status,
+                expires_at=_aware_req(row.expires_at),
+                created_at=_aware_req(row.created_at),
+                accepted_at=_aware_opt(row.accepted_at),
+                revoked_at=_aware_opt(row.revoked_at),
+            )
+            for row in rows
+        ]
+
+    @app.post(
+        "/v1/families/{family_id}/invitations/{invitation_id}/revoke",
+        response_model=InvitationView,
+    )
+    def revoke_invitation(
+        family_id: str,
+        invitation_id: str,
+        context: object = Depends(manage_members_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> InvitationView:
+        authorized = cast(AuthorizedFamilyContext, context)
+        identity = _repository(repository)
+        try:
+            row = identity.revoke_invitation(
+                family_id=family_id,
+                invitation_id=invitation_id,
+                revoker_user_id=authorized.user_id,
+            )
+        except InvitationNotFoundError as exc:
+            raise _not_found() from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=INVITATION_ALREADY_ACCEPTED,
+            ) from exc
+        return InvitationView(
+            invitation_id=row.invitation_id,
+            family_id=row.family_id,
+            intended_role=FamilyRole(row.intended_role),
+            status=row.status,
+            expires_at=_aware_req(row.expires_at),
+            created_at=_aware_req(row.created_at),
+            accepted_at=_aware_opt(row.accepted_at),
+            revoked_at=_aware_opt(row.revoked_at),
+        )
+
+    @app.get(
+        "/v1/invitations/{token}/preview",
+        response_model=InvitationPreviewView,
+    )
+    def preview_invitation(
+        token: str,
+        repository: object = Depends(identity_repository_dependency),
+    ) -> InvitationPreviewView:
+        identity = _repository(repository)
+        try:
+            invitation, family, inviter = identity.get_invitation_preview(token)
+        except InvitationNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=INVITATION_NOT_FOUND,
+            ) from exc
+        return InvitationPreviewView(
+            family_name=family.name,
+            inviter_name=inviter.display_name if inviter else None,
+            intended_role=FamilyRole(invitation.intended_role),
+            status=invitation.status,
+            expires_at=_aware_req(invitation.expires_at),
+        )
+
+    @app.post(
+        "/v1/invitations/{token}/accept",
+        response_model=InvitationAcceptResultView,
+    )
+    def accept_invitation(
+        token: str,
+        principal: Principal = Depends(principal_dependency),
+        repository: object = Depends(identity_repository_dependency),
+    ) -> InvitationAcceptResultView:
+        identity = _repository(repository)
+        try:
+            invitation, membership, already_member = identity.accept_invitation(
+                token=token,
+                user_id=principal.user_id,
+            )
+        except InvitationNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=INVITATION_NOT_FOUND,
+            ) from exc
+        except InvitationRevokedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=INVITATION_REVOKED,
+            ) from exc
+        except InvitationExpiredError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=INVITATION_EXPIRED,
+            ) from exc
+        except InvitationAlreadyAcceptedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=INVITATION_ALREADY_ACCEPTED,
+            ) from exc
+        return InvitationAcceptResultView(
+            family_id=invitation.family_id,
+            role=FamilyRole(membership.role),
+            already_member=already_member,
+            membership_id=membership.membership_id,
+        )
+
+
 __all__ = [
     "AccountDeletionResult",
     "CreateFamilyRequest",
+    "CreateInvitationRequest",
     "DeleteFamilyRequest",
     "FamilyView",
+    "InvitationAcceptResultView",
+    "InvitationCreatedView",
+    "InvitationPreviewView",
+    "InvitationView",
     "MemberView",
     "SoleOwnerError",
     "UserView",
     "register_identity_routes",
+    "register_invitation_routes",
     "register_membership_admin_routes",
     "sole_owner_error",
 ]

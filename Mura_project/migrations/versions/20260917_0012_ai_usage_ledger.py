@@ -73,4 +73,3 @@ def downgrade() -> None:
     op.drop_index("ix_ai_usage_events_provider", table_name="ai_usage_events")
     op.drop_index("ix_ai_usage_events_created_at", table_name="ai_usage_events")
     op.drop_table("ai_usage_events")
-

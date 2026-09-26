@@ -63,6 +63,10 @@ ROUTE_AUTH_CLASSES: dict[str, AuthClass] = {
     "/v1/families/{family_id}/books/{book_id}/cancel": AuthClass.USER_APP,
     "/v1/families/{family_id}/books/{book_id}/regenerate": AuthClass.USER_APP,
     "/v1/families/{family_id}/privacy/export": AuthClass.USER_APP,
+    "/v1/families/{family_id}/invitations": AuthClass.USER_APP,
+    "/v1/families/{family_id}/invitations/{invitation_id}/revoke": AuthClass.USER_APP,
+    "/v1/invitations/{token}/preview": AuthClass.PUBLIC_INFRA,
+    "/v1/invitations/{token}/accept": AuthClass.USER_APP,
     # Deterministic replay is release/evaluation tooling reached only by the
     # smoke gate and evaluation tests. Family membership must not grant it.
     "/v1/families/{family_id}/replays": AuthClass.SERVICE_INTERNAL,
@@ -127,6 +131,9 @@ PRINCIPAL_NATIVE: frozenset[str] = frozenset(
         "/v1/families/{family_id}/books/{book_id}/cancel",
         "/v1/families/{family_id}/books/{book_id}/regenerate",
         "/v1/families/{family_id}/privacy/export",
+        "/v1/families/{family_id}/invitations",
+        "/v1/families/{family_id}/invitations/{invitation_id}/revoke",
+        "/v1/invitations/{token}/accept",
     }
 )
 
@@ -137,6 +144,8 @@ CAPABILITY_BY_ROUTE: dict[str, str] = {
     "/v1/families/{family_id}": "read_family",
     "/v1/families/{family_id}/members": "read_members",
     "/v1/families/{family_id}/members/{user_id}": "manage_members",
+    "/v1/families/{family_id}/invitations": "manage_members",
+    "/v1/families/{family_id}/invitations/{invitation_id}/revoke": "manage_members",
     "/v1/families/{family_id}/recordings": "create_recording",
     "/v1/families/{family_id}/recordings/{recording_id}": "read_recordings",
     "/v1/families/{family_id}/recordings/{recording_id}/review-items": "read_review",

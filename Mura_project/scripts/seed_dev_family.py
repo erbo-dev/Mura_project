@@ -18,6 +18,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -72,7 +73,7 @@ def build_result(recording_id: str) -> PipelineResult:
         evidence_class=EvidenceClass.A_EXPLICIT,
         mention_ids=["mention_aisulu", "mention_marat", "mention_bolat"],
     )
-    common = {
+    common: dict[str, Any] = {
         "source_segment_ids": ["seg_001"],
         "evidence_ids": [evidence.evidence_id],
         "evidence_class": EvidenceClass.A_EXPLICIT,
@@ -222,7 +223,7 @@ def build_long_result(recording_id: str) -> PipelineResult:
         evidence_class=EvidenceClass.A_EXPLICIT,
         mention_ids=["mention_bibigul", "mention_sabyr"],
     )
-    common = {
+    common: dict[str, Any] = {
         "source_segment_ids": ["seg_001"],
         "evidence_ids": [evidence.evidence_id],
         "evidence_class": EvidenceClass.A_EXPLICIT,

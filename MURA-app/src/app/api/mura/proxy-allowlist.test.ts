@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedCoreRoute } from "./[...path]/proxy";
+import { isAllowedCoreRoute, isPublicCoreRoute } from "./[...path]/proxy";
 
 const FAMILY = `family_${"a".repeat(32)}`;
 const USER = `user_${"c".repeat(32)}`;
 const RECORDING = `rec_${"a".repeat(32)}`;
 const JOB = `job_${"b".repeat(32)}`;
+const INVITATION = `invite_${"f".repeat(32)}`;
+const TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890_-";
 
 describe("proxy allowlist", () => {
   it("allows the canonical application endpoints", () => {
@@ -83,6 +85,23 @@ describe("proxy allowlist", () => {
     expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}/recordings/${RECORDING}`)).toBe(true);
     expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}/books/${BOOK}`)).toBe(true);
     expect(isAllowedCoreRoute("DELETE", `v1/families/${FAMILY}`)).toBe(true);
+
+    // Family Invitations Lifecycle
+    expect(isAllowedCoreRoute("POST", `v1/families/${FAMILY}/invitations`)).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/families/${FAMILY}/invitations`)).toBe(true);
+    expect(
+      isAllowedCoreRoute("POST", `v1/families/${FAMILY}/invitations/${INVITATION}/revoke`),
+    ).toBe(true);
+    expect(isAllowedCoreRoute("GET", `v1/invitations/${TOKEN}/preview`)).toBe(true);
+    expect(isAllowedCoreRoute("POST", `v1/invitations/${TOKEN}/accept`)).toBe(true);
+  });
+
+  it("identifies public unauthenticated preview route correctly", () => {
+    expect(isPublicCoreRoute("GET", `v1/invitations/${TOKEN}/preview`)).toBe(true);
+    expect(isPublicCoreRoute("POST", `v1/invitations/${TOKEN}/accept`)).toBe(false);
+    expect(isPublicCoreRoute("GET", `v1/families/${FAMILY}/invitations`)).toBe(false);
+    expect(isPublicCoreRoute("POST", `v1/families/${FAMILY}/invitations`)).toBe(false);
+    expect(isPublicCoreRoute("GET", `v1/invitations/../preview`)).toBe(false);
   });
 
   it("still refuses family surfaces nothing consumes", () => {
