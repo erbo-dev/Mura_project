@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CoreRequestError,
+  deleteAccount,
   deleteFamily,
   deleteRecording,
   exportFamilyData,
@@ -22,6 +23,29 @@ function jsonResponse(body: unknown, status = 200) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("account deletion", () => {
+  it("uses only DELETE /v1/me and preserves provider deletion truth", async () => {
+    const result = { mura_data_deleted: true, identity_provider_account_deleted: false, requires_provider_sign_out: true };
+    const fetchSpy = vi.fn(async () => jsonResponse(result));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    expect(await deleteAccount()).toEqual(result);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/mura/v1/me");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("preserves the canonical sole-owner blocker", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      error: { code: "account_deletion_requires_owner_transfer", message: "Transfer ownership first.", retryable: false, request_id: "req_1" },
+    }, 409)));
+
+    await expect(deleteAccount()).rejects.toMatchObject({
+      status: 409, api: { code: "account_deletion_requires_owner_transfer" },
+    });
+  });
 });
 
 describe("canonical error envelope", () => {

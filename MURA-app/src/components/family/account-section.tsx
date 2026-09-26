@@ -21,6 +21,7 @@
 
 import { SignOutButton } from "@clerk/nextjs";
 import { DevSignOutButton } from "@/components/auth/dev-auth-panel";
+import { DeleteAccountControl } from "@/components/family/delete-account-control";
 import { SupabaseSignOutButton } from "@/components/auth/supabase-sign-out";
 import { useMuraI18n } from "@/lib/i18n";
 import { useMuraSession } from "@/lib/mura/session-provider";
@@ -40,7 +41,8 @@ export function AccountSection() {
   return (
     // The «АККАУНТ» group label already names this section, so the card
     // heading that used to repeat it is gone along with the card.
-    <section className="flex items-center justify-between gap-4">
+    <section>
+      <div className="flex items-center justify-between gap-4">
       {/* `user_a78b1a9c…` is an internal identifier, not a name. When the
           provider supplies neither a display name nor an email there is
           nothing to call the user, and saying so plainly beats printing a
@@ -62,6 +64,8 @@ export function AccountSection() {
       ) : (
         <DevSignOutButton className={SIGN_OUT_CLASS} />
       )}
+      </div>
+      {provider !== "none" && <DeleteAccountControl provider={provider} />}
     </section>
   );
 }

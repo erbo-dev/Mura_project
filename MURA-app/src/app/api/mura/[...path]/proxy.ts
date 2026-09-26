@@ -150,6 +150,20 @@ function binaryRoute(route: string): boolean {
   );
 }
 
+function allowedQuery(method: string, route: string, search: URLSearchParams): string | null {
+  if (!search.size) return "";
+  const download = method === "GET" && /\/books\/book_[a-f0-9]{32}\/download$/.test(route);
+  const paginated = method === "GET" && /\/((books)|(stories))$/.test(route);
+  const allowed = download ? ["format"] : paginated ? ["limit", "offset"] : [];
+  const clean = new URLSearchParams();
+  for (const [key, value] of search) {
+    if (!allowed.includes(key) || clean.has(key)) return null;
+    if (download ? !["pdf", "epub"].includes(value) : !/^\d{1,9}$/.test(value)) return null;
+    clean.set(key, value);
+  }
+  return clean.toString() ? `?${clean}` : "";
+}
+
 /**
  * Core's base URL, and nothing else.
  *
@@ -226,6 +240,11 @@ export async function handleCoreProxy(request: Request, path: string[]): Promise
     if (range) headers.set("range", range);
   }
 
+  const query = allowedQuery(request.method, route, new URL(request.url).searchParams);
+  if (query === null) {
+    return envelope("invalid_request", "Invalid query parameters.", false, requestId, 400);
+  }
+
   let body: BodyInit | undefined;
   if (
     request.method === "POST" ||
@@ -253,7 +272,7 @@ export async function handleCoreProxy(request: Request, path: string[]): Promise
       : null;
     let response: Response;
     try {
-      response = await fetch(`${baseUrl}/${route}`, {
+      response = await fetch(`${baseUrl}/${route}${query}`, {
       method: request.method,
       headers,
       body,

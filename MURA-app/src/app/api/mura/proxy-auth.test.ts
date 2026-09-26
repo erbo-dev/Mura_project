@@ -244,6 +244,34 @@ describe("binary transport", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([37, 80]));
   });
 
+  it("forwards EPUB format but rejects unknown and duplicate queries", async () => {
+    signedIn();
+    const fetchSpy = vi.fn(async () => new Response(new Uint8Array([80, 75]), {
+      headers: { "content-type": "application/epub+zip", "content-disposition": "attachment; filename=book.epub" },
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const route = `v1/families/${FAMILY}/books/book_${"a".repeat(32)}/download`;
+    const response = await handleCoreProxy(get(`${route}?format=epub`), route.split("/"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain("book.epub");
+    expect((fetchSpy.mock.calls[0] as unknown as [string])[0]).toBe(`${CORE_URL}/${route}?format=epub`);
+    expect((await handleCoreProxy(get(`${route}?format=epub&format=pdf`), route.split("/"))).status).toBe(400);
+    expect((await handleCoreProxy(get(`${route}?storage_key=private`), route.split("/"))).status).toBe(400);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves pagination on Book and story lists", async () => {
+    signedIn();
+    const fetchSpy = upstream();
+    vi.stubGlobal("fetch", fetchSpy);
+    for (const collection of ["books", "stories"]) {
+      const route = `v1/families/${FAMILY}/${collection}`;
+      await handleCoreProxy(get(`${route}?limit=20&offset=40`), route.split("/"));
+    }
+    expect((fetchSpy.mock.calls[0] as unknown as [string])[0]).toBe(`${CORE_URL}/v1/families/${FAMILY}/books?limit=20&offset=40`);
+    expect((fetchSpy.mock.calls[1] as unknown as [string])[0]).toBe(`${CORE_URL}/v1/families/${FAMILY}/stories?limit=20&offset=40`);
+  });
+
   it("never forwards Range or upstream binary headers on ordinary JSON", async () => {
     signedIn();
     const fetchSpy = vi.fn(async () => new Response("{}", {
