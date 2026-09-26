@@ -91,7 +91,11 @@ def test_route_introspection_sees_the_whole_surface(application: Any) -> None:
 
 
 def test_expected_routes_land_in_expected_classes() -> None:
-    assert routes_in(AuthClass.PUBLIC_INFRA) == {"/health", "/ready"}
+    assert routes_in(AuthClass.PUBLIC_INFRA) == {
+        "/health",
+        "/ready",
+        "/v1/invitations/{token}/preview",
+    }
     assert routes_in(AuthClass.WORKER) == {"/v1/workers/register", "/v1/workers/current"}
     assert routes_in(AuthClass.OPERATIONS) == {
         "/v1/operations/release",
