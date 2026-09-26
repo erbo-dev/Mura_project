@@ -11,7 +11,7 @@ from mura.ops.monitoring_smoke import (
 )
 
 
-def test_privacy_leakage_safeguard_clean() -> None:
+def test_privacy_leak_clean() -> None:
     clean_summary = {
         "queue": {
             "pending": 5,
@@ -28,7 +28,7 @@ def test_privacy_leakage_safeguard_clean() -> None:
     assert len(violations) == 0
 
 
-def test_privacy_leakage_safeguard_flags_prose_and_keys() -> None:
+def test_privacy_leak_flagged() -> None:
     leaky_summary = {
         "queue": {"pending": 1},
         "leak_1": {"transcript": "Some private speech from recording"},
@@ -45,7 +45,7 @@ def test_privacy_leakage_safeguard_flags_prose_and_keys() -> None:
     assert any("prose" in v for v in violations)
 
 
-def test_evaluate_monitoring_thresholds() -> None:
+def test_eval_thresholds() -> None:
     bad_summary = {
         "queue": {
             "pending": 100,
@@ -67,7 +67,7 @@ def test_evaluate_monitoring_thresholds() -> None:
     assert len(warnings) == 4
 
 
-def test_monitoring_smoke_runner_mocked() -> None:
+def test_monitor_smoke_mocked() -> None:
     with patch("requests.get") as mock_get:
 
         def _fake_get(url, **kwargs):

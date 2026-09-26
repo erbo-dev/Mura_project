@@ -30,7 +30,7 @@ def test_redact_connection_url() -> None:
     assert redact_connection_url(url_nopass) == url_nopass
 
 
-def test_parse_pg_connection_params() -> None:
+def test_parse_pg_params() -> None:
     url = "postgresql+psycopg://mura_user:secret_pass@db.example.com:5433/mura_verification"
     params = parse_pg_connection_params(url)
     assert params["host"] == "db.example.com"
@@ -40,7 +40,7 @@ def test_parse_pg_connection_params() -> None:
     assert params["dbname"] == "mura_verification"
 
 
-def test_safety_rejects_production_environment() -> None:
+def test_reject_prod_env() -> None:
     safe, reason = is_safe_restore_target(
         "postgresql://mura:pass@127.0.0.1:5432/mura_verification",
         environment="production",
@@ -55,7 +55,7 @@ def test_safety_rejects_production_environment() -> None:
         )
 
 
-def test_safety_rejects_production_database_names() -> None:
+def test_reject_prod_db() -> None:
     unsafe_urls = [
         "postgresql://mura:pass@127.0.0.1:5432/mura_production",
         "postgresql://mura:pass@127.0.0.1:5432/mura_prod",
@@ -70,7 +70,7 @@ def test_safety_rejects_production_database_names() -> None:
             assert_safe_restore_target(url, environment="staging")
 
 
-def test_safety_accepts_approved_target_names() -> None:
+def test_accept_safe_targets() -> None:
     safe_urls = [
         "postgresql://mura:pass@127.0.0.1:5432/mura_restore_test",
         "postgresql://mura:pass@127.0.0.1:5432/mura_verification",
@@ -84,7 +84,7 @@ def test_safety_accepts_approved_target_names() -> None:
         assert_safe_restore_target(url, environment="staging")
 
 
-def test_pg_dump_redacts_credentials_on_failure(tmp_path: Path) -> None:
+def test_pg_dump_redaction(tmp_path: Path) -> None:
     dump_out = tmp_path / "test.dump"
     with patch("subprocess.run") as mock_run:
         mock_proc = MagicMock()
@@ -100,7 +100,7 @@ def test_pg_dump_redacts_credentials_on_failure(tmp_path: Path) -> None:
         assert "***" in err_str
 
 
-def test_pg_restore_enforces_safety_guard(tmp_path: Path) -> None:
+def test_pg_restore_safety(tmp_path: Path) -> None:
     dump_file = tmp_path / "fake.dump"
     dump_file.write_bytes(b"dummy")
 

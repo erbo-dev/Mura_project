@@ -36,7 +36,7 @@ def test_validate_key_safety() -> None:
     assert not validate_key_safety("  ")
 
 
-def test_reconciliation_healthy_and_missing(test_db: Database, tmp_path: Path) -> None:
+def test_reconcile_healthy_miss(test_db: Database, tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
@@ -92,7 +92,7 @@ def test_reconciliation_healthy_and_missing(test_db: Database, tmp_path: Path) -
     assert missing_issue.storage_key == missing_key
 
 
-def test_reconciliation_orphan_age_filter(test_db: Database, tmp_path: Path) -> None:
+def test_reconcile_orphan_age(test_db: Database, tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
@@ -117,7 +117,7 @@ def test_reconciliation_orphan_age_filter(test_db: Database, tmp_path: Path) -> 
     assert "inflight.wav" not in [i.storage_key for i in report.issues]
 
 
-def test_reconciliation_size_and_hash_mismatch(test_db: Database, tmp_path: Path) -> None:
+def test_reconcile_size_hash(test_db: Database, tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
@@ -170,7 +170,7 @@ def test_reconciliation_size_and_hash_mismatch(test_db: Database, tmp_path: Path
     assert report.healthy == 0
 
 
-def test_reconciliation_mixed_audio_and_book(test_db: Database, tmp_path: Path) -> None:
+def test_reconcile_mixed_audio(test_db: Database, tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     book_dir = tmp_path / "books"
     audio_dir.mkdir(parents=True, exist_ok=True)
@@ -240,7 +240,7 @@ def test_reconciliation_mixed_audio_and_book(test_db: Database, tmp_path: Path) 
     assert report.orphaned == 0
 
 
-def test_reconciliation_storage_backend_error_produces_incomplete(test_db: Database) -> None:
+def test_reconcile_backend_err(test_db: Database) -> None:
     with patch("mura.ops.storage_reconciliation.query_supabase_storage_objects") as mock_query:
         mock_query.side_effect = RuntimeError("Supabase storage connection timeout")
 

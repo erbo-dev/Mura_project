@@ -498,10 +498,13 @@ def verify_restored_database(
     # 1. Verify single linear Alembic head
     expected_head = get_expected_alembic_head(project_root)
     with database.session_factory() as session:
-        res = session.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-        if not res or res[0] != expected_head:
+        version_rows: list[Any] = list(
+            session.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+        )
+        if not version_rows or version_rows[0] != expected_head:
             raise BackupRestoreError(
-                f"Alembic revision mismatch on restored DB: expected {expected_head}, got {res}"
+                f"Alembic revision mismatch on restored DB: "
+                f"expected {expected_head}, got {version_rows}"
             )
 
         # 2. Verify row counts and integrity

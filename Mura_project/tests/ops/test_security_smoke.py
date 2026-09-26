@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from mura.ops.security_smoke import SecuritySmokeReport, SecuritySmokeRunner
 
 
-def test_security_smoke_runner_auth_and_headers() -> None:
+def test_sec_smoke_auth_headers() -> None:
     with patch("requests.get") as mock_get:
 
         def _fake_get(url, **kwargs):
@@ -43,7 +43,7 @@ def test_security_smoke_runner_auth_and_headers() -> None:
         assert report.failed == 0
 
 
-def test_bola_isolation_blocked_without_token() -> None:
+def test_bola_blocked_no_token() -> None:
     runner = SecuritySmokeRunner(base_url="http://test-security:8000")
     report = SecuritySmokeReport()
     runner.run_bola_isolation_checks(report, family_a_token=None, family_b_id="fam_b")
@@ -52,7 +52,7 @@ def test_bola_isolation_blocked_without_token() -> None:
     assert report.checks[0].status == "BLOCKED"
 
 
-def test_bola_isolation_passes_on_404() -> None:
+def test_bola_passes_on_404() -> None:
     with patch("requests.get") as mock_get:
         resp = MagicMock()
         resp.status_code = 404
@@ -73,7 +73,7 @@ def test_bola_isolation_passes_on_404() -> None:
         assert all(c.status == "PASS" for c in report.checks)
 
 
-def test_storage_credentials_leaked_detection() -> None:
+def test_storage_creds_leak() -> None:
     with patch("requests.get") as mock_get:
         resp = MagicMock()
         resp.status_code = 200

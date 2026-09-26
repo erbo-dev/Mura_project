@@ -15,7 +15,7 @@ from mura.ops.load_harness import (
 from mura.storage.database import Database
 
 
-def test_latency_metrics_percentiles() -> None:
+def test_latency_percentiles() -> None:
     samples = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
     metrics = LatencyMetrics.from_samples(samples)
 
@@ -32,7 +32,7 @@ def test_latency_metrics_percentiles() -> None:
     assert empty.p50_ms == 0.0
 
 
-def test_load_harness_in_process_execution() -> None:
+def test_load_harness_run() -> None:
     async def _async_test() -> None:
         app = FastAPI()
 
@@ -90,7 +90,7 @@ def test_load_harness_in_process_execution() -> None:
         harness = LoadHarness(
             base_url="http://testserver",
             app=app,
-            auth_token="test_token",
+            auth_token="token_load_bench",
             operations_token="operator_token",
             concurrency=5,
         )
@@ -115,7 +115,7 @@ def test_load_harness_in_process_execution() -> None:
     asyncio.run(_async_test())
 
 
-def test_benchmark_worker_throughput(tmp_path: Path) -> None:
+def test_worker_throughput(tmp_path: Path) -> None:
     db_file = tmp_path / "worker_bench.db"
     db = Database(f"sqlite+pysqlite:///{db_file}")
     db.create_schema()
