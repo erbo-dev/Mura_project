@@ -111,7 +111,7 @@ def scan_local_storage(root_dir: Path) -> dict[str, PhysicalObject]:
                     size_bytes=stat.st_size,
                     modified_at=mtime,
                 )
-            except Exception:
+            except OSError:  # nosec B112
                 continue
     return objects
 

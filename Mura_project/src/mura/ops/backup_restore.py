@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -214,7 +214,7 @@ def run_pg_dump(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603
             cmd,
             env=env,
             capture_output=True,
@@ -273,7 +273,7 @@ def run_pg_restore(
         env["PGPASSWORD"] = params["password"]
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603
             cmd,
             env=env,
             capture_output=True,
