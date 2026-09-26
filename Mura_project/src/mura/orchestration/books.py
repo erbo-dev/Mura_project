@@ -33,6 +33,8 @@ from mura.book.prompts import (
 from mura.book.reviewer import review_chapter
 from mura.book.snapshot_validation import validate_snapshot_closure
 from mura.book.writer import repair_chapter, write_chapter
+from mura.cost import calculate_ai_cost
+from mura.cost_guards import CostGuardService
 from mura.domain.book_models import (
     BookBlueprint,
     BookLanguage,
@@ -105,12 +107,14 @@ class BookJobWorker:
         export_repo: BookExportRepository | None = None,
         export_service: ExportService | None = None,
         blueprint_limits: BlueprintLimits | None = None,
+        cost_guards: CostGuardService | None = None,
     ) -> None:
         self.db = db
         self.deepseek_client = deepseek_client
         self.artifact_storage = artifact_storage
         self.pdf_renderer = pdf_renderer
         self.ai_ledger = ai_ledger or AIUsageLedger(db)
+        self.cost_guards = cost_guards or CostGuardService(db)
         self.poll_interval_seconds = poll_interval_seconds
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
@@ -401,13 +405,43 @@ class BookJobWorker:
                 if book.output_language in BookLanguage._value2member_map_
                 else BookLanguage.RU
             )
-            blueprint, report, _ = plan_book(
-                self.deepseek_client,
-                snapshot,
-                output_language=out_lang,
-                target_total_words=book.target_word_count,
-                limits=self.blueprint_limits,
+            planner_model = (
+                str(self.deepseek_client.model)
+                if hasattr(self.deepseek_client, "model")
+                and isinstance(self.deepseek_client.model, str)
+                else "deepseek-chat"
             )
+            est_plan_cost, _ = calculate_ai_cost(
+                provider="deepseek",
+                model=planner_model,
+                input_tokens=15000,
+                output_tokens=3000,
+            )
+            plan_res = None
+            if est_plan_cost and est_plan_cost > 0:
+                plan_res = self.cost_guards.reserve_budget(
+                    operation="book_planner",
+                    provider="deepseek",
+                    model=planner_model,
+                    estimated_cost_usd=est_plan_cost,
+                    family_id=book.family_id,
+                    book_id=book.book_id,
+                    job_id=job.job_id,
+                )
+            try:
+                blueprint, report, _ = plan_book(
+                    self.deepseek_client,
+                    snapshot,
+                    output_language=out_lang,
+                    target_total_words=book.target_word_count,
+                    limits=self.blueprint_limits,
+                )
+                if plan_res is not None:
+                    self.cost_guards.commit_reservation(plan_res.reservation_id)
+            except Exception:
+                if plan_res is not None:
+                    self.cost_guards.release_reservation(plan_res.reservation_id)
+                raise
             if not report.valid:
                 raise ValueError(f"Blueprint validation failed after repair: {report.issues}")
 
@@ -515,13 +549,41 @@ class BookJobWorker:
                 )
 
                 if not chapter.draft_text:
-                    draft, write_telemetry = write_chapter(
-                        self.deepseek_client,
-                        chapter_plan,
-                        snapshot,
-                        continuity,
-                        out_lang,
+                    writer_model = "deepseek-chat"
+                    ds_model = getattr(self.deepseek_client, "model", None)
+                    if isinstance(ds_model, str):
+                        writer_model = ds_model
+                    est_write_cost, _ = calculate_ai_cost(
+                        provider="deepseek",
+                        model=writer_model,
+                        input_tokens=10000,
+                        output_tokens=2500,
                     )
+                    write_res = None
+                    if est_write_cost and est_write_cost > 0:
+                        write_res = self.cost_guards.reserve_budget(
+                            operation="book_chapter_write",
+                            provider="deepseek",
+                            model=writer_model,
+                            estimated_cost_usd=est_write_cost,
+                            family_id=book.family_id,
+                            book_id=book.book_id,
+                            job_id=job.job_id,
+                        )
+                    try:
+                        draft, write_telemetry = write_chapter(
+                            self.deepseek_client,
+                            chapter_plan,
+                            snapshot,
+                            continuity,
+                            out_lang,
+                        )
+                        if write_res is not None:
+                            self.cost_guards.commit_reservation(write_res.reservation_id)
+                    except Exception:
+                        if write_res is not None:
+                            self.cost_guards.release_reservation(write_res.reservation_id)
+                        raise
                     self.chapter_repo.update_chapter_draft(
                         book_id=book.book_id,
                         chapter_number=chapter.chapter_number,
@@ -570,15 +632,43 @@ class BookJobWorker:
                 )
                 min_cw = self.blueprint_limits.min_chapter_words if self.blueprint_limits else 700
                 max_cw = self.blueprint_limits.max_chapter_words if self.blueprint_limits else 3500
-                review_result, gate_report, review_telemetry = review_chapter(
-                    self.deepseek_client,
-                    draft,
-                    chapter_plan,
-                    snapshot,
-                    out_lang,
-                    min_chapter_words=min_cw,
-                    max_chapter_words=max_cw,
+                rev_model = "deepseek-chat"
+                ds_model = getattr(self.deepseek_client, "model", None)
+                if isinstance(ds_model, str):
+                    rev_model = ds_model
+                est_rev_cost, _ = calculate_ai_cost(
+                    provider="deepseek",
+                    model=rev_model,
+                    input_tokens=10000,
+                    output_tokens=1500,
                 )
+                rev_res = None
+                if est_rev_cost and est_rev_cost > 0:
+                    rev_res = self.cost_guards.reserve_budget(
+                        operation="book_chapter_review",
+                        provider="deepseek",
+                        model=rev_model,
+                        estimated_cost_usd=est_rev_cost,
+                        family_id=book.family_id,
+                        book_id=book.book_id,
+                        job_id=job.job_id,
+                    )
+                try:
+                    review_result, gate_report, review_telemetry = review_chapter(
+                        self.deepseek_client,
+                        draft,
+                        chapter_plan,
+                        snapshot,
+                        out_lang,
+                        min_chapter_words=min_cw,
+                        max_chapter_words=max_cw,
+                    )
+                    if rev_res is not None:
+                        self.cost_guards.commit_reservation(rev_res.reservation_id)
+                except Exception:
+                    if rev_res is not None:
+                        self.cost_guards.release_reservation(rev_res.reservation_id)
+                    raise
                 self.chapter_repo.update_chapter_review(
                     book_id=book.book_id,
                     chapter_number=chapter.chapter_number,

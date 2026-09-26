@@ -102,7 +102,7 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
             error_detail=error_str or "Worker lease ownership was lost or expired",
         )
 
-    # A persisted Book snapshot with broken provenance is a deterministic
+    # Persisted Book snapshot with broken provenance is a deterministic
     # grounding blocker. Retrying the same immutable row cannot repair it.
     if isinstance(exc, SnapshotClosureError):
         return ClassifiedFailure(
@@ -110,6 +110,16 @@ def classify_failure(exc: BaseException) -> ClassifiedFailure:
             disposition=FailureDisposition.TERMINAL,
             error_code=SnapshotClosureError.code,
             error_detail=str(exc),
+        )
+
+    # Cost budget exceeded: defer with retry
+    if "aicostbudgetexceeded" in exc_type_name.lower():
+        return ClassifiedFailure(
+            category=FailureCategory.PROVIDER_RATE_LIMIT,
+            disposition=FailureDisposition.RETRY,
+            error_code="ai_cost_budget_exceeded",
+            error_detail=error_str or "Global AI cost budget exceeded",
+            retry_after_seconds=300.0,
         )
 
     # 2. Export engine missing

@@ -6,6 +6,8 @@ import time
 
 from mura.asr import ASRClientError, RemoteASRClient
 from mura.asr.whisper import WhisperASRClient
+from mura.cost import calculate_ai_cost
+from mura.cost_guards import AICostBudgetExceededError, CostGuardService
 from mura.domain.models import (
     AudioLanguage,
     OutputLanguage,
@@ -48,6 +50,7 @@ class RecordingJobWorker:
         heartbeat_seconds: float = 60.0,
         worker_id: str | None = None,
         ai_ledger: AIUsageLedger | None = None,
+        cost_guards: CostGuardService | None = None,
     ) -> None:
         self.repository = repository
         self.archive_repository = ArchiveRepository(repository.database)
@@ -63,6 +66,7 @@ class RecordingJobWorker:
         #: Operational identity only. Never a user, never exposed publicly.
         self.worker_id = worker_id or new_worker_id()
         self.ai_ledger = ai_ledger or AIUsageLedger(repository.database)
+        self.cost_guards = cost_guards or CostGuardService(repository.database)
         if isinstance(self.asr_client, WhisperASRClient) and self.asr_client.on_usage is None:
             self.asr_client.on_usage = self._record_asr_usage
         self._stop_event = threading.Event()
@@ -243,6 +247,59 @@ class RecordingJobWorker:
 
         logger.info("job_started", extra={"event": "job_started", "attempt": attempt})
         trace.start("asr_transcription")
+
+        asr_reservation = None
+        if isinstance(self.asr_client, WhisperASRClient):
+            asr_provider = "whisper"
+        else:
+            asr_provider = getattr(self.asr_client, "provider", "kaggle")
+        asr_model = getattr(self.asr_client, "model", "whisper-1")
+        duration_est = float(recording.audio_duration_seconds or 0.0)
+        est_asr_cost, _ = calculate_ai_cost(
+            provider=asr_provider,
+            model=asr_model,
+            audio_seconds=duration_est,
+        )
+        if est_asr_cost and est_asr_cost > 0:
+            try:
+                asr_reservation = self.cost_guards.reserve_budget(
+                    operation="asr",
+                    provider=asr_provider,
+                    model=asr_model,
+                    estimated_cost_usd=est_asr_cost,
+                    reserved_audio_seconds=duration_est,
+                    family_id=recording.family_id,
+                    user_id=recording.created_by_user_id,
+                    recording_id=recording.recording_id,
+                    job_id=job.job_id,
+                )
+            except AICostBudgetExceededError:
+                trace.finish(
+                    "asr_transcription",
+                    outcome=TraceOutcome.DEFERRED,
+                    event_name="stage_deferred",
+                    attributes={"error_code": "ai_cost_budget_exceeded"},
+                )
+                logger.warning(
+                    "job_deferred_cost_budget_exceeded",
+                    extra={
+                        "event": "job_retry_scheduled",
+                        "error_code": "ai_cost_budget_exceeded",
+                        "retry_after_seconds": self.asr_retry_seconds,
+                        "job_id": job.job_id,
+                    },
+                )
+                defer_recording_job(
+                    self.repository.database,
+                    job_id=job.job_id,
+                    error_code="ai_cost_budget_exceeded",
+                    error_detail="Global AI cost budget exceeded",
+                    retry_after_seconds=self.asr_retry_seconds,
+                    trace_events=trace.events,
+                    lease_owner=self.worker_id,
+                )
+                return
+
         try:
             with materialize_recording_audio(recording, self.storage) as audio_file:
                 # Only an explicit choice travels to the recogniser. "auto"
@@ -263,6 +320,8 @@ class RecordingJobWorker:
                     ),
                 )
         except ASRClientError as exc:
+            if asr_reservation is not None:
+                self.cost_guards.release_reservation(asr_reservation.reservation_id)
             # Deletion removes both the recording and its job atomically. A
             # provider response racing that commit is obsolete work, not a
             # failure to requeue against a row that intentionally no longer
@@ -338,6 +397,17 @@ class RecordingJobWorker:
                 "duration_seconds": transcript.duration_seconds,
             },
         )
+        if asr_reservation is not None:
+            actual_cost, _ = calculate_ai_cost(
+                provider=asr_provider,
+                model=asr_model,
+                audio_seconds=transcript.duration_seconds,
+            )
+            self.cost_guards.commit_reservation(
+                asr_reservation.reservation_id,
+                actual_cost_usd=actual_cost or asr_reservation.reserved_cost_usd,
+                actual_audio_seconds=transcript.duration_seconds,
+            )
 
         # Recognition takes seconds and extraction most of a minute. Publishing
         # the text now lets the speaker read their own words while people,
@@ -377,6 +447,54 @@ class RecordingJobWorker:
                     job.job_id, status, stage, lease_owner=self.worker_id
                 )
 
+        pipeline_reservation = None
+        deepseek_client = getattr(getattr(self.pipeline, "deepseek", None), "client", None)
+        deepseek_model = getattr(deepseek_client, "model", "deepseek-v4-flash")
+        est_pipe_cost, _ = calculate_ai_cost(
+            provider="deepseek",
+            model=str(deepseek_model),
+            input_tokens=10000,
+            output_tokens=2000,
+        )
+        if est_pipe_cost and est_pipe_cost > 0:
+            try:
+                pipeline_reservation = self.cost_guards.reserve_budget(
+                    operation="extraction",
+                    provider="deepseek",
+                    model=str(deepseek_model),
+                    estimated_cost_usd=est_pipe_cost,
+                    family_id=recording.family_id,
+                    user_id=recording.created_by_user_id,
+                    recording_id=recording.recording_id,
+                    job_id=job.job_id,
+                )
+            except AICostBudgetExceededError:
+                trace.instant(
+                    stage="pipeline_budget",
+                    event_name="stage_deferred",
+                    outcome=TraceOutcome.DEFERRED,
+                    attributes={"error_code": "ai_cost_budget_exceeded"},
+                )
+                logger.warning(
+                    "job_deferred_cost_budget_exceeded",
+                    extra={
+                        "event": "job_retry_scheduled",
+                        "error_code": "ai_cost_budget_exceeded",
+                        "retry_after_seconds": self.asr_retry_seconds,
+                        "job_id": job.job_id,
+                    },
+                )
+                defer_recording_job(
+                    self.repository.database,
+                    job_id=job.job_id,
+                    error_code="ai_cost_budget_exceeded",
+                    error_detail="Global AI cost budget exceeded",
+                    retry_after_seconds=self.asr_retry_seconds,
+                    trace_events=trace.events,
+                    lease_owner=self.worker_id,
+                )
+                return
+
         try:
             resolution_context = self.archive_repository.build_resolution_context(
                 family_id=recording.family_id,
@@ -404,6 +522,9 @@ class RecordingJobWorker:
                 stage_callback=report_stage,
                 resolution_context=resolution_context,
             )
+            if pipeline_reservation is not None:
+                self.cost_guards.commit_reservation(pipeline_reservation.reservation_id)
+
             if active_pipeline_stage is not None:
                 trace.finish(active_pipeline_stage, outcome=TraceOutcome.SUCCESS)
                 active_pipeline_stage = None
@@ -455,6 +576,8 @@ class RecordingJobWorker:
                     },
                 )
         except Exception as exc:
+            if pipeline_reservation is not None:
+                self.cost_guards.release_reservation(pipeline_reservation.reservation_id)
             # Final archive persistence is transactional with job finalization.
             # If deletion won the race, the job/recording row is gone and that
             # transaction has rolled back; do not recreate state or crash the

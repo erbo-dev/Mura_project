@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -49,12 +50,15 @@ def _db() -> Database:
     return db
 
 
-def _settings(**overrides: int) -> SimpleNamespace:
+def _settings(**overrides: Any) -> SimpleNamespace:
     values = {
         "recording_max_active_per_family": 4,
         "recording_max_created_per_family_per_day": 100,
         "recording_max_created_per_user_per_day": 25,
         "family_max_audio_storage_bytes": 10_000,
+        "recording_max_audio_seconds": 1800.0,
+        "user_audio_seconds_per_day": 3600.0,
+        "family_audio_seconds_per_day": 14400.0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -66,6 +70,7 @@ def _recording(
     recording_id: str,
     user_id: str,
     size_bytes: int = 100,
+    duration_seconds: float | None = None,
     active: bool = False,
     hours_ago: int = 0,
 ) -> None:
@@ -82,6 +87,7 @@ def _recording(
                 content_type="audio/wav",
                 audio_path=f"{FAMILY}/{recording_id}/fixture.wav",
                 audio_size_bytes=size_bytes,
+                audio_duration_seconds=duration_seconds,
                 created_at=created_at,
             )
         )
@@ -97,13 +103,21 @@ def _recording(
         )
 
 
-def _check(db: Database, *, user_id: str = USER_A, incoming: int = 100, **limits: int) -> None:
+def _check(
+    db: Database,
+    *,
+    user_id: str = USER_A,
+    incoming: int = 100,
+    incoming_duration: float | None = None,
+    **limits: Any,
+) -> None:
     with db.session_factory.begin() as session:
         RecordingQuotaService.check_creation_allowed(
             session,
             family_id=FAMILY,
             user_id=user_id,
             incoming_size_bytes=incoming,
+            incoming_duration_seconds=incoming_duration,
             settings=_settings(**limits),
         )
 
@@ -149,3 +163,39 @@ def test_recording_quota_blocks_family_storage_with_incoming_bytes() -> None:
     with pytest.raises(HTTPException) as caught:
         _check(db, incoming=101, family_max_audio_storage_bytes=1000)
     assert caught.value.detail == "family_audio_storage_limit_reached"
+
+
+def test_recording_quota_blocks_audio_too_long() -> None:
+    db = _db()
+    with pytest.raises(HTTPException) as caught:
+        _check(db, incoming_duration=1801.0, recording_max_audio_seconds=1800.0)
+    assert caught.value.status_code == 413
+    assert caught.value.detail == "recording_audio_too_long"
+
+
+def test_recording_quota_blocks_user_audio_daily_limit() -> None:
+    db = _db()
+    _recording(db, recording_id="rec_audio_1", user_id=USER_A, duration_seconds=3000.0)
+    with pytest.raises(HTTPException) as caught:
+        _check(
+            db,
+            user_id=USER_A,
+            incoming_duration=601.0,
+            user_audio_seconds_per_day=3600.0,
+        )
+    assert caught.value.status_code == 429
+    assert caught.value.detail == "recording_user_audio_budget_exceeded"
+
+
+def test_recording_quota_blocks_family_audio_daily_limit() -> None:
+    db = _db()
+    _recording(db, recording_id="rec_fam_audio_1", user_id=USER_B, duration_seconds=14000.0)
+    with pytest.raises(HTTPException) as caught:
+        _check(
+            db,
+            user_id=USER_A,
+            incoming_duration=401.0,
+            family_audio_seconds_per_day=14400.0,
+        )
+    assert caught.value.status_code == 429
+    assert caught.value.detail == "recording_family_audio_budget_exceeded"

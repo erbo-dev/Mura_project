@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     and_,
@@ -74,6 +75,7 @@ class RecordingRow(Base):
     storage_backend: Mapped[str | None] = mapped_column(String(32), nullable=True)
     audio_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     audio_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_duration_seconds: Mapped[float | None] = mapped_column(Numeric(10, 3), nullable=True)
     audio_mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: Nullable only so historical rows migrate cleanly. Recordings created
     #: through the canonical API always persist explicit values; NULL is read as
@@ -238,6 +240,7 @@ class RecordingRepository:
         storage_backend: str | None = None,
         audio_sha256: str | None = None,
         audio_size_bytes: int | None = None,
+        audio_duration_seconds: float | None = None,
         audio_mime_type: str | None = None,
         session: Session | None = None,
     ) -> None:
@@ -256,6 +259,7 @@ class RecordingRepository:
                     storage_backend=storage_backend,
                     audio_sha256=audio_sha256,
                     audio_size_bytes=audio_size_bytes,
+                    audio_duration_seconds=audio_duration_seconds,
                     audio_mime_type=audio_mime_type,
                     audio_language=audio_language,
                     output_language=output_language,

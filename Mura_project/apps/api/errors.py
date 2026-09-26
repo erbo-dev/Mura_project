@@ -64,6 +64,10 @@ RECORDING_FAMILY_DAILY_LIMIT_REACHED = "recording_family_daily_limit_reached"
 RECORDING_USER_DAILY_LIMIT_REACHED = "recording_user_daily_limit_reached"
 RECORDING_CONCURRENCY_LIMIT_REACHED = "recording_concurrency_limit_reached"
 FAMILY_AUDIO_STORAGE_LIMIT_REACHED = "family_audio_storage_limit_reached"
+RECORDING_AUDIO_TOO_LONG = "recording_audio_too_long"
+RECORDING_USER_AUDIO_BUDGET_EXCEEDED = "recording_user_audio_budget_exceeded"
+RECORDING_FAMILY_AUDIO_BUDGET_EXCEEDED = "recording_family_audio_budget_exceeded"
+GLOBAL_AI_COST_BUDGET_EXCEEDED = "global_ai_cost_budget_exceeded"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -84,6 +88,10 @@ SELECTABLE_CODES = frozenset(
         RECORDING_USER_DAILY_LIMIT_REACHED,
         RECORDING_CONCURRENCY_LIMIT_REACHED,
         FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
+        RECORDING_AUDIO_TOO_LONG,
+        RECORDING_USER_AUDIO_BUDGET_EXCEEDED,
+        RECORDING_FAMILY_AUDIO_BUDGET_EXCEEDED,
+        GLOBAL_AI_COST_BUDGET_EXCEEDED,
     }
 )
 
@@ -133,6 +141,16 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     ),
     FAMILY_AUDIO_STORAGE_LIMIT_REACHED: (
         "This family has reached its configured audio storage limit."
+    ),
+    RECORDING_AUDIO_TOO_LONG: "The audio recording exceeds the maximum allowed duration.",
+    RECORDING_USER_AUDIO_BUDGET_EXCEEDED: (
+        "This account has reached its daily audio duration limit."
+    ),
+    RECORDING_FAMILY_AUDIO_BUDGET_EXCEEDED: (
+        "This family has reached its daily audio duration limit."
+    ),
+    GLOBAL_AI_COST_BUDGET_EXCEEDED: (
+        "AI processing capacity is currently exhausted; please try again later."
     ),
 }
 

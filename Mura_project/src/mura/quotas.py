@@ -15,10 +15,15 @@ from apps.api.errors import (
     BOOK_GENERATION_ALREADY_ACTIVE,
     FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
     FAMILY_NOT_FOUND,
+    GLOBAL_AI_COST_BUDGET_EXCEEDED,
+    RECORDING_AUDIO_TOO_LONG,
     RECORDING_CONCURRENCY_LIMIT_REACHED,
+    RECORDING_FAMILY_AUDIO_BUDGET_EXCEEDED,
     RECORDING_FAMILY_DAILY_LIMIT_REACHED,
+    RECORDING_USER_AUDIO_BUDGET_EXCEEDED,
     RECORDING_USER_DAILY_LIMIT_REACHED,
 )
+from mura.cost_guards import CostGuardService
 from mura.domain.book_models import TERMINAL_BOOK_STATUSES
 from mura.jobs import JobStatus
 from mura.storage.book import BookRow
@@ -86,6 +91,15 @@ class BookQuotaService:
                 detail=BOOK_DAILY_LIMIT_REACHED,
             )
 
+        # 4. Check global AI cost budget
+        if hasattr(settings, "global_ai_cost_usd_per_day"):
+            cost_guards = CostGuardService.from_settings(database=None, settings=settings)  # type: ignore[arg-type]
+            if not cost_guards.check_budget_available(session):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=GLOBAL_AI_COST_BUDGET_EXCEEDED,
+                )
+
 
 class RecordingQuotaService:
     """Concurrency-safe recording creation and storage limits."""
@@ -98,9 +112,20 @@ class RecordingQuotaService:
         user_id: str,
         incoming_size_bytes: int,
         settings: Any,
+        incoming_duration_seconds: float | None = None,
     ) -> None:
         if incoming_size_bytes < 0:
             raise ValueError("incoming_size_bytes must be non-negative")
+        if incoming_duration_seconds is not None and incoming_duration_seconds < 0:
+            raise ValueError("incoming_duration_seconds must be non-negative")
+
+        # Hard guard on single recording audio duration
+        max_audio_duration = getattr(settings, "recording_max_audio_seconds", 1800.0)
+        if incoming_duration_seconds is not None and incoming_duration_seconds > max_audio_duration:
+            raise HTTPException(
+                status_code=413,
+                detail=RECORDING_AUDIO_TOO_LONG,
+            )
 
         # Serialize the user-wide daily quota across different families.
         # Account deletion also locks UserRow before FamilyRow, preserving a
@@ -196,3 +221,36 @@ class RecordingQuotaService:
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
             )
+
+        if incoming_duration_seconds is not None:
+            max_user_audio_seconds = getattr(settings, "user_audio_seconds_per_day", 3600.0)
+            user_daily_audio_seconds = float(
+                session.scalar(
+                    select(func.coalesce(func.sum(RecordingRow.audio_duration_seconds), 0)).where(
+                        RecordingRow.created_by_user_id == user_id,
+                        RecordingRow.created_at >= since_24h,
+                    )
+                )
+                or 0.0
+            )
+            if user_daily_audio_seconds + incoming_duration_seconds > max_user_audio_seconds:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=RECORDING_USER_AUDIO_BUDGET_EXCEEDED,
+                )
+
+            max_family_audio_seconds = getattr(settings, "family_audio_seconds_per_day", 14400.0)
+            family_daily_audio_seconds = float(
+                session.scalar(
+                    select(func.coalesce(func.sum(RecordingRow.audio_duration_seconds), 0)).where(
+                        RecordingRow.family_id == family_id,
+                        RecordingRow.created_at >= since_24h,
+                    )
+                )
+                or 0.0
+            )
+            if family_daily_audio_seconds + incoming_duration_seconds > max_family_audio_seconds:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=RECORDING_FAMILY_AUDIO_BUDGET_EXCEEDED,
+                )

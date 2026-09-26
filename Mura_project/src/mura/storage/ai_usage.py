@@ -9,10 +9,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 from pydantic import Field
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, func, select
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, and_, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mura.cost import calculate_ai_cost
@@ -55,6 +56,43 @@ class AIUsageEventRow(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
     pricing_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ReservationStatus(StrEnum):
+    RESERVED = "RESERVED"
+    COMMITTED = "COMMITTED"
+    RELEASED = "RELEASED"
+    EXPIRED = "EXPIRED"
+
+
+class AIUsageReservationRow(Base):
+    __tablename__ = "ai_usage_reservations"
+
+    reservation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default=ReservationStatus.RESERVED.value, index=True
+    )
+    operation: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(64))
+    family_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    recording_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    book_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    reserved_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
+    actual_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    reserved_audio_seconds: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
+    actual_audio_seconds: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, unique=True, index=True
+    )
 
 
 class AIUsageEvent(StrictModel):
@@ -204,11 +242,31 @@ class AIUsageLedger:
             row = session.execute(statement).one()
             req_count, in_tok, out_tok, cached_tok, audio_sec, total_cost = row
 
+            res_stmt = select(
+                func.count(AIUsageReservationRow.reservation_id),
+                func.coalesce(func.sum(AIUsageReservationRow.reserved_cost_usd), 0),
+            ).where(
+                and_(
+                    AIUsageReservationRow.status == ReservationStatus.RESERVED.value,
+                    AIUsageReservationRow.expires_at > moment,
+                )
+            )
+            res_row = session.execute(res_stmt).one()
+            active_res_count, active_res_cost = res_row
+
+            total_committed = Decimal(str(total_cost))
+            active_reserved = Decimal(str(active_res_cost))
+
             return {
                 "requests_count": int(req_count),
                 "input_tokens": int(in_tok or 0),
                 "output_tokens": int(out_tok or 0),
                 "cached_input_tokens": int(cached_tok or 0),
                 "audio_seconds": float(audio_sec or 0),
-                "estimated_cost_usd": str(Decimal(str(total_cost)).quantize(Decimal("0.000001"))),
+                "estimated_cost_usd": str(total_committed.quantize(Decimal("0.000001"))),
+                "active_reservations_count": int(active_res_count or 0),
+                "active_reservations_cost_usd": str(active_reserved.quantize(Decimal("0.000001"))),
+                "total_budget_consumed_usd": str(
+                    (total_committed + active_reserved).quantize(Decimal("0.000001"))
+                ),
             }
