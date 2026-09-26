@@ -8,9 +8,9 @@ import re
 import sys
 from pathlib import Path
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS_DIRECTORY = REPOSITORY_ROOT / ".github" / "workflows"
-PINS_PATH = REPOSITORY_ROOT / ".github" / "action-pins.json"
+PINS_PATH = REPOSITORY_ROOT / "Mura_project" / ".github" / "action-pins.json"
 
 USES_PATTERN = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?(?P<reference>[^'\"\s#]+)")
 FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -75,11 +75,20 @@ def validate_workflow_policy(
 
         if "permissions:" not in lowered or "contents: read" not in lowered:
             errors.append(f"{location}: declare least-privilege permissions with contents: read")
-        if "timeout-minutes:" not in lowered:
-            errors.append(f"{location}: every workflow must bound job runtime with timeout-minutes")
+        jobs_section = text.splitlines()
+        job_starts = [
+            index
+            for index, line in enumerate(jobs_section)
+            if re.match(r"^  [A-Za-z0-9_-]+:\s*(?:#.*)?$", line)
+            and "jobs:" in "\n".join(jobs_section[:index])
+        ]
+        for start, end in zip(job_starts, [*job_starts[1:], len(jobs_section)], strict=True):
+            if not any("timeout-minutes:" in line for line in jobs_section[start:end]):
+                errors.append(
+                    f"{location}: job {jobs_section[start].strip()} needs timeout-minutes"
+                )
 
-        checkout_used = False
-        for line_number, line in enumerate(text.splitlines(), start=1):
+        for line_number, line in enumerate(jobs_section, start=1):
             match = USES_PATTERN.match(line)
             if not match:
                 continue
@@ -93,7 +102,22 @@ def validate_workflow_policy(
             _, _, ref = reference.partition("@")
             repository = _action_repository(reference)
             if repository == "actions/checkout":
-                checkout_used = True
+                step_indent = len(line) - len(line.lstrip())
+                step = []
+                for following in jobs_section[line_number:]:
+                    indentation = len(following) - len(following.lstrip())
+                    if following.strip() and indentation < step_indent:
+                        break
+                    if following.strip().startswith("- ") and indentation == step_indent - 2:
+                        break
+                    step.append(following)
+                if not any(
+                    re.match(r"^\s+persist-credentials:\s*false\s*(?:#.*)?$", item, re.I)
+                    for item in step
+                ):
+                    errors.append(
+                        f"{location}:{line_number}: checkout needs persist-credentials: false"
+                    )
             if not FULL_SHA_PATTERN.fullmatch(ref):
                 errors.append(
                     f"{location}:{line_number}: {reference} is mutable; pin a full commit SHA"
@@ -108,9 +132,6 @@ def validate_workflow_policy(
                 errors.append(
                     f"{location}:{line_number}: {repository} uses {ref}, expected {expected}"
                 )
-
-        if checkout_used and "persist-credentials: false" not in lowered:
-            errors.append(f"{location}: checkout must set persist-credentials: false")
 
     return errors
 

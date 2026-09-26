@@ -1,7 +1,8 @@
 """Tests for atomic creation of Book, SourceSnapshot, and BookJob.
 
 Verifies:
-- All 3 records (BookRow, BookSourceSnapshotRow, BookJobRow) are inserted in a single atomic transaction.
+- All 3 records (BookRow, BookSourceSnapshotRow, BookJobRow) are inserted
+  in a single atomic transaction.
 - If any stage fails, the entire transaction rolls back cleanly without leaving orphaned records.
 - Source snapshot version and supersedes_book_id are recorded accurately.
 """
@@ -143,7 +144,9 @@ def test_create_queued_book_atomic_rollback_on_failure() -> None:
     compiled = _dummy_compiled_snapshot(family_id)
 
     # Force a failure during the transaction by mocking BookJobRow insertion to raise
-    with patch("mura.storage.book.BookJobRow", side_effect=IntegrityError("boom", None, Exception())):
+    with patch(
+        "mura.storage.book.BookJobRow", side_effect=IntegrityError("boom", None, Exception())
+    ):
         with pytest.raises(IntegrityError):
             creation_repo.create_queued_book(
                 family_id=family_id,

@@ -27,7 +27,7 @@ def test_chapter_context_manager_lifecycle() -> None:
 
         assert chapter_number_ctx.get() == 4
 
-    assert chapter_number_ctx.get() == None
+    assert chapter_number_ctx.get() is None
 
 
 def test_chapter_context_manager_resets_on_exception() -> None:
@@ -88,4 +88,3 @@ def test_ai_usage_ledger_records_chapter_number_from_context() -> None:
             chapter_number=7,
         )
         assert event_override.chapter_number == 7
-

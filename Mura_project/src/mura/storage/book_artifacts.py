@@ -6,9 +6,9 @@ Supports local filesystem storage (BOOK_STORAGE_DIR) and Supabase storage.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
-import re
 from typing import Any, Protocol
 
 import requests
@@ -30,7 +30,9 @@ class BookArtifactStorageError(RuntimeError):
 
 def _validate_ids(family_id: str, book_id: str) -> None:
     if not _SAFE_SEGMENT.match(family_id):
-        raise ValueError(f"Storage path traversal detected: invalid family_id segment {family_id!r}")
+        raise ValueError(
+            f"Storage path traversal detected: invalid family_id segment {family_id!r}"
+        )
     if not _SAFE_SEGMENT.match(book_id):
         raise ValueError(f"Storage path traversal detected: invalid book_id segment {book_id!r}")
 
@@ -214,10 +216,12 @@ class SupabaseBookArtifactStorage:
             content_type = "application/octet-stream"
 
         upload_url = f"{self.url}/storage/v1/object/{self.bucket}/{storage_key}"
-        headers = self._headers({
-            "Content-Type": content_type,
-            "x-upsert": "true",
-        })
+        headers = self._headers(
+            {
+                "Content-Type": content_type,
+                "x-upsert": "true",
+            }
+        )
 
         try:
             response = self.session.post(
@@ -227,11 +231,13 @@ class SupabaseBookArtifactStorage:
                 timeout=(10.0, self.timeout_seconds),
             )
         except Exception as exc:
-            raise BookArtifactStorageError(f"Failed to upload book artifact to Supabase: {exc}") from exc
+            raise BookArtifactStorageError(
+                f"Failed to upload book artifact to Supabase: {exc}"
+            ) from exc
 
         if response.status_code >= 400:
             raise BookArtifactStorageError(
-                f"Supabase Storage rejected upload with HTTP {response.status_code}: {response.text}"
+                f"Supabase Storage rejected upload with HTTP {response.status_code}"
             )
 
         return storage_key
@@ -246,7 +252,9 @@ class SupabaseBookArtifactStorage:
                 timeout=(10.0, self.timeout_seconds),
             )
         except Exception as exc:
-            raise BookArtifactStorageError(f"Failed to retrieve book artifact from Supabase: {exc}") from exc
+            raise BookArtifactStorageError(
+                f"Failed to retrieve book artifact from Supabase: {exc}"
+            ) from exc
 
         if response.status_code == 404:
             raise FileNotFoundError(f"Artifact not found for key: {storage_key}")
@@ -320,7 +328,8 @@ def build_book_artifact_storage(settings: Any) -> BookArtifactStorage:
         key = getattr(settings, "supabase_service_role_key", None)
         if not url or not key:
             raise ValueError(
-                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required when storage backend is supabase"
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required "
+                "when storage backend is supabase"
             )
         bucket = getattr(settings, "supabase_books_bucket", "mura-books")
         timeout = getattr(settings, "supabase_storage_timeout_seconds", 60.0)

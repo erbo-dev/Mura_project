@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
-from unittest.mock import MagicMock
 
-from fastapi import HTTPException
 import pytest
-from sqlalchemy import select
+from fastapi import HTTPException
 
 from apps.api.errors import (
     BOOK_DAILY_LIMIT_REACHED,
@@ -17,7 +14,7 @@ from apps.api.errors import (
 from mura.config import CoreSettings
 from mura.domain.book_models import BookLanguage, BookStatus
 from mura.quotas import BookQuotaService
-from mura.storage.book import BookRepository, BookRow
+from mura.storage.book import BookRow
 from mura.storage.database import Database, utcnow
 from mura.storage.identity import FamilyRow, UserRow
 
@@ -49,7 +46,9 @@ def settings() -> CoreSettings:
 def test_quota_service_allows_creation_when_empty(db: Database, settings: CoreSettings) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_q1", name="Quota Fam 1", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_q1", name="Quota Fam 1", created_at=now, updated_at=now)
+        )
         session.flush()
         # Should not raise
         BookQuotaService.check_creation_allowed(session, "fam_q1", settings)
@@ -58,7 +57,9 @@ def test_quota_service_allows_creation_when_empty(db: Database, settings: CoreSe
 def test_quota_service_blocks_when_active_book_exists(db: Database, settings: CoreSettings) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_q2", name="Quota Fam 2", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_q2", name="Quota Fam 2", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id="user_q2",
@@ -101,7 +102,9 @@ def test_quota_service_terminal_books_do_not_block_active_quota(
 ) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_q3", name="Quota Fam 3", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_q3", name="Quota Fam 3", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id="user_q3",
@@ -159,7 +162,9 @@ def test_quota_service_blocks_when_daily_limit_reached(
 ) -> None:
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_q4", name="Quota Fam 4", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_q4", name="Quota Fam 4", created_at=now, updated_at=now)
+        )
         session.add(
             UserRow(
                 user_id="user_q4",
@@ -196,4 +201,3 @@ def test_quota_service_blocks_when_daily_limit_reached(
 
         assert exc_info.value.status_code == 429
         assert exc_info.value.detail == BOOK_DAILY_LIMIT_REACHED
-

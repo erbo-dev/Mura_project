@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -158,7 +159,7 @@ class WhisperASRClient:
         except (OSError, requests.RequestException) as exc:
             elapsed = time.perf_counter() - started
             if self.on_usage is not None:
-                try:
+                with suppress(Exception):
                     self.on_usage(
                         provider="whisper",
                         model=self.model,
@@ -166,18 +167,24 @@ class WhisperASRClient:
                         latency_ms=int(elapsed * 1000),
                         success=False,
                         audio_seconds=None,
-                        error_code="provider_timeout" if isinstance(exc, requests.Timeout) else "transcription_failed",
+                        error_code="provider_timeout"
+                        if isinstance(exc, requests.Timeout)
+                        else "transcription_failed",
                     )
-                except Exception:
-                    pass
             raise ASRClientError(f"Whisper is unreachable: {exc}", retryable=True) from exc
 
         if response.status_code >= 400:
             elapsed = time.perf_counter() - started
             if self.on_usage is not None:
-                try:
-                    err_code = "provider_rate_limit" if response.status_code == 429 else (
-                        "provider_auth_error" if response.status_code in (401, 403) else "transcription_failed"
+                with suppress(Exception):
+                    err_code = (
+                        "provider_rate_limit"
+                        if response.status_code == 429
+                        else (
+                            "provider_auth_error"
+                            if response.status_code in (401, 403)
+                            else "transcription_failed"
+                        )
                     )
                     self.on_usage(
                         provider="whisper",
@@ -188,8 +195,6 @@ class WhisperASRClient:
                         audio_seconds=None,
                         error_code=err_code,
                     )
-                except Exception:
-                    pass
             raise ASRClientError(
                 f"Whisper returned HTTP {response.status_code}",
                 retryable=response.status_code in {408, 409, 425, 429}
@@ -202,7 +207,7 @@ class WhisperASRClient:
         except ValueError as exc:
             elapsed = time.perf_counter() - started
             if self.on_usage is not None:
-                try:
+                with suppress(Exception):
                     self.on_usage(
                         provider="whisper",
                         model=self.model,
@@ -212,15 +217,12 @@ class WhisperASRClient:
                         audio_seconds=None,
                         error_code="invalid_provider_response",
                     )
-                except Exception:
-                    pass
             raise ASRClientError("Whisper returned a non-JSON body", retryable=False) from exc
 
-        return self._envelope(payload, recording_id=recording_id)
         envelope = self._envelope(payload, recording_id=recording_id)
         elapsed = time.perf_counter() - started
         if self.on_usage is not None:
-            try:
+            with suppress(Exception):
                 self.on_usage(
                     provider="whisper",
                     model=self.model,
@@ -230,8 +232,6 @@ class WhisperASRClient:
                     audio_seconds=envelope.duration_seconds,
                     error_code=None,
                 )
-            except Exception:
-                pass
         return envelope
 
     def _envelope(self, payload: Any, *, recording_id: str) -> TranscriptEnvelope:

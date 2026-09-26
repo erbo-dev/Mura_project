@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 from mura.book.blueprint_validation import (
-    DEFAULT_BLUEPRINT_LIMITS,
-    BlueprintLimits,
     repair_blueprint_arithmetic,
     validate_blueprint,
 )
@@ -328,4 +326,3 @@ def test_deterministic_arithmetic_repair():
     report_good = validate_blueprint(repaired, snapshot)
     assert report_good.valid is True
     assert len(report_good.blockers) == 0
-

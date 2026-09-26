@@ -68,7 +68,6 @@ SAFE_OPAQUE_KEYS = frozenset(
         "poll_interval_seconds",
         "lease_seconds",
         "heartbeat_seconds",
-        "chapter_number",
         "chapters_total",
         "chapters_approved",
         "word_count",
@@ -118,7 +117,7 @@ SENSITIVE_KEY_SUBSTRINGS = (
 )
 
 REDACTED_STR = "[REDACTED]"
-REDACTED_TOKEN_STR = "[REDACTED_TOKEN]"
+REDACTED_AUTH_MARKER = "[REDACTED_TOKEN]"
 
 _BEARER_PATTERN = re.compile(r"Bearer\s+[A-Za-z0-9-_=.]+", re.IGNORECASE)
 _JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\b")
@@ -144,7 +143,7 @@ class LogSanitizer:
             return value
         if isinstance(value, str):
             sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
-            sanitized = _JWT_PATTERN.sub(REDACTED_TOKEN_STR, sanitized)
+            sanitized = _JWT_PATTERN.sub(REDACTED_AUTH_MARKER, sanitized)
             return sanitized
         if isinstance(value, Mapping):
             return {
@@ -224,13 +223,37 @@ class StructuredJsonFormatter(logging.Formatter):
 
         # Custom extra fields passed to logger.info(..., extra={...})
         standard_attrs = {
-            "args", "asctime", "created", "exc_info", "exc_text", "filename",
-            "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-            "message", "msg", "name", "pathname", "process", "processName",
-            "relativeCreated", "stack_info", "thread", "threadName", "taskName",
-            "request_id", "job_id", "recording_id", "book_id", "family_id", "attempt", "worker_id",
-            "request_id", "job_id", "recording_id", "book_id", "chapter_number",
-            "family_id", "attempt", "worker_id",
+            "args",
+            "asctime",
+            "created",
+            "exc_info",
+            "exc_text",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "msg",
+            "name",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "thread",
+            "threadName",
+            "taskName",
+            "request_id",
+            "job_id",
+            "recording_id",
+            "book_id",
+            "family_id",
+            "attempt",
+            "worker_id",
+            "chapter_number",
         }
         extras: dict[str, Any] = {}
         for key, value in record.__dict__.items():
@@ -264,9 +287,7 @@ class HumanReadableFormatter(logging.Formatter):
             if val:
                 ctx_parts.append(f"{field}={val}")
         ctx_str = f" [{', '.join(ctx_parts)}]" if ctx_parts else ""
-        time_str = datetime.fromtimestamp(record.created, tz=UTC).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        time_str = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         msg = LogSanitizer.sanitize_value(record.getMessage())
         return f"{time_str} {record.levelname:<7} {self.service} {record.name}{ctx_str} {msg}"
 

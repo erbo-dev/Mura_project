@@ -50,7 +50,16 @@ EXPECTED_TABLES = [
 ]
 
 CRITICAL_COLUMNS = {
-    "books": {"book_id", "family_id", "created_by_user_id", "title", "status", "stage", "target_word_count", "chapters_approved"},
+    "books": {
+        "book_id",
+        "family_id",
+        "created_by_user_id",
+        "title",
+        "status",
+        "stage",
+        "target_word_count",
+        "chapters_approved",
+    },
     "book_chapters": {"chapter_id", "book_id", "chapter_number", "title", "status", "word_count"},
     "book_jobs": {"job_id", "book_id", "family_id", "status", "stage", "lease_owner"},
     "ai_usage_events": {"event_id", "provider", "model", "operation", "book_id", "chapter_number"},

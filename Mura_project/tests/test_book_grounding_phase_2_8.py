@@ -4,7 +4,7 @@ These tests attack provenance and prose boundaries directly. Writer-declared
 metadata is intentionally omitted or falsified where that is the bypass under
 test.
 """
-# ruff: noqa: RUF001, E501
+# ruff: noqa: RUF001
 
 from __future__ import annotations
 
@@ -152,7 +152,13 @@ def _gate_snapshot(*, with_conflict: bool = False) -> BookSourceSnapshot:
     )
 
 
-def _gate(text: str, *, snapshot: BookSourceSnapshot | None = None, plan: ChapterPlan | None = None, evidence_usage: list[str] | None = None):
+def _gate(
+    text: str,
+    *,
+    snapshot: BookSourceSnapshot | None = None,
+    plan: ChapterPlan | None = None,
+    evidence_usage: list[str] | None = None,
+):
     return run_chapter_gates(
         ChapterDraft(
             chapter_number=1,
@@ -177,9 +183,7 @@ def test_person_attributes_from_excluded_recording_are_not_projected() -> None:
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
-                    "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "Алихан — мой дед."}
-                    ]
+                    "evidence_spans": [{"evidence_id": "ev_a", "text": "Алихан — мой дед."}]
                 }
             }
         },
@@ -311,9 +315,7 @@ def test_conflict_with_excluded_claim_is_not_imported() -> None:
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
-                    "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "Selected fact."}
-                    ]
+                    "evidence_spans": [{"evidence_id": "ev_a", "text": "Selected fact."}]
                 }
             }
         },
@@ -351,10 +353,7 @@ def test_conflict_with_excluded_claim_is_not_imported() -> None:
 
 
 def test_required_evidence_over_cap_fails_instead_of_dangling() -> None:
-    evidence = [
-        {"evidence_id": f"ev_{idx}", "text": f"Evidence text {idx}"}
-        for idx in range(3)
-    ]
+    evidence = [{"evidence_id": f"ev_{idx}", "text": f"Evidence text {idx}"} for idx in range(3)]
     claims = [
         {
             "claim_id": f"cl_{idx}",
@@ -418,7 +417,6 @@ def test_snapshot_validator_rejects_relationship_with_dangling_support() -> None
         )
 
 
-
 def test_more_than_100_explicit_sources_fails_instead_of_truncating() -> None:
     db = Database("sqlite+pysqlite:///:memory:")
     db.create_schema()
@@ -436,7 +434,6 @@ def test_more_than_100_explicit_sources_fails_instead_of_truncating() -> None:
     assert caught.value.detail == BOOK_SOURCE_LIMIT_EXCEEDED
 
 
-
 def test_snapshot_manifest_counts_must_match_payload() -> None:
     snapshot = _gate_snapshot(with_conflict=True)
     snapshot.manifest.conflict_count = 0
@@ -451,9 +448,7 @@ def test_snapshot_manifest_counts_must_match_payload() -> None:
 def test_snapshot_size_budget_fails_explicitly_without_truncating_truth() -> None:
     bundle = GroundingBundle(
         family_id=FAMILY,
-        recordings=[
-            {"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}
-        ],
+        recordings=[{"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}],
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
@@ -490,13 +485,10 @@ def test_snapshot_size_budget_fails_explicitly_without_truncating_truth() -> Non
         )
 
 
-
 def test_unverified_person_alias_does_not_enter_snapshot_identity_forms() -> None:
     bundle = GroundingBundle(
         family_id=FAMILY,
-        recordings=[
-            {"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}
-        ],
+        recordings=[{"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}],
         people=[
             {
                 "person_id": "per_alikhan",
@@ -529,7 +521,6 @@ def test_unverified_person_alias_does_not_enter_snapshot_identity_forms() -> Non
     assert GateCode.NAMED_PERSON in {issue.code for issue in report.blockers}
 
 
-
 def test_compiler_ignores_excluded_bundle_pipeline_metadata() -> None:
     bundle = GroundingBundle(
         family_id=FAMILY,
@@ -551,17 +542,13 @@ def test_compiler_ignores_excluded_bundle_pipeline_metadata() -> None:
             "rec_a": {
                 "extraction": {
                     "languages": ["ru"],
-                    "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "Алихан жил в Семее."}
-                    ],
+                    "evidence_spans": [{"evidence_id": "ev_a", "text": "Алихан жил в Семее."}],
                 }
             },
             "rec_c": {
                 "extraction": {
                     "languages": ["kk"],
-                    "evidence_spans": [
-                        {"evidence_id": "ev_c", "text": "Мұрат Алматыда тұрды."}
-                    ],
+                    "evidence_spans": [{"evidence_id": "ev_c", "text": "Мұрат Алматыда тұрды."}],
                 }
             },
         },
@@ -581,9 +568,7 @@ def test_compiler_ignores_excluded_bundle_pipeline_metadata() -> None:
 def test_compiler_fails_if_selected_recording_is_absent_from_bundle() -> None:
     bundle = GroundingBundle(
         family_id=FAMILY,
-        recordings=[
-            {"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}
-        ],
+        recordings=[{"recording_id": "rec_a", "family_id": FAMILY, "speaker_name": "N"}],
     )
 
     with pytest.raises(SnapshotClosureError):
@@ -592,7 +577,6 @@ def test_compiler_fails_if_selected_recording_is_absent_from_bundle() -> None:
             recording_ids=["rec_a", "rec_missing"],
             created_at=NOW,
         )
-
 
 
 def test_known_person_unsupported_biographical_fact_is_blocked() -> None:
@@ -608,11 +592,9 @@ def test_known_person_supported_profession_paraphrase_is_allowed() -> None:
     assert GateCode.FACTUAL_ASSERTION not in {issue.code for issue in report.blockers}
 
 
-
 def test_fabricated_inline_dash_dialogue_after_colon_is_blocked() -> None:
     report = _gate("Он сказал: — Я обязательно вернусь, — и ушёл.")
     assert GateCode.QUOTE in {issue.code for issue in report.blockers}
-
 
 
 def test_snapshot_validator_requires_per_description_provenance() -> None:

@@ -744,9 +744,7 @@ class ArchiveReadRepository:
             found_ids = {r.recording_id for r in eligible}
             missing = [rid for rid in recording_ids if rid not in found_ids]
             if missing:
-                raise ArchiveResourceNotFound(
-                    f"recording {missing[0]} not found or not eligible"
-                )
+                raise ArchiveResourceNotFound(f"recording {missing[0]} not found or not eligible")
 
         if max_recordings and len(eligible) > max_recordings:
             # An immutable Book may never silently change "selected A..Z" into
@@ -776,9 +774,7 @@ class ArchiveReadRepository:
 
         pipeline_rows = list(
             session.scalars(
-                select(PipelineResultRow).where(
-                    PipelineResultRow.recording_id.in_(rec_ids)
-                )
+                select(PipelineResultRow).where(PipelineResultRow.recording_id.in_(rec_ids))
             )
         )
         pipeline_payloads = {
@@ -788,11 +784,13 @@ class ArchiveReadRepository:
 
         candidate_claims = list(
             session.scalars(
-                select(ArchiveClaimRow).where(
+                select(ArchiveClaimRow)
+                .where(
                     ArchiveClaimRow.family_id == family_id,
                     ArchiveClaimRow.recording_id.in_(rec_ids),
                     ArchiveClaimRow.status.in_(("active", "accepted", "disputed")),
-                ).order_by(ArchiveClaimRow.created_at.asc(), ArchiveClaimRow.claim_id)
+                )
+                .order_by(ArchiveClaimRow.created_at.asc(), ArchiveClaimRow.claim_id)
             )
         )
         candidate_claim_by_id = {claim.claim_id: claim for claim in candidate_claims}
@@ -809,9 +807,8 @@ class ArchiveReadRepository:
         selected_conflict_claim_ids: set[str] = set()
         for conflict in conflict_rows:
             conflict_claim_ids = list(conflict.claim_ids or [])
-            if (
-                conflict_claim_ids
-                and all(claim_id in candidate_claim_by_id for claim_id in conflict_claim_ids)
+            if conflict_claim_ids and all(
+                claim_id in candidate_claim_by_id for claim_id in conflict_claim_ids
             ):
                 selected_conflict_claim_ids.update(conflict_claim_ids)
 
@@ -839,9 +836,7 @@ class ArchiveReadRepository:
             family_id=family_id,
             recording_ids=set(rec_ids),
         )
-        resolved_mentions = {
-            f"{r_id}:{m_id}": pid for (r_id, m_id), pid in resolved_tuples.items()
-        }
+        resolved_mentions = {f"{r_id}:{m_id}": pid for (r_id, m_id), pid in resolved_tuples.items()}
 
         stories: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
@@ -889,9 +884,7 @@ class ArchiveReadRepository:
             ):
                 selected_person_claims[claim.subject_person_id].append(claim)
 
-        speaker_id_by_recording = {
-            row.recording_id: row.speaker_id for row in eligible
-        }
+        speaker_id_by_recording = {row.recording_id: row.speaker_id for row in eligible}
         people: list[dict[str, Any]] = []
         for person_id in sorted(selected_person_claims):
             person_claims = sorted(
@@ -940,9 +933,7 @@ class ArchiveReadRepository:
                 relation = _clean(payload.get("relation_to_speaker"))
                 speaker_id = speaker_id_by_recording.get(claim.recording_id)
                 if relation and speaker_id:
-                    relation_candidates.append(
-                        (speaker_id, relation, claim.recording_id)
-                    )
+                    relation_candidates.append((speaker_id, relation, claim.recording_id))
 
             # A canonical id without a selected-source name is not enough to
             # expose a person to the Book: doing so would require borrowing the
@@ -990,9 +981,7 @@ class ArchiveReadRepository:
                     if alias in values
                 )
 
-            source_recording_ids = sorted(
-                {claim.recording_id for claim in person_claims}
-            )
+            source_recording_ids = sorted({claim.recording_id for claim in person_claims})
             people.append(
                 {
                     "person_id": person_id,
@@ -1025,11 +1014,7 @@ class ArchiveReadRepository:
                     or source_claim.object_type != ClaimObjectType.RELATIONSHIP.value
                 ):
                     continue
-                payload = (
-                    source_claim.payload
-                    if isinstance(source_claim.payload, dict)
-                    else {}
-                )
+                payload = source_claim.payload if isinstance(source_claim.payload, dict) else {}
                 if not relationship_semantics_match(
                     left_type=str(payload.get("relationship_type") or source_claim.predicate),
                     left_subject_person_id=source_claim.subject_person_id,
@@ -1100,8 +1085,7 @@ class ArchiveReadRepository:
                 not claim_ids
                 or any(claim_id not in snapshot_claim_ids for claim_id in claim_ids)
                 or (
-                    conf.preferred_claim_id is not None
-                    and conf.preferred_claim_id not in claim_ids
+                    conf.preferred_claim_id is not None and conf.preferred_claim_id not in claim_ids
                 )
             ):
                 continue

@@ -17,7 +17,6 @@ Validates that:
 from __future__ import annotations
 
 import io
-import os
 from datetime import timedelta
 from typing import Any
 
@@ -109,7 +108,7 @@ def settings() -> CoreSettings:
 
 @pytest.mark.staging
 def test_production_safety_gate_blocks_fault_injection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verifies fault injection hard-fails when MURA_ENVIRONMENT=production or APP_ENV=production."""
+    """Verifies fault injection hard-fails in the production environment."""
     monkeypatch.setenv("MURA_ENVIRONMENT", "production")
     monkeypatch.setenv("MURA_FAULT_INJECTION", "true")
 
@@ -210,7 +209,10 @@ def test_provider_503_causes_transient_retry() -> None:
 @pytest.mark.staging
 def test_storage_503_raises_audio_storage_error() -> None:
     """Verifies that an injected storage 503 raises AudioStorageError."""
-    valid_wav = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+    valid_wav = (
+        b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"
+        b"\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+    )
     storage = SupabaseAudioStorage(
         url="https://supabase.example.com",
         service_role_key="key",
@@ -236,8 +238,19 @@ def test_weasyprint_pdf_failure_records_failed_export(db: Database, tmp_path: An
     bid = "book_pdf_fail"
 
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id=fid, name="PDF Fail Family", created_at=now, updated_at=now))
-        session.add(UserRow(user_id=uid, auth_issuer="issuer", auth_subject="sub", email="pdf@test.com", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id=fid, name="PDF Fail Family", created_at=now, updated_at=now)
+        )
+        session.add(
+            UserRow(
+                user_id=uid,
+                auth_issuer="issuer",
+                auth_subject="sub",
+                email="pdf@test.com",
+                created_at=now,
+                updated_at=now,
+            )
+        )
         session.add(
             BookRow(
                 book_id=bid,
@@ -256,9 +269,13 @@ def test_weasyprint_pdf_failure_records_failed_export(db: Database, tmp_path: An
     chapter_repo = BookChapterRepository(db)
     chapter_repo.create_chapter_stubs(
         book_id=bid,
-        chapter_plans=[{"chapter_number": 1, "title": "Chapter 1", "source_recording_ids": ["rec_1"]}],
+        chapter_plans=[
+            {"chapter_number": 1, "title": "Chapter 1", "source_recording_ids": ["rec_1"]}
+        ],
     )
-    chapter_repo.approve_chapter(book_id=bid, chapter_number=1, final_text="Some text", word_count=2)
+    chapter_repo.approve_chapter(
+        book_id=bid, chapter_number=1, final_text="Some text", word_count=2
+    )
 
     book_repo = BookRepository(db)
     export_repo = BookExportRepository(db)
@@ -289,14 +306,16 @@ def test_weasyprint_pdf_failure_records_failed_export(db: Database, tmp_path: An
 
 @pytest.mark.staging
 def test_worker_crash_during_recording_lease_reclaimed_by_second_worker(db: Database) -> None:
-    """Verifies that when a worker crashes with an active lease, a second worker reclaims the job past grace."""
+    """A second worker reclaims an expired lease after a crash."""
     recording_repo = RecordingRepository(db)
     recording_id = "rec_lease_crash"
     job_id = "job_lease_crash"
 
     now = utcnow()
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id="fam_crash", name="Crash Fam", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id="fam_crash", name="Crash Fam", created_at=now, updated_at=now)
+        )
 
     recording_repo.create_recording_and_job(
         recording_id=recording_id,
@@ -333,7 +352,9 @@ def test_worker_crash_during_recording_lease_reclaimed_by_second_worker(db: Data
 
 
 @pytest.mark.staging
-def test_worker_crash_during_book_chapter_generation_preserves_approved_chapters(db: Database) -> None:
+def test_worker_crash_during_book_chapter_generation_preserves_approved_chapters(
+    db: Database,
+) -> None:
     """Verifies that if a book worker crashes mid-book, previously approved chapters are preserved
 
     and the next worker reclaims the job and identifies where to resume.
@@ -345,7 +366,16 @@ def test_worker_crash_during_book_chapter_generation_preserves_approved_chapters
 
     with db.session_factory.begin() as session:
         session.add(FamilyRow(family_id=fid, name="Book Crash Fam", created_at=now, updated_at=now))
-        session.add(UserRow(user_id=uid, auth_issuer="issuer", auth_subject="sub", email="bk@test.com", created_at=now, updated_at=now))
+        session.add(
+            UserRow(
+                user_id=uid,
+                auth_issuer="issuer",
+                auth_subject="sub",
+                email="bk@test.com",
+                created_at=now,
+                updated_at=now,
+            )
+        )
         session.add(
             BookRow(
                 book_id=bid,
@@ -365,9 +395,13 @@ def test_worker_crash_during_book_chapter_generation_preserves_approved_chapters
     # Chapter 1 was drafted and approved by worker 1
     chapter_repo.create_chapter_stubs(
         book_id=bid,
-        chapter_plans=[{"chapter_number": 1, "title": "Chapter 1 Approved", "source_recording_ids": ["rec_1"]}],
+        chapter_plans=[
+            {"chapter_number": 1, "title": "Chapter 1 Approved", "source_recording_ids": ["rec_1"]}
+        ],
     )
-    chapter_repo.approve_chapter(book_id=bid, chapter_number=1, final_text="Preserved text", word_count=2)
+    chapter_repo.approve_chapter(
+        book_id=bid, chapter_number=1, final_text="Preserved text", word_count=2
+    )
 
     # Book job was leased to worker 1
     job_repo = BookJobRepository(db)
@@ -405,7 +439,16 @@ def test_concurrent_book_post_race_row_locking_409(db: Database, settings: CoreS
 
     with db.session_factory.begin() as session:
         session.add(FamilyRow(family_id=fid, name="Quota Race Fam", created_at=now, updated_at=now))
-        session.add(UserRow(user_id=uid, auth_issuer="issuer", auth_subject="sub", email="q@test.com", created_at=now, updated_at=now))
+        session.add(
+            UserRow(
+                user_id=uid,
+                auth_issuer="issuer",
+                auth_subject="sub",
+                email="q@test.com",
+                created_at=now,
+                updated_at=now,
+            )
+        )
         session.add(
             BookRow(
                 book_id=bid,
@@ -437,8 +480,19 @@ def test_daily_book_quota_limit_429(db: Database, settings: CoreSettings) -> Non
     uid = "usr_daily_limit"
 
     with db.session_factory.begin() as session:
-        session.add(FamilyRow(family_id=fid, name="Daily Limit Fam", created_at=now, updated_at=now))
-        session.add(UserRow(user_id=uid, auth_issuer="issuer", auth_subject="sub", email="d@test.com", created_at=now, updated_at=now))
+        session.add(
+            FamilyRow(family_id=fid, name="Daily Limit Fam", created_at=now, updated_at=now)
+        )
+        session.add(
+            UserRow(
+                user_id=uid,
+                auth_issuer="issuer",
+                auth_subject="sub",
+                email="d@test.com",
+                created_at=now,
+                updated_at=now,
+            )
+        )
         # 3 books already created today (even if completed)
         for i in range(1, 4):
             session.add(

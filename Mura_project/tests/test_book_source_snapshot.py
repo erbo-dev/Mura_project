@@ -486,11 +486,11 @@ def test_no_synthetic_corpus_reads():
     import inspect
 
     import mura.book.snapshot as snap_mod
+
     src = inspect.getsource(snap_mod)
     assert "MURA/samples" not in src
     assert "MURA\\samples" not in src
     assert "synthetic" not in src.lower()
-
 
 
 def test_selected_source_snapshot_does_not_import_excluded_family_graph_context():
@@ -504,16 +504,12 @@ def test_selected_source_snapshot_does_not_import_excluded_family_graph_context(
         pipeline_payloads={
             "rec_a": {
                 "extraction": {
-                    "evidence_spans": [
-                        {"evidence_id": "ev_a", "text": "Алихан — мой дед."}
-                    ]
+                    "evidence_spans": [{"evidence_id": "ev_a", "text": "Алихан — мой дед."}]
                 }
             },
             "rec_b": {
                 "extraction": {
-                    "evidence_spans": [
-                        {"evidence_id": "ev_b", "text": "Мы жили в Семее."}
-                    ]
+                    "evidence_spans": [{"evidence_id": "ev_b", "text": "Мы жили в Семее."}]
                 }
             },
         },
@@ -579,7 +575,6 @@ def test_selected_source_snapshot_does_not_import_excluded_family_graph_context(
     assert snapshot.relationships == []
 
 
-
 def test_database_selected_sources_exclude_c_only_person_and_relationship() -> None:
     db = Database("sqlite+pysqlite:///:memory:")
     db.create_schema()
@@ -635,9 +630,7 @@ def test_database_selected_sources_exclude_c_only_person_and_relationship() -> N
                     recording_id=rec_id,
                     payload={
                         "extraction": {
-                            "evidence_spans": [
-                                {"evidence_id": f"ev_{rec_id}", "text": text}
-                            ]
+                            "evidence_spans": [{"evidence_id": f"ev_{rec_id}", "text": text}]
                         }
                     },
                 )
@@ -785,7 +778,6 @@ def test_database_selected_sources_exclude_c_only_person_and_relationship() -> N
     assert "cl_c_sibling" not in planner_text
 
 
-
 def test_database_selected_open_conflict_preserves_disputed_claims() -> None:
     db = Database("sqlite+pysqlite:///:memory:")
     db.create_schema()
@@ -840,9 +832,7 @@ def test_database_selected_open_conflict_preserves_disputed_claims() -> None:
                     recording_id=rec_id,
                     payload={
                         "extraction": {
-                            "evidence_spans": [
-                                {"evidence_id": evidence_id, "text": text}
-                            ]
+                            "evidence_spans": [{"evidence_id": evidence_id, "text": text}]
                         }
                     },
                 )

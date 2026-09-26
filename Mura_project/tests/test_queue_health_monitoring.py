@@ -145,7 +145,9 @@ def test_stuck_job_detection() -> None:
     service = QueueHealthService(database, thresholds=thresholds)
 
     # Job 1: queued for 700 seconds (> 600) -> pending_too_long
-    _seed_job(database, job_id="job_stuck_q", status=JobStatus.QUEUED, created_at_offset_seconds=700)
+    _seed_job(
+        database, job_id="job_stuck_q", status=JobStatus.QUEUED, created_at_offset_seconds=700
+    )
 
     # Job 2: active with lease expired 120s ago (> 60 grace) -> lease_expired
     _seed_job(
@@ -166,7 +168,9 @@ def test_stuck_job_detection() -> None:
     )
 
     # Job 4: normal queued job (50s) -> should NOT be flagged
-    _seed_job(database, job_id="job_normal_q", status=JobStatus.QUEUED, created_at_offset_seconds=50)
+    _seed_job(
+        database, job_id="job_normal_q", status=JobStatus.QUEUED, created_at_offset_seconds=50
+    )
 
     stuck = service.get_stuck_jobs()
     reasons_by_id = {item.job_id: item.reason for item in stuck}
@@ -195,10 +199,9 @@ def test_thresholds_from_runtime_settings() -> None:
     assert thresholds.max_attempts == 3
 
 
-
 def test_book_queue_metrics_and_stuck_detection() -> None:
-    from mura.storage.book import BookJobRow
     from mura.domain.book_models import BookJobStatus
+    from mura.storage.book import BookJobRow
 
     database = Database("sqlite+pysqlite:///:memory:")
     database.create_schema()

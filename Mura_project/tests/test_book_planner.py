@@ -1,5 +1,5 @@
 """Tests for Family Book planner and DeepSeek client temperature parameter (Layer 4)."""
-# ruff: noqa: RUF001, E501
+# ruff: noqa: RUF001
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from mura.deepseek.client import DeepSeekClient, DeepSeekUsage
 from mura.domain.book_models import (
     BookBlueprint,
     BookLanguage,
-    NarrativeVoice,
 )
 from mura.storage.archive_read import GroundingBundle
 

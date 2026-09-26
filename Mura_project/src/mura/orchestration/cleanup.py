@@ -15,8 +15,8 @@ from mura.storage.cleanup import (
     StorageCleanupRepository,
     StorageKind,
 )
-from mura.storage.storage_errors import StorageDeleteError
 from mura.storage.database import utcnow
+from mura.storage.storage_errors import StorageDeleteError
 
 logger = logging.getLogger(__name__)
 

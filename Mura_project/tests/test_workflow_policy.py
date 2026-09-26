@@ -53,3 +53,37 @@ jobs:
     assert any("continue-on-error" in error for error in errors)
     assert any("mutable" in error for error in errors)
     assert any("persist-credentials" in error for error in errors)
+
+
+def test_policy_checks_every_checkout_and_job(tmp_path: Path) -> None:
+    workflows = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "mixed.yml").write_text(
+        """name: Mixed
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  safe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          persist-credentials: false
+  unsafe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+""",
+        encoding="utf-8",
+    )
+    pins = tmp_path / "pins.json"
+    pins.write_text(
+        json.dumps({"actions": {"actions/checkout": {"sha": "a" * 40, "tag": "v-test"}}}),
+        encoding="utf-8",
+    )
+
+    errors = validate_workflow_policy(workflows, pins)
+    assert any("unsafe:" in error and "timeout-minutes" in error for error in errors)
+    assert any("checkout needs persist-credentials: false" in error for error in errors)

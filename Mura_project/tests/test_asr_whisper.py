@@ -75,6 +75,35 @@ def test_language_is_never_pinned_and_translation_is_never_requested(tmp_path: P
     assert "language" not in sent["data"]
 
 
+def test_successful_transcription_reports_usage_without_changing_evidence(tmp_path: Path) -> None:
+    audio = tmp_path / "a.webm"
+    audio.write_bytes(b"x")
+    client, _ = _client(_Response(_payload()))
+    usage: list[dict[str, object]] = []
+    client.on_usage = lambda **fields: usage.append(fields)
+
+    envelope = client.transcribe(audio_path=audio, recording_id="rec_1")
+
+    assert envelope.full_text == MIXED
+    assert len(usage) == 1
+    assert usage[0]["success"] is True
+    assert usage[0]["audio_seconds"] == 6.5
+    assert "text" not in usage[0]
+
+
+def test_usage_callback_failure_does_not_change_transcription(tmp_path: Path) -> None:
+    audio = tmp_path / "a.webm"
+    audio.write_bytes(b"x")
+    client, _ = _client(_Response(_payload()))
+
+    def broken_usage(**fields: object) -> None:
+        raise RuntimeError("usage unavailable")
+
+    client.on_usage = broken_usage
+
+    assert client.transcribe(audio_path=audio, recording_id="rec_1").full_text == MIXED
+
+
 def test_code_switched_speech_is_reported_as_mixed(tmp_path: Path) -> None:
     audio = tmp_path / "a.webm"
     audio.write_bytes(b"x")
@@ -197,9 +226,7 @@ class TestDeclaredLanguage:
         audio = tmp_path / "a.webm"
         audio.write_bytes(b"x")
         client, session = _client(_Response(_payload()))
-        client.transcribe(
-            audio_path=audio, recording_id="rec_1", declared_language=declared
-        )
+        client.transcribe(audio_path=audio, recording_id="rec_1", declared_language=declared)
         return session.calls[0]["data"]
 
     def test_auto_still_sends_no_language(self, tmp_path: Path) -> None:
@@ -209,25 +236,19 @@ class TestDeclaredLanguage:
         assert "language" not in self._sent(tmp_path, "auto")
         assert "language" not in self._sent(tmp_path, "mixed")
 
-    def test_declared_kazakh_is_passed_with_an_orthography_hint(
-        self, tmp_path: Path
-    ) -> None:
+    def test_declared_kazakh_is_passed_with_an_orthography_hint(self, tmp_path: Path) -> None:
         sent = self._sent(tmp_path, "kk")
         assert sent["language"] == "kk"
         # Without the hint Whisper flattens ә ғ қ ң ө ұ ү һ і onto Russian
         # letters, which quietly misspells every name in the archive.
         assert sent["prompt"] == KAZAKH_ORTHOGRAPHY_PROMPT
 
-    def test_declared_russian_is_passed_without_a_kazakh_hint(
-        self, tmp_path: Path
-    ) -> None:
+    def test_declared_russian_is_passed_without_a_kazakh_hint(self, tmp_path: Path) -> None:
         sent = self._sent(tmp_path, "ru")
         assert sent["language"] == "ru"
         assert "prompt" not in sent
 
-    def test_an_unknown_declaration_is_ignored_rather_than_forwarded(
-        self, tmp_path: Path
-    ) -> None:
+    def test_an_unknown_declaration_is_ignored_rather_than_forwarded(self, tmp_path: Path) -> None:
         # A value the recogniser would reject must not reach it and fail the job.
         assert "language" not in self._sent(tmp_path, "tr")
 
@@ -298,9 +319,7 @@ class TestModelsWithoutTimestamps:
 
         assert envelope.asr_metadata["timings_estimated"] is True
 
-    def test_reported_timings_are_not_labelled_as_estimated(
-        self, tmp_path: Path
-    ) -> None:
+    def test_reported_timings_are_not_labelled_as_estimated(self, tmp_path: Path) -> None:
         audio = tmp_path / "a.webm"
         audio.write_bytes(b"x")
         client, _ = _client(_Response(_payload()))

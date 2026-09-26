@@ -231,13 +231,10 @@ def register_operations_routes(
                 storage_cleanup_heartbeat_seconds=getattr(
                     settings, "storage_cleanup_heartbeat_seconds", 30.0
                 ),
-                storage_cleanup_max_attempts=getattr(
-                    settings, "storage_cleanup_max_attempts", 8
-                ),
+                storage_cleanup_max_attempts=getattr(settings, "storage_cleanup_max_attempts", 8),
             )
             if settings is not None
             else None
         )
         service = QueueHealthService(db, thresholds=thresholds)
         return service.get_summary()
-

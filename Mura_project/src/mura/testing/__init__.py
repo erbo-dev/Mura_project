@@ -31,4 +31,3 @@ __all__ = [
     "is_fault_injection_enabled",
     "reset_faults",
 ]
-

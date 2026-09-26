@@ -95,7 +95,10 @@ def test_supabase_book_artifact_storage() -> None:
     assert key == "families/fam_abc/books/book_xyz/book.pdf"
     mock_session.post.assert_called_once()
     called_url = mock_session.post.call_args[0][0]
-    assert called_url == "https://supabase.example.com/storage/v1/object/mura-books/families/fam_abc/books/book_xyz/book.pdf"
+    assert (
+        called_url
+        == "https://supabase.example.com/storage/v1/object/mura-books/families/fam_abc/books/book_xyz/book.pdf"
+    )
     called_headers = mock_session.post.call_args[1]["headers"]
     assert called_headers["Authorization"] == "Bearer secret-service-key"
     assert called_headers["apikey"] == "secret-service-key"
@@ -131,6 +134,19 @@ def test_supabase_book_artifact_storage() -> None:
     assert storage.exists(storage_key=key) is False
 
 
+def test_supabase_book_upload_failure_does_not_include_provider_body() -> None:
+    session = MagicMock()
+    session.post.return_value = MagicMock(status_code=500, text="PRIVATE FAMILY TRANSCRIPT")
+    storage = SupabaseBookArtifactStorage(
+        url="https://supabase.example.com", service_role_key="secret", session=session
+    )
+    with pytest.raises(BookArtifactStorageError) as exc_info:
+        storage.store(
+            family_id="fam_abc", book_id="book_xyz", export_format=ExportFormat.PDF, data=b"PDF"
+        )
+    assert "PRIVATE FAMILY TRANSCRIPT" not in str(exc_info.value)
+
+
 def test_build_book_artifact_storage_factory(tmp_path: Path) -> None:
     class MockLocalSettings:
         audio_storage_backend = "supabase"
@@ -160,8 +176,6 @@ def test_book_artifact_storage_rejects_unknown_backend(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="BOOK_STORAGE_BACKEND"):
         build_book_artifact_storage(InvalidSettings())
-
-
 
 
 def test_supabase_book_delete_404_is_idempotent_success() -> None:

@@ -9,9 +9,10 @@ executable until physical erasure succeeds.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Iterable, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import (
     DateTime,

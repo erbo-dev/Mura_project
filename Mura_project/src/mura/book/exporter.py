@@ -95,9 +95,7 @@ class ExportService:
             raise LookupError(f"Book not found: {book_id}")
 
         raw_chapters = self.chapter_repo.list_chapters(book_id=book_id)
-        approved_chapters = [
-            ch for ch in raw_chapters if ch.status == ChapterStatus.APPROVED.value
-        ]
+        approved_chapters = [ch for ch in raw_chapters if ch.status == ChapterStatus.APPROVED.value]
         if not approved_chapters:
             raise ValueError(f"Book {book_id} has no approved chapters to export")
 
@@ -179,9 +177,7 @@ class ExportService:
                 .with_for_update()
             )
             if locked_book is None or locked_book.cancel_requested_at is not None:
-                raise BookExportCancelled(
-                    "book export cancelled before artifact publication"
-                )
+                raise BookExportCancelled("book export cancelled before artifact publication")
 
             _guard_worker_write(
                 session,
