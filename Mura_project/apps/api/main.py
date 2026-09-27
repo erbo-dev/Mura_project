@@ -38,7 +38,11 @@ from apps.api.authz import (
 from apps.api.books import register_book_routes
 from apps.api.conflicts import register_conflict_routes
 from apps.api.errors import REQUEST_ID_HEADER, register_error_handlers
-from apps.api.identity import register_identity_routes, register_membership_admin_routes
+from apps.api.identity import (
+    register_identity_routes,
+    register_invitation_routes,
+    register_membership_admin_routes,
+)
 from apps.api.operations import register_operations_routes
 from apps.api.profiles import register_profile_routes
 from apps.api.recordings import register_recording_routes
@@ -670,6 +674,12 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         delete_family_dependency=require_delete_family,
         identity_repository_dependency=get_identity_repository,
         get_runtime_dependency=get_runtime,
+    )
+    register_invitation_routes(
+        application,
+        principal_dependency=get_principal,
+        manage_members_dependency=require_manage_members,
+        identity_repository_dependency=get_identity_repository,
     )
     register_recording_routes(
         application,

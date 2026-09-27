@@ -64,6 +64,12 @@ RECORDING_FAMILY_DAILY_LIMIT_REACHED = "recording_family_daily_limit_reached"
 RECORDING_USER_DAILY_LIMIT_REACHED = "recording_user_daily_limit_reached"
 RECORDING_CONCURRENCY_LIMIT_REACHED = "recording_concurrency_limit_reached"
 FAMILY_AUDIO_STORAGE_LIMIT_REACHED = "family_audio_storage_limit_reached"
+INVITATION_NOT_FOUND = "invitation_not_found"
+INVITATION_EXPIRED = "invitation_expired"
+INVITATION_REVOKED = "invitation_revoked"
+INVITATION_ALREADY_ACCEPTED = "invitation_already_accepted"
+INVITATION_ALREADY_MEMBER = "invitation_already_member"
+INVALID_INVITATION_ROLE = "invalid_invitation_role"
 
 #: Codes a route may request explicitly via HTTPException(detail=...).
 SELECTABLE_CODES = frozenset(
@@ -84,6 +90,12 @@ SELECTABLE_CODES = frozenset(
         RECORDING_USER_DAILY_LIMIT_REACHED,
         RECORDING_CONCURRENCY_LIMIT_REACHED,
         FAMILY_AUDIO_STORAGE_LIMIT_REACHED,
+        INVITATION_NOT_FOUND,
+        INVITATION_EXPIRED,
+        INVITATION_REVOKED,
+        INVITATION_ALREADY_ACCEPTED,
+        INVITATION_ALREADY_MEMBER,
+        INVALID_INVITATION_ROLE,
     }
 )
 
@@ -134,6 +146,13 @@ _MESSAGE_BY_CODE: dict[str, str] = {
     FAMILY_AUDIO_STORAGE_LIMIT_REACHED: (
         "This family has reached its configured audio storage limit."
     ),
+    INVITATION_NOT_FOUND: "The invitation was not found or is invalid.",
+    INVITATION_EXPIRED: "This invitation has expired.",
+    INVITATION_REVOKED: "This invitation has been revoked.",
+    INVITATION_ALREADY_ACCEPTED: "This invitation has already been accepted.",
+    INVITATION_ALREADY_MEMBER: "You are already a member of this family.",
+    INVALID_INVITATION_ROLE: "Invitations can only be issued for editor or viewer roles.",
+    "gone": "The requested resource is no longer available.",
 }
 
 # Plain integers: Starlette renames several of these constants across versions,
@@ -147,6 +166,7 @@ _CODE_BY_STATUS: dict[int, str] = {
     # routing mistake as a server fault and masking real 500s in monitoring.
     405: METHOD_NOT_ALLOWED,
     409: CONFLICT,
+    410: "gone",
     413: PAYLOAD_TOO_LARGE,
     415: UNSUPPORTED_MEDIA_TYPE,
     416: RANGE_NOT_SATISFIABLE,

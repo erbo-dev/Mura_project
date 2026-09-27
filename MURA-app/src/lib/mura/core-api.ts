@@ -90,6 +90,37 @@ export interface MemberView {
   role: FamilyRole;
 }
 
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export interface FamilyInvitationView {
+  invitation_id: string;
+  family_id: string;
+  created_by_user_id: string | null;
+  role: FamilyRole;
+  status: InvitationStatus;
+  invitation_url: string;
+  expires_at: string;
+  created_at: string;
+  accepted_at: string | null;
+  accepted_by_user_id: string | null;
+}
+
+export interface FamilyInvitationPreview {
+  invitation_id: string;
+  family_id: string;
+  family_name: string;
+  role: FamilyRole;
+  status: InvitationStatus;
+  inviter_name: string | null;
+  expires_at: string;
+}
+
+export interface AcceptFamilyInvitationResult {
+  family_id: string;
+  role: FamilyRole;
+  replayed: boolean;
+}
+
 // ------------------------------------------------------------- capabilities
 
 export type CapabilityStatus = "ready" | "degraded" | "unavailable";
@@ -412,5 +443,56 @@ export async function deleteFamily(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ confirm_family_id: confirmFamilyId }),
     },
+  );
+}
+
+// ------------------------------------------------------------- invitations
+
+export function createFamilyInvitation(
+  familyId: string,
+  role: "editor" | "viewer" = "viewer",
+): Promise<FamilyInvitationView> {
+  return coreRequest<FamilyInvitationView>(
+    `/v1/families/${encodeURIComponent(familyId)}/invitations`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role }),
+    },
+  );
+}
+
+export function listFamilyInvitations(
+  familyId: string,
+  status?: InvitationStatus,
+): Promise<FamilyInvitationView[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return coreRequest<FamilyInvitationView[]>(
+    `/v1/families/${encodeURIComponent(familyId)}/invitations${query}`,
+  );
+}
+
+export function revokeFamilyInvitation(
+  familyId: string,
+  invitationId: string,
+): Promise<FamilyInvitationView> {
+  return coreRequest<FamilyInvitationView>(
+    `/v1/families/${encodeURIComponent(familyId)}/invitations/${encodeURIComponent(
+      invitationId,
+    )}/revoke`,
+    { method: "POST" },
+  );
+}
+
+export function previewInvitation(token: string): Promise<FamilyInvitationPreview> {
+  return coreRequest<FamilyInvitationPreview>(
+    `/v1/invitations/${encodeURIComponent(token)}/preview`,
+  );
+}
+
+export function acceptInvitation(token: string): Promise<AcceptFamilyInvitationResult> {
+  return coreRequest<AcceptFamilyInvitationResult>(
+    `/v1/invitations/${encodeURIComponent(token)}/accept`,
+    { method: "POST" },
   );
 }
