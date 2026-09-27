@@ -1,8 +1,8 @@
 """Add audio duration to recordings and create AI usage reservations table.
 
-Revision ID: 20260926_0019
-Revises: 20260923_0018
-Create Date: 2026-09-26
+Revision ID: 20260927_0020
+Revises: 20260926_0019
+Create Date: 2026-09-27
 
 Enforces hard audio limits and two-phase AI cost reservations for global
 and family/user daily budgets.
@@ -13,8 +13,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260926_0019"
-down_revision: str | None = "20260923_0018"
+revision: str = "20260927_0020"
+down_revision: str | None = "20260926_0019"
 branch_labels: str | None = None
 depends_on: str | None = None
 
