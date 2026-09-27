@@ -265,6 +265,31 @@ class RuntimeSettings(BaseSettings):
         alias="FAMILY_MAX_AUDIO_STORAGE_BYTES",
         ge=1,
     )
+    recording_max_audio_seconds: float = Field(
+        default=1800.0,
+        alias="RECORDING_MAX_AUDIO_SECONDS",
+        ge=1.0,
+    )
+    user_audio_seconds_per_day: float = Field(
+        default=3600.0,
+        alias="USER_AUDIO_SECONDS_PER_DAY",
+        ge=1.0,
+    )
+    family_audio_seconds_per_day: float = Field(
+        default=14400.0,
+        alias="FAMILY_AUDIO_SECONDS_PER_DAY",
+        ge=1.0,
+    )
+    global_ai_cost_usd_per_day: float = Field(
+        default=25.00,
+        alias="GLOBAL_AI_COST_USD_PER_DAY",
+        ge=0.0,
+    )
+    ai_reservation_ttl_seconds: float = Field(
+        default=1800.0,
+        alias="AI_RESERVATION_TTL_SECONDS",
+        ge=10.0,
+    )
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE", ge=1, le=50)
     db_max_overflow: int = Field(default=5, alias="DB_MAX_OVERFLOW", ge=0, le=50)
     db_pool_recycle_seconds: int = Field(

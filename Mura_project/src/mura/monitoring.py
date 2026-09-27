@@ -99,6 +99,9 @@ class AI24hMetrics(StrictModel):
     cached_input_tokens: int = Field(ge=0)
     audio_seconds: float = Field(ge=0.0)
     estimated_cost_usd: str
+    active_reservations_count: int = Field(default=0, ge=0)
+    active_reservations_cost_usd: str = Field(default="0.000000")
+    total_budget_consumed_usd: str = Field(default="0.000000")
 
 
 class StuckJobItem(StrictModel):

@@ -19,6 +19,7 @@ from typing import Annotated, Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 
+from mura.audio_duration import probe_audio_duration
 from mura.domain.models import (
     AudioLanguage,
     OutputLanguage,
@@ -187,11 +188,18 @@ def register_recording_routes(
                 file.file.seek(0, 2)
                 incoming_size_bytes = int(file.file.tell())
                 file.file.seek(0)
+                incoming_duration_seconds = probe_audio_duration(
+                    file.file,
+                    content_type=file.content_type,
+                    filename=original_filename,
+                )
+                file.file.seek(0)
                 RecordingQuotaService.check_creation_allowed(
                     session,
                     family_id=family_id,
                     user_id=context.user_id,
                     incoming_size_bytes=incoming_size_bytes,
+                    incoming_duration_seconds=incoming_duration_seconds,
                     settings=getattr(typed, "settings", None),
                 )
 
@@ -216,6 +224,7 @@ def register_recording_routes(
                     storage_backend=stored.backend.value,
                     audio_sha256=stored.sha256,
                     audio_size_bytes=stored.size_bytes,
+                    audio_duration_seconds=incoming_duration_seconds,
                     audio_mime_type=stored.content_type,
                     audio_language=audio_language.value,
                     output_language=output_language.value,
