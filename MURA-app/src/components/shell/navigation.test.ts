@@ -19,7 +19,7 @@ describe("app chrome", () => {
     },
   );
 
-  it.each(["/", "/sign-in", "/sign-up"])("%s is outside the product", (path) => {
+  it.each(["/", "/sign-in", "/sign-up", "/invite"])("%s is outside the product", (path) => {
     // Offering product destinations to someone who cannot reach them yet.
     expect(hasAppChrome(path)).toBe(false);
   });

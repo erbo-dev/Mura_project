@@ -7,13 +7,17 @@ creates a UserRow and nothing else.
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     UniqueConstraint,
     delete,
@@ -52,6 +56,51 @@ class AccountDeletionBlockedError(RuntimeError):
     def __init__(self, family_ids: list[str]) -> None:
         super().__init__("account deletion requires ownership transfer")
         self.family_ids = sorted(set(family_ids))
+
+
+class InvitationNotFoundError(LookupError):
+    pass
+
+
+class InvitationExpiredError(RuntimeError):
+    pass
+
+
+class InvitationRevokedError(RuntimeError):
+    pass
+
+
+class InvitationAlreadyAcceptedError(RuntimeError):
+    pass
+
+
+class InvalidInvitationRoleError(ValueError):
+    pass
+
+
+class FamilyInvitationStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
+def generate_invitation_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_invitation_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def new_invitation_id() -> str:
+    return f"invite_{uuid.uuid4().hex}"
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
 
 
 def new_user_id() -> str:
@@ -117,6 +166,44 @@ class FamilyMembershipRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class FamilyInvitationRow(Base):
+    __tablename__ = "family_invitations"
+    __table_args__ = (
+        CheckConstraint(
+            "intended_role IN ('editor', 'viewer')",
+            name="ck_family_invitations_intended_role",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'revoked', 'expired')",
+            name="ck_family_invitations_status",
+        ),
+        Index("ix_family_invitations_family_status", "family_id", "status"),
+    )
+
+    invitation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    family_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("families.family_id", ondelete="CASCADE"), index=True
+    )
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    intended_role: Mapped[str] = mapped_column(String(32))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default=FamilyInvitationStatus.PENDING.value, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by_user_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
     )
 
 
@@ -255,6 +342,21 @@ class IdentityRepository:
                 update(BookRow)
                 .where(BookRow.created_by_user_id == user_id)
                 .values(created_by_user_id=None)
+            )
+            session.execute(
+                update(FamilyInvitationRow)
+                .where(FamilyInvitationRow.created_by_user_id == user_id)
+                .values(created_by_user_id=None)
+            )
+            session.execute(
+                update(FamilyInvitationRow)
+                .where(FamilyInvitationRow.accepted_by_user_id == user_id)
+                .values(accepted_by_user_id=None)
+            )
+            session.execute(
+                update(FamilyInvitationRow)
+                .where(FamilyInvitationRow.revoked_by_user_id == user_id)
+                .values(revoked_by_user_id=None)
             )
             session.execute(
                 delete(FamilyMembershipRow).where(FamilyMembershipRow.user_id == user_id)
@@ -625,9 +727,234 @@ class IdentityRepository:
             session.execute(
                 delete(FamilyMembershipRow).where(FamilyMembershipRow.family_id == family_id)
             )
+            session.execute(
+                delete(FamilyInvitationRow).where(FamilyInvitationRow.family_id == family_id)
+            )
             session.delete(family)
 
             return [row.cleanup_job_id for row in cleanup_rows]
+
+    # ---------------------------------------------------------- invitations
+
+    def create_invitation(
+        self,
+        *,
+        family_id: str,
+        creator_user_id: str,
+        intended_role: FamilyRole,
+        ttl_hours: int = 168,
+    ) -> tuple[FamilyInvitationRow, str]:
+        if intended_role not in (FamilyRole.EDITOR, FamilyRole.VIEWER):
+            raise InvalidInvitationRoleError(f"Cannot invite with role {intended_role.value}")
+
+        with self.database.session_factory.begin() as session:
+            if not self._lock_family(session, family_id):
+                raise MembershipNotFoundError(family_id)
+
+            token = generate_invitation_token()
+            token_hash = hash_invitation_token(token)
+            now = utcnow()
+            expires_at = now + timedelta(hours=ttl_hours)
+
+            invitation = FamilyInvitationRow(
+                invitation_id=new_invitation_id(),
+                family_id=family_id,
+                created_by_user_id=creator_user_id,
+                intended_role=intended_role.value,
+                token_hash=token_hash,
+                status=FamilyInvitationStatus.PENDING.value,
+                expires_at=expires_at,
+                created_at=now,
+            )
+            session.add(invitation)
+            session.flush()
+            session.expunge(invitation)
+            return invitation, token
+
+    def list_invitations(
+        self,
+        family_id: str,
+        *,
+        status_filter: FamilyInvitationStatus | None = None,
+    ) -> list[FamilyInvitationRow]:
+        with self.database.session_factory.begin() as session:
+            now = utcnow()
+            session.execute(
+                update(FamilyInvitationRow)
+                .where(
+                    FamilyInvitationRow.family_id == family_id,
+                    FamilyInvitationRow.status == FamilyInvitationStatus.PENDING.value,
+                    FamilyInvitationRow.expires_at <= now,
+                )
+                .values(status=FamilyInvitationStatus.EXPIRED.value)
+            )
+            query = select(FamilyInvitationRow).where(FamilyInvitationRow.family_id == family_id)
+            if status_filter is not None:
+                query = query.where(FamilyInvitationRow.status == status_filter.value)
+            query = query.order_by(FamilyInvitationRow.created_at.desc())
+            rows = list(session.scalars(query).all())
+            for r in rows:
+                session.expunge(r)
+            return rows
+
+    def revoke_invitation(
+        self,
+        *,
+        family_id: str,
+        invitation_id: str,
+        revoker_user_id: str,
+    ) -> FamilyInvitationRow:
+        with self.database.session_factory.begin() as session:
+            if not self._lock_family(session, family_id):
+                raise MembershipNotFoundError(family_id)
+
+            invitation = session.scalar(
+                select(FamilyInvitationRow)
+                .where(
+                    FamilyInvitationRow.invitation_id == invitation_id,
+                    FamilyInvitationRow.family_id == family_id,
+                )
+                .with_for_update()
+            )
+            if invitation is None:
+                raise InvitationNotFoundError(invitation_id)
+
+            if invitation.status == FamilyInvitationStatus.ACCEPTED.value:
+                raise RuntimeError("Cannot revoke an already accepted invitation")
+
+            if invitation.status == FamilyInvitationStatus.REVOKED.value:
+                session.expunge(invitation)
+                return invitation
+
+            invitation.status = FamilyInvitationStatus.REVOKED.value
+            invitation.revoked_at = utcnow()
+            invitation.revoked_by_user_id = revoker_user_id
+            session.flush()
+            session.expunge(invitation)
+            return invitation
+
+    def get_invitation_preview(
+        self,
+        token: str,
+    ) -> tuple[FamilyInvitationRow, FamilyRow, UserRow | None]:
+        token_hash = hash_invitation_token(token)
+        with self.database.session_factory.begin() as session:
+            invitation = session.scalar(
+                select(FamilyInvitationRow).where(FamilyInvitationRow.token_hash == token_hash)
+            )
+            if invitation is None:
+                raise InvitationNotFoundError("Invitation not found")
+
+            now = utcnow()
+            if (
+                invitation.status == FamilyInvitationStatus.PENDING.value
+                and _ensure_utc(invitation.expires_at) <= now
+            ):
+                invitation.status = FamilyInvitationStatus.EXPIRED.value
+
+            family = session.scalar(
+                select(FamilyRow).where(FamilyRow.family_id == invitation.family_id)
+            )
+            if family is None:
+                raise InvitationNotFoundError("Family not found")
+
+            inviter: UserRow | None = None
+            if invitation.created_by_user_id:
+                inviter = session.scalar(
+                    select(UserRow).where(UserRow.user_id == invitation.created_by_user_id)
+                )
+
+            session.expunge(invitation)
+            session.expunge(family)
+            if inviter:
+                session.expunge(inviter)
+            return invitation, family, inviter
+
+    def accept_invitation(
+        self,
+        *,
+        token: str,
+        user_id: str,
+    ) -> tuple[FamilyInvitationRow, FamilyMembershipRow, bool]:
+        token_hash = hash_invitation_token(token)
+        with self.database.session_factory.begin() as session:
+            # 1. Lock the invitation row first to serialize accept/revoke races
+            invitation = session.scalar(
+                select(FamilyInvitationRow)
+                .where(FamilyInvitationRow.token_hash == token_hash)
+                .with_for_update()
+            )
+            if invitation is None:
+                raise InvitationNotFoundError("Invalid invitation token")
+
+            # 2. Check if revoked
+            if invitation.status == FamilyInvitationStatus.REVOKED.value:
+                raise InvitationRevokedError("Invitation has been revoked")
+
+            # 3. Check if expired
+            now = utcnow()
+            if (
+                invitation.status == FamilyInvitationStatus.EXPIRED.value
+                or _ensure_utc(invitation.expires_at) <= now
+            ):
+                invitation.status = FamilyInvitationStatus.EXPIRED.value
+                raise InvitationExpiredError("Invitation has expired")
+
+            # 4. Check if already accepted
+            if invitation.status == FamilyInvitationStatus.ACCEPTED.value:
+                if invitation.accepted_by_user_id == user_id:
+                    membership = session.scalar(
+                        select(FamilyMembershipRow).where(
+                            FamilyMembershipRow.family_id == invitation.family_id,
+                            FamilyMembershipRow.user_id == user_id,
+                        )
+                    )
+                    if membership is not None:
+                        session.expunge(invitation)
+                        session.expunge(membership)
+                        return invitation, membership, True
+                raise InvitationAlreadyAcceptedError("Invitation has already been accepted")
+
+            # 5. Lock family row to serialize membership mutation
+            if not self._lock_family(session, invitation.family_id):
+                raise MembershipNotFoundError(invitation.family_id)
+
+            # 6. Check existing membership for user_id in this family
+            existing_membership = session.scalar(
+                select(FamilyMembershipRow)
+                .where(
+                    FamilyMembershipRow.family_id == invitation.family_id,
+                    FamilyMembershipRow.user_id == user_id,
+                )
+                .with_for_update()
+            )
+            if existing_membership is not None:
+                invitation.status = FamilyInvitationStatus.ACCEPTED.value
+                invitation.accepted_at = now
+                invitation.accepted_by_user_id = user_id
+                session.flush()
+                session.expunge(invitation)
+                session.expunge(existing_membership)
+                return invitation, existing_membership, True
+
+            # 7. Create new membership
+            new_membership = FamilyMembershipRow(
+                membership_id=f"membership_{uuid.uuid4().hex}",
+                family_id=invitation.family_id,
+                user_id=user_id,
+                role=invitation.intended_role,
+            )
+            session.add(new_membership)
+
+            # 8. Transition invitation to ACCEPTED
+            invitation.status = FamilyInvitationStatus.ACCEPTED.value
+            invitation.accepted_at = now
+            invitation.accepted_by_user_id = user_id
+
+            session.flush()
+            session.expunge(invitation)
+            session.expunge(new_membership)
+            return invitation, new_membership, False
 
 
 def _principal(user: UserRow) -> Principal:
@@ -638,3 +965,27 @@ def _principal(user: UserRow) -> Principal:
         email=user.email,
         display_name=user.display_name,
     )
+
+
+__all__ = [
+    "AccountDeletionBlockedError",
+    "FamilyDeleteAuthorizationError",
+    "FamilyInvitationRow",
+    "FamilyInvitationStatus",
+    "FamilyMembershipRow",
+    "FamilyRow",
+    "IdentityRepository",
+    "InvalidInvitationRoleError",
+    "InvitationAlreadyAcceptedError",
+    "InvitationExpiredError",
+    "InvitationNotFoundError",
+    "InvitationRevokedError",
+    "MembershipNotFoundError",
+    "SoleOwnerError",
+    "UserRow",
+    "generate_invitation_token",
+    "hash_invitation_token",
+    "new_family_id",
+    "new_invitation_id",
+    "new_user_id",
+]
