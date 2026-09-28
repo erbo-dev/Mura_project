@@ -394,3 +394,154 @@ def test_book_quota_service_blocks_creation_when_global_ai_budget_exhausted() ->
             BookQuotaService.check_creation_allowed(s, "fam_cg", settings)
         assert exc.value.status_code == 429
         assert exc.value.detail == "global_ai_cost_budget_exceeded"
+
+
+def test_f001_provider_success_with_ledger_failure_enforces_budget() -> None:
+    """F-001 regression: If AIUsageLedger.record_usage fails, committed cost is still enforced."""
+    db = _db()
+    service = CostGuardService(db, global_daily_budget_usd=Decimal("1.00"))
+
+    # 1. Reserve $0.60
+    res = service.reserve_budget(
+        operation="asr",
+        provider="whisper",
+        model="whisper-1",
+        estimated_cost_usd=Decimal("0.60"),
+    )
+    assert res.status == ReservationStatus.RESERVED.value
+
+    # 2. Simulate provider success + AIUsageLedger.record_usage failure (e.g. dropped/errored)
+    # No AIUsageEventRow is inserted into the database.
+
+    # 3. Settle reservation with actual cost $0.60
+    service.commit_reservation(res.reservation_id, actual_cost_usd=Decimal("0.60"))
+
+    # 4. Attempt another reservation of $0.60 -> total would be $1.20 > $1.00 limit -> REJECTED
+    with pytest.raises(AICostBudgetExceededError) as exc_info:
+        service.reserve_budget(
+            operation="extraction",
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            estimated_cost_usd=Decimal("0.60"),
+        )
+    assert exc_info.value.daily_budget_usd == Decimal("1.00")
+    assert exc_info.value.current_consumed_usd == Decimal("0.60")
+
+    # 5. Attempt reservation of $0.30 -> total is $0.90 <= $1.00 limit -> ALLOWED
+    res2 = service.reserve_budget(
+        operation="extraction",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        estimated_cost_usd=Decimal("0.30"),
+    )
+    assert res2.status == ReservationStatus.RESERVED.value
+
+
+def test_f001_normal_path_no_double_counting() -> None:
+    """F-001 regression: Normal path with both ledger event and committed reservation
+    does NOT double count.
+    """
+    db = _db()
+    service = CostGuardService(db, global_daily_budget_usd=Decimal("1.00"))
+    ledger = AIUsageLedger(db)
+
+    # 1. Reserve $0.60
+    res = service.reserve_budget(
+        operation="extraction",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        estimated_cost_usd=Decimal("0.60"),
+    )
+
+    # 2. Telemetry event successfully records usage of $0.60
+    ledger.record_usage(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        operation="extraction",
+        latency_ms=300,
+        success=True,
+        input_tokens=1_000_000,
+        output_tokens=200_000,
+    )
+
+    # 3. Reservation commits actual cost of $0.60
+    service.commit_reservation(res.reservation_id, actual_cost_usd=Decimal("0.60"))
+
+    # 4. Next request for $0.30 -> allowed (consumed is $0.60, projected $0.90 <= $1.00)
+    res_allowed = service.reserve_budget(
+        operation="extraction",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        estimated_cost_usd=Decimal("0.30"),
+    )
+    assert res_allowed.status == ReservationStatus.RESERVED.value
+
+    # 5. Next request for $0.20 -> rejected (consumed is $0.90, projected $1.10 > $1.00)
+    with pytest.raises(AICostBudgetExceededError):
+        service.reserve_budget(
+            operation="extraction",
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            estimated_cost_usd=Decimal("0.20"),
+        )
+
+
+def test_f001_worker_crash_preserves_durable_cost() -> None:
+    """F-001 regression: Worker crash after reservation settlement preserves cost authority."""
+    db = _db()
+    service = CostGuardService(db, global_daily_budget_usd=Decimal("1.00"))
+
+    # Provider succeeded and reservation was committed with actual cost
+    res = service.reserve_budget(
+        operation="asr",
+        provider="whisper",
+        model="whisper-1",
+        estimated_cost_usd=Decimal("0.60"),
+    )
+    service.commit_reservation(res.reservation_id, actual_cost_usd=Decimal("0.60"))
+
+    # Worker crashes: new worker/process instance checks budget
+    new_service_instance = CostGuardService(db, global_daily_budget_usd=Decimal("1.00"))
+    with db.session_factory() as session:
+        # $0.50 cannot be reserved because $0.60 is already committed
+        assert not new_service_instance.check_budget_available(
+            session, additional_cost_usd=Decimal("0.50")
+        )
+        # $0.30 can be reserved
+        assert new_service_instance.check_budget_available(
+            session, additional_cost_usd=Decimal("0.30")
+        )
+
+
+def test_f001_idempotent_retry_after_settlement() -> None:
+    """F-001 regression: Retry of settled job does not create duplicate cost or
+    double reservation.
+    """
+    db = _db()
+    service = CostGuardService(db, global_daily_budget_usd=Decimal("1.00"))
+
+    key = "job_retry_test_key"
+    res1 = service.reserve_budget(
+        operation="asr",
+        provider="whisper",
+        model="whisper-1",
+        estimated_cost_usd=Decimal("0.60"),
+        idempotency_key=key,
+    )
+    service.commit_reservation(res1.reservation_id, actual_cost_usd=Decimal("0.60"))
+
+    # Retry with same idempotency key
+    res_retry = service.reserve_budget(
+        operation="asr",
+        provider="whisper",
+        model="whisper-1",
+        estimated_cost_usd=Decimal("0.60"),
+        idempotency_key=key,
+    )
+    assert res_retry.reservation_id == res1.reservation_id
+    assert res_retry.status == ReservationStatus.COMMITTED.value
+
+    # Total consumed budget is still exactly $0.60
+    with db.session_factory() as session:
+        assert service.check_budget_available(session, additional_cost_usd=Decimal("0.35"))
+        assert not service.check_budget_available(session, additional_cost_usd=Decimal("0.45"))
