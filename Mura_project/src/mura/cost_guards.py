@@ -74,6 +74,17 @@ class CostGuardService:
             ttl_seconds=ttl,
         )
 
+    # BUDGET AUTHORITY = AIUsageReservation
+    #   The authoritative durable state machine for financial accounting and cost enforcement:
+    #   RESERVED (active hold) -> COMMITTED (settled actual cost) /
+    #   RELEASED (canceled) / EXPIRED (stale).
+    #   Budget consumption is derived from this state machine.
+    #
+    # OBSERVABILITY LEDGER = AIUsageEvent
+    #   Granular operational/telemetry event stream recording token counts, latency, attempt
+    #   numbers, and model pricing versions. Best-effort logging; failure to insert an event
+    #   does not affect financial budget enforcement.
+
     def _acquire_lock_if_postgres(self, session: Session) -> None:
         """Serialize global AI budget check across processes under PostgreSQL."""
         bind = session.get_bind()
@@ -89,11 +100,34 @@ class CostGuardService:
         now = utcnow()
         since_24h = now - timedelta(hours=24)
 
-        committed = session.scalar(
+        # Committed/settled reservations within 24h (authoritative financial record)
+        committed_res = session.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            AIUsageReservationRow.actual_cost_usd,
+                            AIUsageReservationRow.reserved_cost_usd,
+                        )
+                    ),
+                    0,
+                )
+            ).where(
+                and_(
+                    AIUsageReservationRow.status == ReservationStatus.COMMITTED.value,
+                    AIUsageReservationRow.created_at >= since_24h,
+                )
+            )
+        ) or Decimal("0")
+
+        # Telemetry ledger fallback for unreserved events
+        unreserved_events_cost = session.scalar(
             select(func.coalesce(func.sum(AIUsageEventRow.estimated_cost_usd), 0)).where(
                 AIUsageEventRow.created_at >= since_24h
             )
         ) or Decimal("0")
+
+        committed = max(committed_res, unreserved_events_cost)
 
         reserved = session.scalar(
             select(func.coalesce(func.sum(AIUsageReservationRow.reserved_cost_usd), 0)).where(
@@ -151,11 +185,34 @@ class CostGuardService:
             now = utcnow()
             since_24h = now - timedelta(hours=24)
 
-            committed_cost = s.scalar(
+            # Committed/settled reservations within 24h (authoritative financial record)
+            committed_res = s.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            func.coalesce(
+                                AIUsageReservationRow.actual_cost_usd,
+                                AIUsageReservationRow.reserved_cost_usd,
+                            )
+                        ),
+                        0,
+                    )
+                ).where(
+                    and_(
+                        AIUsageReservationRow.status == ReservationStatus.COMMITTED.value,
+                        AIUsageReservationRow.created_at >= since_24h,
+                    )
+                )
+            ) or Decimal("0")
+
+            # Telemetry ledger fallback for unreserved events
+            unreserved_events_cost = s.scalar(
                 select(func.coalesce(func.sum(AIUsageEventRow.estimated_cost_usd), 0)).where(
                     AIUsageEventRow.created_at >= since_24h
                 )
             ) or Decimal("0")
+
+            committed_cost = max(committed_res, unreserved_events_cost)
 
             active_reserved_cost = s.scalar(
                 select(func.coalesce(func.sum(AIUsageReservationRow.reserved_cost_usd), 0)).where(
@@ -235,13 +292,28 @@ class CostGuardService:
         """Mark reservation as committed and record actual usage."""
 
         def _execute(s: Session) -> None:
-            row = s.get(AIUsageReservationRow, reservation_id)
+            bind = s.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                stmt = (
+                    select(AIUsageReservationRow)
+                    .where(AIUsageReservationRow.reservation_id == reservation_id)
+                    .with_for_update()
+                )
+                row = s.scalar(stmt)
+            else:
+                row = s.get(AIUsageReservationRow, reservation_id)
+
             if row is not None:
                 row.status = ReservationStatus.COMMITTED.value
                 if actual_cost_usd is not None:
                     row.actual_cost_usd = Decimal(str(actual_cost_usd))
+                elif row.actual_cost_usd is None:
+                    row.actual_cost_usd = row.reserved_cost_usd
+
                 if actual_audio_seconds is not None:
                     row.actual_audio_seconds = Decimal(str(actual_audio_seconds))
+                elif row.actual_audio_seconds is None and row.reserved_audio_seconds is not None:
+                    row.actual_audio_seconds = row.reserved_audio_seconds
 
         if session is not None:
             _execute(session)
@@ -258,7 +330,17 @@ class CostGuardService:
         """Release an unused reservation so budget is freed immediately."""
 
         def _execute(s: Session) -> None:
-            row = s.get(AIUsageReservationRow, reservation_id)
+            bind = s.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                stmt = (
+                    select(AIUsageReservationRow)
+                    .where(AIUsageReservationRow.reservation_id == reservation_id)
+                    .with_for_update()
+                )
+                row = s.scalar(stmt)
+            else:
+                row = s.get(AIUsageReservationRow, reservation_id)
+
             if row is not None and row.status == ReservationStatus.RESERVED.value:
                 row.status = ReservationStatus.RELEASED.value
 

@@ -1,5 +1,15 @@
 """Durable AI usage ledger and cost accounting.
 
+BUDGET AUTHORITY = AIUsageReservation
+  The authoritative durable state machine for financial accounting and cost enforcement:
+  RESERVED (active hold) -> COMMITTED (settled actual cost) / RELEASED (canceled) / EXPIRED (stale).
+  Budget consumption is derived from this state machine.
+
+OBSERVABILITY LEDGER = AIUsageEvent
+  Granular operational/telemetry event stream recording token counts, latency, attempt
+  numbers, and model pricing versions. Best-effort logging; failure to insert an event
+  does not affect financial budget enforcement.
+
 Persists operational metadata for every AI provider call (DeepSeek, Whisper).
 NEVER stores prompts, responses, transcripts, person names, or family content.
 """
@@ -242,6 +252,25 @@ class AIUsageLedger:
             row = session.execute(statement).one()
             req_count, in_tok, out_tok, cached_tok, audio_sec, total_cost = row
 
+            committed_stmt = select(
+                func.count(AIUsageReservationRow.reservation_id),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            AIUsageReservationRow.actual_cost_usd,
+                            AIUsageReservationRow.reserved_cost_usd,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(
+                and_(
+                    AIUsageReservationRow.status == ReservationStatus.COMMITTED.value,
+                    AIUsageReservationRow.created_at >= since,
+                )
+            )
+            committed_res_count, committed_res_cost = session.execute(committed_stmt).one()
+
             res_stmt = select(
                 func.count(AIUsageReservationRow.reservation_id),
                 func.coalesce(func.sum(AIUsageReservationRow.reserved_cost_usd), 0),
@@ -254,7 +283,7 @@ class AIUsageLedger:
             res_row = session.execute(res_stmt).one()
             active_res_count, active_res_cost = res_row
 
-            total_committed = Decimal(str(total_cost))
+            total_committed = Decimal(str(max(committed_res_cost, total_cost)))
             active_reserved = Decimal(str(active_res_cost))
 
             return {
@@ -263,7 +292,11 @@ class AIUsageLedger:
                 "output_tokens": int(out_tok or 0),
                 "cached_input_tokens": int(cached_tok or 0),
                 "audio_seconds": float(audio_sec or 0),
-                "estimated_cost_usd": str(total_committed.quantize(Decimal("0.000001"))),
+                "estimated_cost_usd": str(Decimal(str(total_cost)).quantize(Decimal("0.000001"))),
+                "committed_reservations_count": int(committed_res_count or 0),
+                "committed_reservations_cost_usd": str(
+                    Decimal(str(committed_res_cost)).quantize(Decimal("0.000001"))
+                ),
                 "active_reservations_count": int(active_res_count or 0),
                 "active_reservations_cost_usd": str(active_reserved.quantize(Decimal("0.000001"))),
                 "total_budget_consumed_usd": str(

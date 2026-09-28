@@ -312,3 +312,70 @@ def test_concurrent_family_audio_duration_quota(pg_db: Database) -> None:
         assert len(records) == 2
         total_duration = sum(r.audio_duration_seconds for r in records)
         assert total_duration == 600.0
+
+
+def test_postgres_concurrent_settlement_and_new_reservation_no_accounting_hole() -> None:
+    """F-001 concurrency: Committing reservation concurrently with new reservation
+    never creates an accounting hole.
+    """
+    pg_db = Database(POSTGRES_URL)
+    _cleanup(pg_db)
+
+    service = CostGuardService(pg_db, global_daily_budget_usd=Decimal("1.00"))
+
+    # Initial reservation of $0.60
+    initial_res = service.reserve_budget(
+        operation="asr",
+        provider="whisper",
+        model="whisper-1",
+        estimated_cost_usd=Decimal("0.60"),
+        family_id="fam_settle_race",
+    )
+    assert initial_res.status == ReservationStatus.RESERVED.value
+
+    num_probers = 5
+    prober_successes: list[str] = []
+    prober_failures: list[Exception] = []
+
+    def _commit_worker() -> None:
+        service.commit_reservation(
+            initial_res.reservation_id,
+            actual_cost_usd=Decimal("0.60"),
+        )
+
+    def _probe_worker(idx: int) -> None:
+        try:
+            # Attempt to reserve $0.50. Total would be $0.60 + $0.50 = $1.10 > $1.00.
+            # Must ALWAYS fail regardless of whether initial_res is RESERVED or COMMITTED.
+            r = service.reserve_budget(
+                operation="extraction",
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                estimated_cost_usd=Decimal("0.50"),
+                family_id="fam_settle_race",
+            )
+            prober_successes.append(r.reservation_id)
+        except Exception as exc:
+            prober_failures.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_probers + 1) as executor:
+        f_commit = executor.submit(_commit_worker)
+        f_probes = [executor.submit(_probe_worker, i) for i in range(num_probers)]
+        f_commit.result()
+        concurrent.futures.wait(f_probes)
+
+    # ZERO probers should have succeeded (no accounting hole allowed overspend)
+    assert len(prober_successes) == 0, f"Expected 0 successes, got {len(prober_successes)}"
+    assert len(prober_failures) == num_probers
+    for f in prober_failures:
+        assert isinstance(f, AICostBudgetExceededError)
+
+    # Post-settlement: verify $0.35 fits ($0.60 + $0.35 = $0.95 <= $1.00)
+    allowed_res = service.reserve_budget(
+        operation="extraction",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        estimated_cost_usd=Decimal("0.35"),
+        family_id="fam_settle_race",
+    )
+    assert allowed_res.status == ReservationStatus.RESERVED.value
