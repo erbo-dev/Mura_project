@@ -26,12 +26,13 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 
-EXPECTED_HEAD = "20260918_0013"
+EXPECTED_HEAD = "20260927_0020"
 
 EXPECTED_TABLES = [
     "users",
     "families",
     "family_memberships",
+    "family_invitations",
     "recordings",
     "processing_jobs",
     "archive_people",
@@ -47,6 +48,8 @@ EXPECTED_TABLES = [
     "book_exports",
     "book_jobs",
     "ai_usage_events",
+    "ai_usage_reservations",
+    "storage_cleanup_jobs",
 ]
 
 CRITICAL_COLUMNS = {
@@ -62,8 +65,49 @@ CRITICAL_COLUMNS = {
     },
     "book_chapters": {"chapter_id", "book_id", "chapter_number", "title", "status", "word_count"},
     "book_jobs": {"job_id", "book_id", "family_id", "status", "stage", "lease_owner"},
-    "ai_usage_events": {"event_id", "provider", "model", "operation", "book_id", "chapter_number"},
-    "recordings": {"recording_id", "family_id", "speaker_id", "audio_path", "storage_key"},
+    "ai_usage_events": {
+        "event_id",
+        "provider",
+        "model",
+        "operation",
+        "book_id",
+        "chapter_number",
+    },
+    "ai_usage_reservations": {
+        "reservation_id",
+        "status",
+        "operation",
+        "provider",
+        "model",
+        "reserved_cost_usd",
+        "expires_at",
+    },
+    "family_invitations": {
+        "invitation_id",
+        "family_id",
+        "created_by_user_id",
+        "token_hash",
+        "intended_role",
+        "status",
+        "expires_at",
+    },
+    "storage_cleanup_jobs": {
+        "cleanup_job_id",
+        "resource_type",
+        "storage_kind",
+        "storage_backend",
+        "storage_key",
+        "status",
+    },
+    "recordings": {
+        "recording_id",
+        "family_id",
+        "speaker_id",
+        "audio_path",
+        "storage_key",
+        "audio_duration_seconds",
+        "created_by_user_id",
+    },
     "processing_jobs": {"job_id", "recording_id", "status", "lease_owner"},
 }
 
